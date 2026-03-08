@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">StartDrive</string>
+    <string name="audio_playback_attribution">Воспроизведение звука</string>
+    <string name="empty"></string>
+</resources>

@@ -1,0 +1,137 @@
+============================================
+  ДОБАВЬ ЭТИ ОТПЕЧАТКИ В FIREBASE
+============================================
+
+Скопируй строку SHA-1 ниже и вставь в Firebase Console.
+
+SHA-1 (вставь в Firebase → Project settings → Your apps → Add fingerprint):
+56:29:E8:0B:99:D1:D5:D6:53:9D:CF:52:99:E7:49:E0:0A:1D:7E:C6
+
+SHA-256 (по желанию, можно добавить вторым отпечатком):
+BB:40:CA:BF:6B:F3:14:4D:D0:0E:C8:C5:75:BB:88:0C:DB:70:A7:74:32:33:99:06:9C:12:76:42:79:A1:A4:26
+
+Куда вставлять:
+1. Открой: https://console.firebase.google.com/
+2. Выбери проект приложения
+3. Project settings (шестерёнка) → вкладка General
+4. В блоке "Your apps" найди приложение com.example.startdrive
+5. Нажми "Add fingerprint" → вставь SHA-1 выше → Save
+6. Скачай новый google-services.json и замени app/google-services.json
+7. Пересобери приложение
+
+Если SHA-1 не примет (редко), выполни в папке проекта:
+  .\gradlew signingReport
+и возьми SHA1 из вывода (полная строка из 20 пар).
+
+--------------------------------------------
+  ВАЖНО: FIRESTORE И STORAGE — РАЗНЫЕ ПРАВИЛА
+--------------------------------------------
+  • Firestore (база данных): в консоли это «Firestore Database» → Rules.
+    Там пути вроде users/{userId}, driving_sessions/... — документы и поля.
+    Там НЕ нужен путь chat_avatar.png (аватар — это файл, он в Storage).
+  • Storage (файлы): в консоли это «Storage» (Хранилище) → вкладка Rules.
+    Там пути вроде users/{userId}/chat_avatar.png — именно файлы.
+    Правила для аватара нужно добавлять СЮДА (см. ниже и файл storage.rules).
+
+--------------------------------------------
+  АВАТАРЫ В ЧАТЕ: ПРАВИЛА STORAGE (ПОДРОБНО)
+--------------------------------------------
+
+ЗАЧЕМ НУЖНЫ ПРАВИЛА
+  • Без правил загрузка аватара даёт ошибку «Object does not exist» или доступ запрещён.
+  • Нужно разрешить: запись — только владельцу (userId), чтение — всем авторизованным (чтобы в чате видели чужие аватарки).
+
+ГДЕ МЕНЯТЬ
+  1. Открой https://console.firebase.google.com/
+  2. Выбери проект приложения StartDrive.
+  3. В левом меню: Build → Storage (или «Хранилище»).
+  4. Вверху вкладка «Rules» / «Правила».
+  5. Редактируй текст правил в окне и в конце нажми «Опубликовать» (Publish).
+
+ЧТО ДОЛЖНО БЫТЬ В ПРАВИЛАХ
+  • Файл аватара в приложении лежит по пути: users/{userId}/chat_avatar.png
+    где {userId} — это UID пользователя (например, из Firebase Auth).
+  • Нужно добавить один блок match для папки пользователя:
+    - read  — любой авторизованный (request.auth != null), чтобы в контактах чата отображались аватарки других пользователей.
+    - write  — только если request.auth.uid == userId (загружать/удалять аватар может только владелец).
+
+ПРИМЕР ПРАВИЛ ЦЕЛИКОМ (если в Storage ещё нет своих правил)
+  Скопируй и вставь в редактор правил, затем нажми «Опубликовать»:
+
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /users/{userId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}
+
+  Что значит:
+  - match /b/{bucket}/o  — обязательная «обёртка» для всех путей в Storage (так устроен Firebase).
+  - match /users/{userId}/{allPaths=**}  — любые файлы в папке users/UID_пользователя (в т.ч. chat_avatar.png).
+  - allow read: if request.auth != null  — читать может любой залогиненный пользователь.
+  - allow write: if request.auth != null && request.auth.uid == userId  — писать только свой userId.
+
+ЕСЛИ ПРАВИЛА УЖЕ ЕСТЬ
+  • Не удаляй существующие match. Найди блок match /b/{bucket}/o { ... } и внутри него добавь новый match для users:
+
+    match /users/{userId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+  • Если уже есть match /users/... с другими правилами — замени их на эти или объедини условия так, чтобы read был для авторизованных, write — только для request.auth.uid == userId.
+
+ЧЕГО ИЗБЕГАТЬ
+  • Не ставь правила вне блока match /b/{bucket}/o { ... } — они не сработают.
+  • Не используй только match /users/{userId}/chat_avatar.png без обёртки /b/{bucket}/o — путь будет неправильный.
+  • Не делай allow read, write: if false; для users/ — тогда аватар не загрузится и не отобразится у других.
+
+ПРОВЕРКА
+  После «Опубликовать» подожди несколько секунд и снова попробуй в приложении: Настройки → выбрать фото для аватара в чате. Ошибка «Object does not exist» или «Permission denied» должна пропасть, а другие пользователи увидят аватар в контактах чате.
+
+  Для голосовых сообщений в чате в том же блоке match /b/{bucket}/o добавь ещё один match:
+    match /chats/voice/{chatRoomId}/{allPaths=**} {
+      allow read, write: if request.auth != null;
+    }
+  Полный пример (аватарки + голосовые) — в файле storage.rules в проекте.
+
+--------------------------------------------
+  ЕСЛИ ТЫ ДОБАВИЛ chat_avatar.png В FIRESTORE
+--------------------------------------------
+  Ты показал правила с «service cloud.firestore» — это правила БАЗЫ ДАННЫХ (Firestore).
+  Блок match /users/{userId}/chat_avatar.png в Firestore не нужен и его лучше убрать:
+  в Firestore нет пути «файл chat_avatar.png», аватар хранится как файл в Storage.
+
+  Правильные правила Firestore (без chat_avatar) — такие:
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.id == request.auth.uid;
+      allow update, delete: if request.auth != null
+        && (resource.id == request.auth.uid
+            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+      match /balance_history/{entryId} {
+        allow read, write: if request.auth != null;
+      }
+    }
+    match /driving_sessions/{sessionId} {
+      allow read, write: if request.auth != null;
+    }
+    match /instructor_open_windows/{windowId} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
+
+  Куда вставить: Firebase Console → Firestore Database → Rules → заменить текст → Опубликовать.
+
+  Правила для АВАТАРА (файла) настраиваются отдельно:
+  Firebase Console → Storage (Хранилище) → вкладка Rules.
+  Вставить туда содержимое файла storage.rules из проекта или пример из блока
+  «ПРИМЕР ПРАВИЛ ЦЕЛИКОМ» выше (service firebase.storage, match /b/{bucket}/o, ...).

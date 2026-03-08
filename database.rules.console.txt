@@ -1,0 +1,31 @@
+Правила Realtime Database для чата (скопировать в Firebase Console)
+=====================================================================
+
+1. Откройте https://console.firebase.google.com → проект startdrive-573fa
+2. Слева: Build → Realtime Database
+3. Если база ещё не создана: нажмите "Create Database", выберите регион, в режиме правил выберите "Start in locked mode" (потом замените на правила ниже)
+4. Вкладка "Rules" — замените правила на:
+
+{
+  "rules": {
+    "chats": {
+      "$roomId": {
+        ".read": "auth != null",
+        ".write": "auth != null",
+        "messages": {
+          ".indexOn": ["timestamp"]
+        }
+      }
+    },
+    "presence": {
+      "$userId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    }
+  }
+}
+
+5. Нажмите "Publish"
+
+Без этих правил чат не будет работать: сообщения не сохраняются и не читаются из базы.

@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "73391012476",
+    "firebase_url": "https://startdrive-573fa-default-rtdb.europe-west1.firebasedatabase.app",
+    "project_id": "startdrive-573fa",
+    "storage_bucket": "startdrive-573fa.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:73391012476:android:f7537900e4462d999fa7f9",
+        "android_client_info": {
+          "package_name": "com.example.startdrive"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCAhwRhi2plPhgtJzE14ncFtrDFytwkzbs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

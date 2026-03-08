@@ -1,0 +1,10 @@
+{
+  "name": "startdrive-functions",
+  "description": "Cloud Functions: send FCM when new chat message",
+  "main": "index.js",
+  "engines": { "node": "20" },
+  "dependencies": {
+    "firebase-admin": "^12.0.0",
+    "firebase-functions": "^5.0.0"
+  }
+}

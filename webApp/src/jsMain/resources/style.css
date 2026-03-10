@@ -339,12 +339,12 @@ body {
     display: flex;
     align-items: center;
     flex-shrink: 0;
-    color: rgba(147,197,253,0.85);
+    color: rgba(200,220,255,0.90);
 }
 .sd-profile-info-label {
     flex: 0 0 auto;
     font-weight: 600;
-    color: rgba(255,255,255,0.55);
+    color: rgba(255,255,255,0.85);
     font-size: 0.82rem;
     min-width: 70px;
 }
@@ -360,18 +360,18 @@ body {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
+    width: 48px;
+    height: 48px;
+    min-width: 48px;
     padding: 0;
     background: linear-gradient(180deg, #42A5F5 0%, #1976D2 40%, #0D47A1 100%);
     color: #fff;
     border-radius: 50%;
-    border: 2px solid rgba(255, 255, 255, 0.9);
+    border: 2.5px solid rgba(255,255,255,0.92);
     font-weight: 700;
-    font-size: 0.95rem;
+    font-size: 1rem;
     text-align: center;
-    box-shadow: 0 4px 6px rgba(13, 71, 161, 0.3), 0 6px 10px rgba(13, 71, 161, 0.5);
+    box-shadow: 0 4px 10px rgba(13,71,161,0.4), 0 6px 16px rgba(13,71,161,0.5), 0 0 20px rgba(66,165,245,0.25);
     position: relative;
     overflow: hidden;
 }
@@ -379,8 +379,32 @@ body {
     content: "";
     position: absolute;
     inset: 0;
-    background: linear-gradient(180deg, rgba(255,255,255,0.35) 0%, transparent 50%);
+    border-radius: 50%;
+    background: linear-gradient(150deg, rgba(255,255,255,0.45) 0%, rgba(255,255,255,0.12) 35%, transparent 55%);
     pointer-events: none;
+}
+.sd-balance-badge::after {
+    content: "";
+    position: absolute;
+    top: -60%;
+    left: -60%;
+    width: 50%;
+    height: 180%;
+    background: linear-gradient(105deg, transparent 30%, rgba(255,255,255,0.25) 45%, rgba(255,255,255,0.50) 50%, rgba(255,255,255,0.25) 55%, transparent 70%);
+    animation: sd-badge-glare 3.5s ease-in-out infinite;
+    pointer-events: none;
+    border-radius: 50%;
+}
+@keyframes sd-badge-glare {
+    0%, 70% { transform: translateX(0) translateY(0); opacity: 0; }
+    75% { opacity: 1; }
+    100% { transform: translateX(300%) translateY(0); opacity: 0; }
+}
+.sd-profile-info-row-balance {
+    justify-content: flex-start;
+}
+.sd-profile-info-row-balance .sd-balance-badge {
+    margin-left: auto;
 }
 
 /* Карточки курсантов (как в приложении) */

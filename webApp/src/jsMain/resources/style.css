@@ -1804,7 +1804,7 @@ a.sd-cadet-icon-btn:active {
     justify-content: center;
     padding: 40px 32px;
     overflow-y: auto;
-    background: linear-gradient(170deg, #0f2b5e 0%, #163872 55%, #1a4080 100%);
+    background: #ffffff;
 }
 .sd-auth-form-wrap {
     width: 100%;
@@ -1820,14 +1820,13 @@ a.sd-cadet-icon-btn:active {
     margin: 0 0 6px;
     font-size: 1.75rem;
     font-weight: 800;
-    color: #ffffff;
+    color: #111827;
     letter-spacing: -0.4px;
-    text-shadow: 0 1px 4px rgba(0,0,0,0.3);
 }
 .sd-auth-subtitle {
     margin: 0 0 28px;
     font-size: 0.92rem;
-    color: rgba(255,255,255,0.70);
+    color: #6b7280;
 }
 
 .sd-auth-error {
@@ -1857,7 +1856,7 @@ a.sd-cadet-icon-btn:active {
     display: block;
     font-size: 0.83rem;
     font-weight: 600;
-    color: rgba(255,255,255,0.90);
+    color: #374151;
     margin-bottom: 6px;
     letter-spacing: 0.2px;
 }
@@ -1872,7 +1871,7 @@ a.sd-cadet-icon-btn:active {
     display: flex;
     align-items: center;
     pointer-events: none;
-    color: rgba(255,255,255,0.50);
+    color: #9ca3af;
     transition: color 0.2s;
     z-index: 1;
 }
@@ -1882,29 +1881,28 @@ a.sd-cadet-icon-btn:active {
     stroke: currentColor;
 }
 .sd-auth-input-wrap:focus-within .sd-auth-field-icon {
-    color: rgba(100,180,255,0.90);
+    color: #1976D2;
 }
 
 .sd-auth-input {
     width: 100%;
     padding: 12px 14px 12px 43px;
     font-size: 0.95rem;
-    border: 1.5px solid rgba(255,255,255,0.20);
+    border: 1.5px solid #e5e7eb;
     border-radius: 10px;
     outline: none;
-    background: rgba(255,255,255,0.10);
-    color: #ffffff;
+    background: #fff;
+    color: #111827;
     transition: border-color 0.2s, box-shadow 0.2s;
     font-family: inherit;
     -webkit-appearance: none;
     appearance: none;
 }
-.sd-auth-input::placeholder { color: rgba(255,255,255,0.40); }
-.sd-auth-input:hover:not(:focus) { border-color: rgba(255,255,255,0.35); }
+.sd-auth-input::placeholder { color: #9ca3af; }
+.sd-auth-input:hover:not(:focus) { border-color: #d1d5db; }
 .sd-auth-input:focus {
-    border-color: rgba(100,180,255,0.70);
-    box-shadow: 0 0 0 3px rgba(100,180,255,0.15);
-    background: rgba(255,255,255,0.14);
+    border-color: #1976D2;
+    box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.12);
 }
 .sd-auth-select {
     cursor: pointer;
@@ -1927,7 +1925,7 @@ a.sd-cadet-icon-btn:active {
     margin: 2px 0 22px;
     cursor: pointer;
     font-size: 0.88rem;
-    color: rgba(255,255,255,0.80);
+    color: #6b7280;
     user-select: none;
 }
 .sd-auth-checkbox input[type="checkbox"] {
@@ -1940,9 +1938,9 @@ a.sd-cadet-icon-btn:active {
     width: 17px;
     height: 17px;
     flex-shrink: 0;
-    border: 1.5px solid rgba(255,255,255,0.30);
+    border: 1.5px solid #d1d5db;
     border-radius: 4px;
-    background: rgba(255,255,255,0.10);
+    background: #fff;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1970,7 +1968,7 @@ a.sd-cadet-icon-btn:active {
     margin: 2px 0 22px;
     cursor: pointer;
     font-size: 0.88rem;
-    color: rgba(255,255,255,0.80);
+    color: #6b7280;
     user-select: none;
     gap: 10px;
 }
@@ -1989,7 +1987,7 @@ a.sd-cadet-icon-btn:active {
     width: 42px;
     height: 24px;
     border-radius: 999px;
-    background: rgba(255,255,255,0.25);
+    background: #d1d5db;
     position: relative;
     transition: background 0.22s cubic-bezier(0.4,0,0.2,1);
     box-shadow: inset 0 1px 3px rgba(0,0,0,0.12);
@@ -2049,13 +2047,13 @@ a.sd-cadet-icon-btn:active {
 .sd-auth-switch {
     margin: 20px 0 0;
     font-size: 0.88rem;
-    color: rgba(255,255,255,0.65);
+    color: #6b7280;
     text-align: center;
 }
 .sd-auth-link {
     background: none;
     border: none;
-    color: #93c5fd;
+    color: #1976D2;
     font-weight: 600;
     cursor: pointer;
     padding: 0;
@@ -2065,7 +2063,7 @@ a.sd-cadet-icon-btn:active {
     text-decoration-color: transparent;
     transition: text-decoration-color 0.2s;
 }
-.sd-auth-link:hover { text-decoration-color: #93c5fd; }
+.sd-auth-link:hover { text-decoration-color: #1976D2; }
 
 .sd-auth-spinner {
     display: inline-block;

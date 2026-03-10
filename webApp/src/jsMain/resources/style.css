@@ -227,9 +227,9 @@ body {
     position: relative;
     border-radius: 16px;
     overflow: hidden;
-    background: linear-gradient(145deg, #0d1b35 0%, #162d55 55%, #1a3566 100%);
-    border: 1px solid rgba(255,255,255,0.10);
-    box-shadow: 0 8px 28px rgba(5,15,40,0.35), 0 2px 8px rgba(5,15,40,0.20);
+    background: linear-gradient(145deg, #1e3a6e 0%, #2a5298 55%, #3468b2 100%);
+    border: 1px solid rgba(255,255,255,0.18);
+    box-shadow: 0 8px 28px rgba(20,50,110,0.30), 0 2px 8px rgba(20,50,110,0.18);
 }
 .sd-profile-accent-bar {
     height: 4px;

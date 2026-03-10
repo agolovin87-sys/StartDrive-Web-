@@ -374,7 +374,7 @@ private fun formatShortName(fullName: String): String {
     if (parts.isEmpty()) return "—"
     if (parts.size == 1) return parts[0]
     val surname = parts[0]
-    val initials = parts.drop(1).map { it.firstOrNull()?.uppercase()?.plus(".") ?: "" }.joinToString(" ")
+    val initials = parts.drop(1).map { it.firstOrNull()?.uppercase()?.plus(".") ?: "" }.joinToString("")
     return "$surname $initials"
 }
 

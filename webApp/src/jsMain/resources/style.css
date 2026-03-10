@@ -2067,13 +2067,26 @@ body {
    ═══════════════════════════════════════════ */
 
 .sd-chat-tab {
-    background: linear-gradient(160deg, #0d1f3e 0%, #112244 60%, #0a1628 100%);
+    background:
+        linear-gradient(180deg, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.06) 28%, transparent 55%),
+        linear-gradient(160deg, #0d1f3e 0%, #112244 60%, #0a1628 100%);
     border-radius: 12px;
     margin: -1rem;
     padding: 0;
     min-height: 300px;
     overflow: hidden;
     color: #fff;
+    position: relative;
+}
+.sd-chat-tab::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 56px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.22) 0%, transparent 100%);
+    border-radius: 12px 12px 0 0;
+    pointer-events: none;
+    z-index: 0;
 }
 
 /* ── Шапка списка контактов ── */
@@ -2083,14 +2096,17 @@ body {
     justify-content: space-between;
     padding: 16px 16px 10px;
     border-bottom: 1px solid rgba(255,255,255,0.08);
+    position: relative;
+    z-index: 1;
 }
 
 .sd-chat-title {
     margin: 0;
-    font-size: 1.1rem;
+    font-size: 1.15rem;
     font-weight: 700;
-    color: #fff;
+    color: #fff !important;
     letter-spacing: 0.01em;
+    text-shadow: 0 1px 6px rgba(0,0,0,0.35);
 }
 
 .sd-chat-refresh-btn {

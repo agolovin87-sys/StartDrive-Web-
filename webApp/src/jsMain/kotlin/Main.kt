@@ -475,53 +475,68 @@ private fun renderAdminHomeContent(): String {
     }
     val instCards = instructors.joinToString("") { u ->
         val assignedCadets = cadets.filter { it.assignedInstructorId == u.id }.sortedBy { it.fullName }
-        val cadetsRow = """<div class="sd-admin-card-row-label sd-admin-card-row-cadets"><span class="sd-admin-card-label-icon">$iconInstructorSvg</span>Курсанты: ${assignedCadets.size}<button type="button" class="sd-btn-inline sd-instructor-cadets-toggle" data-instructor-cadets-modal="${u.id.escapeHtml()}">Посмотреть</button></div>"""
+        val initials = u.fullName.split(" ").take(2).mapNotNull { it.firstOrNull()?.uppercase() }.joinToString("")
         val phoneHrefInst = if (u.phone.isNotBlank()) "tel:${u.phone.escapeHtml()}" else "#"
-        val phoneClassInst = if (u.phone.isNotBlank()) "sd-btn sd-btn-icon sd-btn-icon-right" else "sd-btn sd-btn-icon sd-btn-icon-right sd-btn-disabled"
-        """<div class="sd-admin-card sd-admin-card-instructor">
-            <div class="sd-admin-card-body">
-                <div class="sd-admin-card-row-main">
-                    <p class="sd-admin-card-fio"><span class="sd-admin-card-label-icon">$iconUserSvg</span>${u.fullName.escapeHtml()}</p>
-                    <div class="sd-admin-card-icons">
-                        <a href="$phoneHrefInst" class="$phoneClassInst" title="Позвонить">$iconPhoneSvg</a>
-                        <button type="button" class="sd-btn sd-btn-icon sd-btn-icon-right sd-admin-open-chat" data-contact-id="${u.id.escapeHtml()}" title="Чат">$iconChatSvg</button>
-                    </div>
+        val phoneDisabled = if (u.phone.isBlank()) " sd-ucard-icon-btn-disabled" else ""
+        """<div class="sd-ucard sd-ucard-instructor">
+            <div class="sd-ucard-accent-bar"></div>
+            <div class="sd-ucard-top">
+                <div class="sd-ucard-avatar sd-ucard-avatar-blue">$initials</div>
+                <div class="sd-ucard-head">
+                    <p class="sd-ucard-name">${u.fullName.escapeHtml()}</p>
+                    <span class="sd-ucard-badge sd-ucard-badge-blue">Инструктор</span>
                 </div>
-                <p class="sd-admin-card-row-label"><span class="sd-admin-card-label-icon">$iconPhoneLabelSvg</span>Тел.: ${(u.phone.ifBlank { "—" }).escapeHtml()}</p>
-                <p class="sd-admin-card-row-label"><span class="sd-admin-card-label-icon">$iconEmailLabelSvg</span>Email: ${(u.email.ifBlank { "—" }).escapeHtml()}</p>
-                <p class="sd-admin-card-row-label"><span class="sd-admin-card-label-icon">$iconTicketSvg</span>Баланс талонов: ${u.balance}</p>
-                $cadetsRow
+                <div class="sd-ucard-quick">
+                    <a href="$phoneHrefInst" class="sd-ucard-icon-btn$phoneDisabled" title="Позвонить">$iconPhoneSvg</a>
+                    <button type="button" class="sd-ucard-icon-btn sd-admin-open-chat" data-contact-id="${u.id.escapeHtml()}" title="Чат">$iconChatSvg</button>
+                </div>
             </div>
-            <div class="sd-admin-card-footer">
-                <button type="button" class="sd-btn sd-btn-small" data-admin-assign="${u.id.escapeHtml()}">$iconUserPlusSvg Назначить курсанта</button>
-                <button type="button" class="sd-btn sd-btn-small" data-admin-activate="${u.id.escapeHtml()}" data-admin-active="${u.isActive}">$iconPowerSvg ${if (u.isActive) "Деактивировать" else "Активировать"}</button>
-                <button type="button" class="sd-btn sd-btn-small sd-btn-delete" data-admin-delete="${u.id.escapeHtml()}">$iconTrashSvg Удалить</button>
+            <div class="sd-ucard-rows">
+                <div class="sd-ucard-row"><span class="sd-ucard-row-icon">$iconPhoneLabelSvg</span>${(u.phone.ifBlank { "Телефон не указан" }).escapeHtml()}</div>
+                <div class="sd-ucard-row"><span class="sd-ucard-row-icon">$iconEmailLabelSvg</span>${(u.email.ifBlank { "—" }).escapeHtml()}</div>
+                <div class="sd-ucard-row"><span class="sd-ucard-row-icon">$iconTicketSvg</span>Талоны: <strong>${u.balance}</strong></div>
+                <div class="sd-ucard-row sd-ucard-row-stretch"><span class="sd-ucard-row-icon">$iconInstructorSvg</span>Курсантов: <strong>${assignedCadets.size}</strong><button type="button" class="sd-ucard-tag-btn sd-instructor-cadets-toggle" data-instructor-cadets-modal="${u.id.escapeHtml()}">Посмотреть</button></div>
+            </div>
+            <div class="sd-ucard-footer">
+                <button type="button" class="sd-ucard-foot-btn" data-admin-assign="${u.id.escapeHtml()}">Назначить курсанта</button>
+                <button type="button" class="sd-ucard-foot-btn" data-admin-activate="${u.id.escapeHtml()}" data-admin-active="${u.isActive}">${if (u.isActive) "Деактивировать" else "Активировать"}</button>
+                <button type="button" class="sd-ucard-foot-btn sd-ucard-foot-btn-danger" data-admin-delete="${u.id.escapeHtml()}">Удалить</button>
             </div>
         </div>"""
     }
     val cadetCards = cadets.joinToString("") { u ->
         val instId = u.assignedInstructorId
-        val instName = instId?.let { id -> instructors.find { it.id == id }?.fullName ?: "—" } ?: "—"
-        val displayInstText = if (instId != null) instName else "Не назначен"
+        val instName = instId?.let { id -> instructors.find { it.id == id }?.let { formatShortName(it.fullName) } ?: "—" } ?: "—"
+        val displayInstText = if (instId != null) instName.escapeHtml() else "Не назначен"
         val phoneHrefCadet = if (u.phone.isNotBlank()) "tel:${u.phone.escapeHtml()}" else "#"
-        val phoneClassCadet = if (u.phone.isNotBlank()) "sd-btn sd-btn-icon sd-btn-icon-right" else "sd-btn sd-btn-icon sd-btn-icon-right sd-btn-disabled"
-        val unlinkOrAssign = if (instId != null) """<button type="button" class="sd-btn sd-btn-small sd-admin-unlink-right" data-admin-unlink-instructor="${instId.escapeHtml()}" data-admin-unlink-cadet="${u.id.escapeHtml()}">$iconUnlinkSvg Отвязать</button>""" else """<button type="button" class="sd-btn sd-btn-small sd-btn-primary sd-admin-assign-cadet-btn" data-admin-assign-cadet="${u.id.escapeHtml()}">Назначить</button>"""
-        val instructorRow = """<div class="sd-admin-card-row-label sd-admin-card-row-instructor"><span class="sd-admin-card-label-icon">$iconInstructorSvg</span>Инструктор: $displayInstText$unlinkOrAssign</div>"""
-        val footerButtons = """<button type="button" class="sd-btn sd-btn-small" data-admin-activate="${u.id.escapeHtml()}" data-admin-active="${u.isActive}">$iconPowerSvg ${if (u.isActive) "Деактивировать" else "Активировать"}</button><button type="button" class="sd-btn sd-btn-small sd-btn-delete" data-admin-delete="${u.id.escapeHtml()}">$iconTrashSvg Удалить</button>"""
-        """<div class="sd-admin-card sd-admin-card-cadet">
-            <div class="sd-admin-card-body">
-                <div class="sd-admin-card-row-main">
-                    <p class="sd-admin-card-fio"><span class="sd-admin-card-label-icon">$iconUserSvg</span>${u.fullName.escapeHtml()}</p>
-                    <div class="sd-admin-card-icons">
-                        <a href="$phoneHrefCadet" class="$phoneClassCadet" title="Позвонить">$iconPhoneSvg</a>
-                        <button type="button" class="sd-btn sd-btn-icon sd-btn-icon-right sd-admin-open-chat" data-contact-id="${u.id.escapeHtml()}" title="Чат">$iconChatSvg</button>
-                    </div>
+        val phoneDisabledCadet = if (u.phone.isBlank()) " sd-ucard-icon-btn-disabled" else ""
+        val initials = u.fullName.split(" ").take(2).mapNotNull { it.firstOrNull()?.uppercase() }.joinToString("")
+        val unlinkOrAssign = if (instId != null)
+            """<button type="button" class="sd-ucard-tag-btn sd-ucard-tag-btn-warn sd-admin-unlink-right" data-admin-unlink-instructor="${instId.escapeHtml()}" data-admin-unlink-cadet="${u.id.escapeHtml()}">Отвязать</button>"""
+        else
+            """<button type="button" class="sd-ucard-tag-btn sd-instructor-cadets-toggle sd-admin-assign-cadet-btn" data-admin-assign-cadet="${u.id.escapeHtml()}">Назначить</button>"""
+        """<div class="sd-ucard sd-ucard-cadet">
+            <div class="sd-ucard-accent-bar"></div>
+            <div class="sd-ucard-top">
+                <div class="sd-ucard-avatar sd-ucard-avatar-teal">$initials</div>
+                <div class="sd-ucard-head">
+                    <p class="sd-ucard-name">${u.fullName.escapeHtml()}</p>
+                    <span class="sd-ucard-badge sd-ucard-badge-teal">Курсант</span>
                 </div>
-                <p class="sd-admin-card-row-label"><span class="sd-admin-card-label-icon">$iconPhoneLabelSvg</span>Тел.: ${(u.phone.ifBlank { "—" }).escapeHtml()}</p>
-                <p class="sd-admin-card-row-label"><span class="sd-admin-card-label-icon">$iconEmailLabelSvg</span>Email: ${(u.email.ifBlank { "—" }).escapeHtml()}</p>
-                $instructorRow
+                <div class="sd-ucard-quick">
+                    <a href="$phoneHrefCadet" class="sd-ucard-icon-btn$phoneDisabledCadet" title="Позвонить">$iconPhoneSvg</a>
+                    <button type="button" class="sd-ucard-icon-btn sd-admin-open-chat" data-contact-id="${u.id.escapeHtml()}" title="Чат">$iconChatSvg</button>
+                </div>
             </div>
-            <div class="sd-admin-card-footer">$footerButtons</div>
+            <div class="sd-ucard-rows">
+                <div class="sd-ucard-row"><span class="sd-ucard-row-icon">$iconPhoneLabelSvg</span>${(u.phone.ifBlank { "Телефон не указан" }).escapeHtml()}</div>
+                <div class="sd-ucard-row"><span class="sd-ucard-row-icon">$iconEmailLabelSvg</span>${(u.email.ifBlank { "—" }).escapeHtml()}</div>
+                <div class="sd-ucard-row sd-ucard-row-stretch"><span class="sd-ucard-row-icon">$iconInstructorSvg</span>Инструктор: <strong>$displayInstText</strong>$unlinkOrAssign</div>
+            </div>
+            <div class="sd-ucard-footer">
+                <button type="button" class="sd-ucard-foot-btn" data-admin-activate="${u.id.escapeHtml()}" data-admin-active="${u.isActive}">${if (u.isActive) "Деактивировать" else "Активировать"}</button>
+                <button type="button" class="sd-ucard-foot-btn sd-ucard-foot-btn-danger" data-admin-delete="${u.id.escapeHtml()}">Удалить</button>
+            </div>
         </div>"""
     }
     val instOpen = if (appState.adminInstructorsSectionOpen) " open" else ""

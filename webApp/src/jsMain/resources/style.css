@@ -2669,8 +2669,9 @@ body {
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: #ffffff;
-    text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+    color: #ffffff !important;
+    opacity: 1;
+    text-shadow: 0 1px 6px rgba(0,0,0,0.6);
 }
 .sd-chat-contacts {
     display: flex;

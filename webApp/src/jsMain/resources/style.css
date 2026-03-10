@@ -53,16 +53,24 @@ body {
     top: 0;
     z-index: 100;
     color: white;
-    padding: 16px 24px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px 12px 24px;
     padding-left: max(24px, env(safe-area-inset-left));
-    padding-right: max(70px, calc(env(safe-area-inset-right) + 60px));
-    padding-top: max(16px, env(safe-area-inset-top));
+    padding-right: max(16px, env(safe-area-inset-right));
+    padding-top: max(12px, env(safe-area-inset-top));
     background: linear-gradient(160deg, #0d2347 0%, #0b1c38 55%, #05101f 100%);
     border-bottom: 1px solid rgba(255,255,255,0.07);
     box-shadow:
         0 4px 20px rgba(0,0,0,0.45),
         0 1px 0 rgba(255,255,255,0.05) inset;
     overflow: hidden;
+}
+
+.sd-header-text {
+    flex: 1;
+    min-width: 0;
 }
 
 /* Глянцевый блик */
@@ -1960,12 +1968,9 @@ body {
 }
 
 .sd-btn-signout {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    right: 16px;
     width: 44px;
     height: 44px;
+    min-width: 44px;
     padding: 0;
     display: flex;
     align-items: center;
@@ -1975,18 +1980,20 @@ body {
     border: 1px solid rgba(255,255,255,0.35);
     border-radius: 50%;
     cursor: pointer;
-    transition: background 0.18s ease, transform 0.15s ease;
     flex-shrink: 0;
+    transition: background 0.18s ease, transform 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
 }
 
 .sd-btn-signout:hover {
     background: rgba(255,80,80,0.45);
     border-color: rgba(255,120,120,0.6);
-    transform: translateY(-50%) scale(1.08);
+    transform: scale(1.08);
 }
 
 .sd-btn-signout:active {
-    transform: translateY(-50%) scale(0.94);
+    transform: scale(0.94);
 }
 
 /* ═══════════════════════════════════════
@@ -2190,26 +2197,23 @@ body {
 /* Адаптив под мобильные */
 @media (max-width: 640px) {
     .sd-header {
-        padding: 12px 16px 11px;
+        padding: 10px 12px 10px 16px;
         padding-left: max(16px, env(safe-area-inset-left));
-        padding-right: max(60px, calc(env(safe-area-inset-right) + 52px));
-        padding-top: max(12px, env(safe-area-inset-top));
+        padding-right: max(12px, env(safe-area-inset-right));
+        padding-top: max(10px, env(safe-area-inset-top));
+        gap: 10px;
     }
     .sd-header h1 {
-        font-size: 1.1rem;
+        font-size: 1.05rem;
     }
     .sd-header p {
-        font-size: 0.78rem;
+        font-size: 0.76rem;
         word-break: break-word;
     }
-    .sd-panel-header {
-        padding-right: max(60px, calc(env(safe-area-inset-right) + 52px));
-    }
     .sd-btn-signout {
-        top: 50%;
-        right: max(12px, env(safe-area-inset-right));
         width: 44px;
         height: 44px;
+        min-width: 44px;
     }
     .sd-tab {
         font-size: 0.62rem;
@@ -3107,8 +3111,16 @@ body {
     .sd-history-day-header {
         font-size: 0.7rem;
     }
+    .sd-header {
+        padding: 8px 10px 8px 14px;
+        padding-left: max(14px, env(safe-area-inset-left));
+        padding-right: max(10px, env(safe-area-inset-right));
+        padding-top: max(8px, env(safe-area-inset-top));
+        gap: 8px;
+    }
     .sd-btn-signout {
         width: 44px;
         height: 44px;
+        min-width: 44px;
     }
 }

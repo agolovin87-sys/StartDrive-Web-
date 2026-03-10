@@ -896,8 +896,10 @@ private fun renderPanel(user: User, roleTitle: String, tabs: List<String>): Stri
     val (tabButtons, tabContent) = getPanelTabButtonsAndContent(user, tabs)
     return """
         <header class="sd-header sd-panel-header">
-            <h1>StartDrive · $roleTitle</h1>
-            <p>${formatShortName(user.fullName)} · ${user.email}</p>
+            <div class="sd-header-text">
+                <h1>StartDrive · $roleTitle</h1>
+                <p>${formatShortName(user.fullName)} · ${user.email}</p>
+            </div>
             <button type="button" id="sd-btn-signout" class="sd-btn sd-btn-signout" title="Выйти">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
                     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>

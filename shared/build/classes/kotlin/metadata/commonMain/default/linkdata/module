@@ -1,2 +1,0 @@
-
-<shared_commonMain>:com.example.startdrive.shared: com.example.startdrive.shared.di:#com.example.startdrive.shared.model:(com.example.startdrive.shared.repository

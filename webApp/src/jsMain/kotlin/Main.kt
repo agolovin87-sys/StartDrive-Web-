@@ -626,23 +626,27 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
     val sessList = sessions.joinToString("") { s ->
         """<div class="sd-record-row"><span>${formatDateTime(s.startTimeMillis)}</span> — ${s.status}</div>"""
     }
-    val iconPerson = """<span class="sd-profile-icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg></span>"""
-    val iconEmail = """<span class="sd-profile-icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg></span>"""
-    val iconPhone = """<span class="sd-profile-icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg></span>"""
-    val iconBadge = """<span class="sd-profile-icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M20 7h-5V4c0-1.1-.9-2-2-2h-2C9.9 2 9 2.9 9 4v3H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V9c0-1.1-.9-2-2-2zm-9-3h2v3h-2V4zm9 16H4V9h5c0 1.1.9 2 2 2h2c1.1 0 2-.9 2-2h5v11zm-9-4l2 2 4-4"/></svg></span>"""
-    val iconTicket = """<span class="sd-profile-icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M22 10V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2s.9-2 2-2zm-2-1.46c-1.19.69-2 1.99-2 3.46s.81 2.77 2 3.46V18H4v-2.54c1.19-.69 2-1.99 2-3.46 0-1.48-.8-2.77-1.99-3.46L4 6h16v2.54z"/></svg></span>"""
+    val instrInitials = user.fullName.split(" ").filter { it.isNotBlank() }.take(2).joinToString("") { it.first().uppercase() }.ifBlank { "?" }
+    val instrAvatarHue = (user.fullName.hashCode() and 0x7FFFFFFF) % 360
+    val instrAvatarBg = "hsl($instrAvatarHue,50%,32%)"
+    val svgEmail = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>"""
+    val svgPhoneP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>"""
+    val svgTicketP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M22 10V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2s.9-2 2-2zm-2-1.46c-1.19.69-2 1.99-2 3.46s.81 2.77 2 3.46V18H4v-2.54c1.19-.69 2-1.99 2-3.46 0-1.48-.8-2.77-1.99-3.46L4 6h16v2.54z"/></svg>"""
     val profileCard = """
         <div class="sd-profile-card">
-            <div class="sd-profile-card-bg"></div>
-            <div class="sd-profile-card-overlay"></div>
+            <div class="sd-profile-accent-bar"></div>
             <div class="sd-profile-card-shimmer" aria-hidden="true"></div>
-            <div class="sd-profile-card-inner">
-                <h3 class="sd-profile-card-title">$iconPerson Профиль инструктора</h3>
-                <div class="sd-profile-row">$iconPerson<span class="sd-profile-label">ФИО:</span><span class="sd-profile-value">${(user.fullName.ifBlank { "—" }).escapeHtml()}</span></div>
-                <div class="sd-profile-row">$iconEmail<span class="sd-profile-label">Email:</span><span class="sd-profile-value">${(user.email.ifBlank { "—" }).escapeHtml()}</span></div>
-                <div class="sd-profile-row">$iconPhone<span class="sd-profile-label">Тел.:</span><span class="sd-profile-value">${(user.phone.ifBlank { "—" }).escapeHtml()}</span></div>
-                <div class="sd-profile-row">$iconBadge<span class="sd-profile-label">Роль:</span><span class="sd-profile-value">Инструктор</span></div>
-                <div class="sd-profile-row sd-profile-row-balance">$iconTicket<span class="sd-profile-label">Баланс талонов:</span><span class="sd-profile-value sd-balance-badge">${user.balance}</span></div>
+            <div class="sd-profile-hero">
+                <div class="sd-profile-avatar" style="background:$instrAvatarBg">$instrInitials</div>
+                <div class="sd-profile-hero-info">
+                    <p class="sd-profile-fullname">${(user.fullName.ifBlank { "—" }).escapeHtml()}</p>
+                    <span class="sd-profile-role-badge">Инструктор</span>
+                </div>
+            </div>
+            <div class="sd-profile-info-rows">
+                <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgEmail</span><span class="sd-profile-info-label">Email</span><span class="sd-profile-info-value">${(user.email.ifBlank { "—" }).escapeHtml()}</span></div>
+                <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgPhoneP</span><span class="sd-profile-info-label">Телефон</span><span class="sd-profile-info-value">${(user.phone.ifBlank { "—" }).escapeHtml()}</span></div>
+                <div class="sd-profile-info-row sd-profile-info-row-balance"><span class="sd-profile-info-icon">$svgTicketP</span><span class="sd-profile-info-label">Талоны</span><span class="sd-balance-badge">${user.balance}</span></div>
             </div>
         </div>"""
     return """<h2>Главная</h2>

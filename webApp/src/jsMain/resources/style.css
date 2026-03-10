@@ -633,10 +633,8 @@ body {
     justify-content: center;
     color: rgba(255,255,255,0.8);
     cursor: pointer;
-    transition: background 0.15s, color 0.15s;
     text-decoration: none;
     flex-shrink: 0;
-    backdrop-filter: blur(4px);
 }
 .sd-ucard-icon-btn:hover {
     background: rgba(255,255,255,0.25);
@@ -696,7 +694,6 @@ body {
     border: 1px solid rgba(255,255,255,0.25);
     border-radius: 50%;
     cursor: pointer;
-    transition: background 0.15s;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
 }
@@ -730,12 +727,10 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background 0.15s, color 0.15s, border-color 0.15s;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
     font-family: inherit;
     flex-shrink: 0;
-    backdrop-filter: blur(4px);
 }
 .sd-ucard-foot-btn svg { width: 17px; height: 17px; }
 .sd-ucard-foot-btn:hover {

@@ -1961,10 +1961,11 @@ body {
 
 .sd-btn-signout {
     position: absolute;
-    top: 14px;
-    right: 20px;
-    width: 38px;
-    height: 38px;
+    top: 50%;
+    transform: translateY(-50%);
+    right: 16px;
+    width: 44px;
+    height: 44px;
     padding: 0;
     display: flex;
     align-items: center;
@@ -1975,16 +1976,17 @@ body {
     border-radius: 50%;
     cursor: pointer;
     transition: background 0.18s ease, transform 0.15s ease;
+    flex-shrink: 0;
 }
 
 .sd-btn-signout:hover {
     background: rgba(255,80,80,0.45);
     border-color: rgba(255,120,120,0.6);
-    transform: scale(1.08);
+    transform: translateY(-50%) scale(1.08);
 }
 
 .sd-btn-signout:active {
-    transform: scale(0.94);
+    transform: translateY(-50%) scale(0.94);
 }
 
 /* ═══════════════════════════════════════
@@ -2204,10 +2206,10 @@ body {
         padding-right: max(60px, calc(env(safe-area-inset-right) + 52px));
     }
     .sd-btn-signout {
-        top: max(10px, env(safe-area-inset-top));
+        top: 50%;
         right: max(12px, env(safe-area-inset-right));
-        width: 36px;
-        height: 36px;
+        width: 44px;
+        height: 44px;
     }
     .sd-tab {
         font-size: 0.62rem;
@@ -3105,11 +3107,7 @@ body {
         font-size: 0.7rem;
     }
     .sd-btn-signout {
-        width: 34px;
-        height: 34px;
-    }
-    .sd-btn-signout svg {
-        width: 17px;
-        height: 17px;
+        width: 44px;
+        height: 44px;
     }
 }

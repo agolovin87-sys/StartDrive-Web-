@@ -390,6 +390,7 @@ private val iconEmailLabelSvg = """<svg xmlns="http://www.w3.org/2000/svg" width
 private val iconTicketSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2"/><path d="M13 17v2"/><path d="M13 11v2"/></svg>"""
 private val iconInstructorSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>"""
 private val iconSelectSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>"""
+private val iconEyeSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>"""
 private val iconCreditSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>"""
 private val iconDebitSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>"""
 private val iconSetSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="9" x2="19" y2="9"/><line x1="5" y1="15" x2="19" y2="15"/></svg>"""
@@ -495,12 +496,12 @@ private fun renderAdminHomeContent(): String {
                 <div class="sd-ucard-row"><span class="sd-ucard-row-icon">$iconPhoneLabelSvg</span>${(u.phone.ifBlank { "Телефон не указан" }).escapeHtml()}</div>
                 <div class="sd-ucard-row"><span class="sd-ucard-row-icon">$iconEmailLabelSvg</span>${(u.email.ifBlank { "—" }).escapeHtml()}</div>
                 <div class="sd-ucard-row"><span class="sd-ucard-row-icon">$iconTicketSvg</span>Талоны: <strong>${u.balance}</strong></div>
-                <div class="sd-ucard-row sd-ucard-row-stretch"><span class="sd-ucard-row-icon">$iconInstructorSvg</span>Курсантов: <strong>${assignedCadets.size}</strong><button type="button" class="sd-ucard-tag-btn sd-instructor-cadets-toggle" data-instructor-cadets-modal="${u.id.escapeHtml()}">Посмотреть</button></div>
+                <div class="sd-ucard-row sd-ucard-row-stretch"><span class="sd-ucard-row-icon">$iconInstructorSvg</span>Курсантов: <strong>${assignedCadets.size}</strong><button type="button" class="sd-ucard-tag-btn sd-instructor-cadets-toggle" data-instructor-cadets-modal="${u.id.escapeHtml()}" title="Показать курсантов">$iconEyeSvg</button></div>
             </div>
             <div class="sd-ucard-footer">
-                <button type="button" class="sd-ucard-foot-btn" data-admin-assign="${u.id.escapeHtml()}">Назначить курсанта</button>
-                <button type="button" class="sd-ucard-foot-btn" data-admin-activate="${u.id.escapeHtml()}" data-admin-active="${u.isActive}">${if (u.isActive) "Деактивировать" else "Активировать"}</button>
-                <button type="button" class="sd-ucard-foot-btn sd-ucard-foot-btn-danger" data-admin-delete="${u.id.escapeHtml()}">Удалить</button>
+                <button type="button" class="sd-ucard-foot-btn sd-ucard-foot-btn-assign" data-admin-assign="${u.id.escapeHtml()}" title="Назначить курсанта">$iconUserPlusSvg</button>
+                <button type="button" class="sd-ucard-foot-btn ${if (u.isActive) "sd-ucard-foot-btn-deact" else "sd-ucard-foot-btn-act"}" data-admin-activate="${u.id.escapeHtml()}" data-admin-active="${u.isActive}" title="${if (u.isActive) "Деактивировать" else "Активировать"}">$iconPowerSvg</button>
+                <button type="button" class="sd-ucard-foot-btn sd-ucard-foot-btn-danger" data-admin-delete="${u.id.escapeHtml()}" title="Удалить">$iconTrashSvg</button>
             </div>
         </div>"""
     }
@@ -512,9 +513,9 @@ private fun renderAdminHomeContent(): String {
         val phoneDisabledCadet = if (u.phone.isBlank()) " sd-ucard-icon-btn-disabled" else ""
         val initials = u.fullName.split(" ").take(2).mapNotNull { it.firstOrNull()?.uppercase() }.joinToString("")
         val unlinkOrAssign = if (instId != null)
-            """<button type="button" class="sd-ucard-tag-btn sd-ucard-tag-btn-warn sd-admin-unlink-right" data-admin-unlink-instructor="${instId.escapeHtml()}" data-admin-unlink-cadet="${u.id.escapeHtml()}">Отвязать</button>"""
+            """<button type="button" class="sd-ucard-tag-btn sd-ucard-tag-btn-warn sd-admin-unlink-right" data-admin-unlink-instructor="${instId.escapeHtml()}" data-admin-unlink-cadet="${u.id.escapeHtml()}" title="Отвязать инструктора">$iconUnlinkSvg</button>"""
         else
-            """<button type="button" class="sd-ucard-tag-btn sd-instructor-cadets-toggle sd-admin-assign-cadet-btn" data-admin-assign-cadet="${u.id.escapeHtml()}">Назначить</button>"""
+            """<button type="button" class="sd-ucard-tag-btn sd-admin-assign-cadet-btn" data-admin-assign-cadet="${u.id.escapeHtml()}" title="Назначить инструктора">$iconUserPlusSvg</button>"""
         """<div class="sd-ucard sd-ucard-cadet">
             <div class="sd-ucard-accent-bar"></div>
             <div class="sd-ucard-top">
@@ -534,8 +535,8 @@ private fun renderAdminHomeContent(): String {
                 <div class="sd-ucard-row sd-ucard-row-stretch"><span class="sd-ucard-row-icon">$iconInstructorSvg</span>Инструктор: <strong>$displayInstText</strong>$unlinkOrAssign</div>
             </div>
             <div class="sd-ucard-footer">
-                <button type="button" class="sd-ucard-foot-btn" data-admin-activate="${u.id.escapeHtml()}" data-admin-active="${u.isActive}">${if (u.isActive) "Деактивировать" else "Активировать"}</button>
-                <button type="button" class="sd-ucard-foot-btn sd-ucard-foot-btn-danger" data-admin-delete="${u.id.escapeHtml()}">Удалить</button>
+                <button type="button" class="sd-ucard-foot-btn ${if (u.isActive) "sd-ucard-foot-btn-deact" else "sd-ucard-foot-btn-act"}" data-admin-activate="${u.id.escapeHtml()}" data-admin-active="${u.isActive}" title="${if (u.isActive) "Деактивировать" else "Активировать"}">$iconPowerSvg</button>
+                <button type="button" class="sd-ucard-foot-btn sd-ucard-foot-btn-danger" data-admin-delete="${u.id.escapeHtml()}" title="Удалить">$iconTrashSvg</button>
             </div>
         </div>"""
     }

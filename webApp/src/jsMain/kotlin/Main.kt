@@ -484,7 +484,7 @@ private fun renderAdminHomeContent(): String {
             <div class="sd-ucard-top">
                 <div class="sd-ucard-avatar sd-ucard-avatar-blue">$initials</div>
                 <div class="sd-ucard-head">
-                    <p class="sd-ucard-name">${u.fullName.escapeHtml()}</p>
+                    <p class="sd-ucard-name">${formatShortName(u.fullName).escapeHtml()}</p>
                     <span class="sd-ucard-badge sd-ucard-badge-blue">Инструктор</span>
                 </div>
                 <div class="sd-ucard-quick">
@@ -521,7 +521,7 @@ private fun renderAdminHomeContent(): String {
             <div class="sd-ucard-top">
                 <div class="sd-ucard-avatar sd-ucard-avatar-teal">$initials</div>
                 <div class="sd-ucard-head">
-                    <p class="sd-ucard-name">${u.fullName.escapeHtml()}</p>
+                    <p class="sd-ucard-name">${formatShortName(u.fullName).escapeHtml()}</p>
                     <span class="sd-ucard-badge sd-ucard-badge-teal">Курсант</span>
                 </div>
                 <div class="sd-ucard-quick">
@@ -718,7 +718,7 @@ private fun renderBalanceTabContent(user: User): String {
         """<div class="sd-bcard $roleClass$selectedClass">
             <div class="sd-ucard-avatar $avatarClass">$initials</div>
             <div class="sd-bcard-info">
-                <p class="sd-bcard-name">${u.fullName.escapeHtml()}</p>
+                <p class="sd-bcard-name">${formatShortName(u.fullName).escapeHtml()}</p>
                 <span class="sd-bcard-balance">$iconTicketSvg ${u.balance} талонов</span>
             </div>
             <button type="button" class="sd-bcard-select-btn" data-balance-select="${u.id.escapeHtml()}" title="Выбрать">$iconSelectSvg</button>

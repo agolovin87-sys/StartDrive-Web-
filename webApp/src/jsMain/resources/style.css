@@ -1134,7 +1134,8 @@ body {
     -webkit-tap-highlight-color: transparent;
 }
 .sd-bcard-select-btn:hover {
-    background: rgba(255,255,255,0.25);
+    background: #16A34A;
+    border-color: #16A34A;
     color: #fff;
 }
 .sd-bcard-select-btn svg { width: 16px; height: 16px; }

@@ -2437,40 +2437,138 @@ body {
     font-size: 0.9rem;
 }
 
-/* История операций по датам */
+/* ═══ История операций по датам (admin balance) ═══ */
 .sd-balance-history-by-date {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
     margin: 8px 0;
 }
 .sd-balance-history-day {
-    border: 1px solid var(--sd-border);
-    border-radius: 8px;
+    border: 1px solid #c7d7fa;
+    border-radius: 10px;
     overflow: hidden;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(37,99,235,0.07);
 }
 .sd-balance-history-day-title {
     margin: 0;
-    padding: 8px 12px;
-    font-size: 0.95rem;
-    font-weight: 600;
-    color: var(--sd-text);
-    background: var(--sd-border);
+    padding: 7px 14px;
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: #1e3a8a;
+    background: #e8f0fe;
+    letter-spacing: 0.01em;
 }
 .sd-balance-history-day-list {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    padding: 6px 10px 10px;
+    gap: 2px;
+    padding: 6px 10px 8px;
+    background: #fff;
 }
 .sd-balance-history-day-list .sd-record-row {
-    padding: 6px 10px;
-    font-size: 0.85rem;
+    padding: 5px 10px;
+    font-size: 0.84rem;
+    background: #f8faff;
+    border-radius: 6px;
 }
 .sd-balance-history-time {
-    color: var(--sd-text-secondary);
-    font-size: 0.9em;
+    color: #64748b;
+    font-size: 0.88em;
     min-width: 3.5em;
+}
+
+/* ═══ История по датам — вкладка «История» ═══ */
+.sd-history-by-date {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 8px 0;
+}
+.sd-history-day {
+    border: 1px solid #bfdbfe;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(37,99,235,0.06);
+}
+.sd-history-day-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    background: linear-gradient(90deg, #dbeafe 0%, #eff6ff 100%);
+    border-bottom: 1px solid #bfdbfe;
+}
+.sd-history-day-date {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: #1e40af;
+}
+.sd-history-day-count {
+    font-size: 0.75rem;
+    color: #3b82f6;
+    background: #fff;
+    padding: 2px 8px;
+    border-radius: 10px;
+    border: 1px solid #bfdbfe;
+    font-weight: 600;
+}
+.sd-history-day-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 10px 8px;
+}
+.sd-history-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    background: #f8faff;
+    border-radius: 6px;
+    font-size: 0.88rem;
+}
+.sd-history-time {
+    color: #64748b;
+    font-size: 0.82rem;
+    min-width: 3em;
+    flex-shrink: 0;
+}
+.sd-history-who {
+    flex: 1;
+    font-weight: 600;
+    color: #1e293b;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.sd-history-status {
+    color: #475569;
+    font-weight: 500;
+}
+.sd-history-amount {
+    font-weight: 700;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+.sd-history-rating {
+    color: #f59e0b;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-left: auto;
+}
+.sd-hist-credit { color: #16a34a; }
+.sd-hist-debit  { color: #dc2626; }
+.sd-hist-done   { color: #16a34a; }
+.sd-hist-cancel { color: #dc2626; }
+.sd-history-empty {
+    color: #94a3b8;
+    font-size: 0.88rem;
+    padding: 8px 0;
+    margin: 0;
 }
 
 .sd-btn-small {

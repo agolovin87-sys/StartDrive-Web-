@@ -421,6 +421,18 @@ private fun formatDateTime(ms: Long?): String {
     return js("d.toLocaleString('ru-RU')").unsafeCast<String>()
 }
 
+private fun formatDateOnly(ms: Long?): String {
+    if (ms == null || ms <= 0) return "—"
+    val d = js("new Date(ms)")
+    return js("d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })").unsafeCast<String>()
+}
+
+private fun formatTimeOnly(ms: Long?): String {
+    if (ms == null || ms <= 0) return "—"
+    val d = js("new Date(ms)")
+    return js("d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })").unsafeCast<String>()
+}
+
 /** Дата и время по часовому поясу Екатеринбург (UTC+5) для истории операций баланса */
 private fun formatDateTimeEkaterinburg(ms: Long?): String {
     if (ms == null || ms <= 0) return "—"
@@ -685,29 +697,60 @@ private fun renderRecordingTabContent(user: User): String {
 }
 
 private fun renderHistoryTabContent(user: User): String {
-    val loadingLine = if (appState.historyLoading) """<p class="sd-loading-text">Загрузка… <button type="button" id="sd-stop-history-loading" class="sd-btn sd-btn-small sd-btn-secondary">Показать пусто</button></p>""" else ""
+    val loadingLine = if (appState.historyLoading) """<p class="sd-loading-text">Загрузка…</p>""" else ""
     val sessions = appState.historySessions.take(30)
     val balance = appState.historyBalance.take(50)
-    val sessionsHtml = sessions.joinToString("") { s ->
-        """<div class="sd-record-row"><span>${formatDateTime(s.startTimeMillis)}</span> ${s.status} ${if (s.instructorRating > 0) "★${s.instructorRating}" else ""}</div>"""
+
+    fun sessionStatusLabel(s: String) = when (s) {
+        "scheduled" -> "Запланировано"; "completed" -> "Завершено"; "cancelled" -> "Отменено"; else -> s
     }
-    if (user.role == "admin") {
-        val users = appState.balanceAdminUsers
-        val balanceHtml = balance.joinToString("") { b ->
-            val name = users.find { it.id == b.userId }?.fullName ?: b.userId.take(8) + "…"
-            val typeStr = when (b.type) { "credit" -> "+"; "debit" -> "−"; "set" -> "="; else -> "" }
-            """<div class="sd-record-row"><span>${formatDateTime(b.timestampMillis)}</span> $name — $typeStr${b.amount}</div>"""
+
+    fun historyDayBlock(date: String, count: Int, rowsHtml: String) =
+        """<div class="sd-history-day">
+            <div class="sd-history-day-header"><span class="sd-history-day-date">$date</span><span class="sd-history-day-count">$count зап.</span></div>
+            <div class="sd-history-day-list">$rowsHtml</div>
+        </div>"""
+
+    fun sessionsGroupedHtml(): String {
+        if (sessions.isEmpty()) return """<p class="sd-history-empty">Нет записей</p>"""
+        val byDate = sessions.sortedByDescending { it.startTimeMillis ?: 0L }.groupBy { formatDateOnly(it.startTimeMillis) }
+        val days = byDate.entries.joinToString("") { (date, entries) ->
+            val rows = entries.joinToString("") { s ->
+                val rating = if (s.instructorRating > 0) """<span class="sd-history-rating">★${s.instructorRating}</span>""" else ""
+                val statusClass = when (s.status) { "completed" -> "sd-hist-done"; "cancelled" -> "sd-hist-cancel"; else -> "" }
+                """<div class="sd-history-row"><span class="sd-history-time">${formatTimeOnly(s.startTimeMillis)}</span><span class="sd-history-status $statusClass">${sessionStatusLabel(s.status).escapeHtml()}</span>$rating</div>"""
+            }
+            historyDayBlock(date, entries.size, rows)
         }
-        return """<h2>История</h2>$loadingLine
-            <div class="sd-block"><h3 class="sd-block-title">Зачисления и списания (${balance.size})</h3><div class="sd-list">$balanceHtml</div></div>
-            <div class="sd-block"><h3 class="sd-block-title">Вождение</h3><p>Завершённые и отменённые вождения — в приложении.</p></div>
-            <div class="sd-block"><h3 class="sd-block-title">Чат</h3><p>Просмотр переписки — выбрать контакт во вкладке Чат.</p></div>"""
+        return """<div class="sd-history-by-date">$days</div>"""
     }
-    val balanceHtml = balance.joinToString("") { b ->
-        val typeStr = when (b.type) { "credit" -> "+"; "debit" -> "−"; "set" -> "="; else -> "" }
-        """<div class="sd-record-row"><span>${formatDateTime(b.timestampMillis)}</span> $typeStr${b.amount}</div>"""
+
+    fun balanceGroupedHtml(withUser: Boolean): String {
+        if (balance.isEmpty()) return """<p class="sd-history-empty">Нет записей</p>"""
+        val users = appState.balanceAdminUsers
+        val byDate = balance.sortedByDescending { it.timestampMillis ?: 0L }.groupBy { formatDateOnly(it.timestampMillis) }
+        val days = byDate.entries.joinToString("") { (date, entries) ->
+            val rows = entries.joinToString("") { b ->
+                val typeStr = when (b.type) { "credit" -> "+ "; "debit" -> "− "; "set" -> "= "; else -> "" }
+                val typeClass = when (b.type) { "credit" -> "sd-hist-credit"; "debit" -> "sd-hist-debit"; else -> "" }
+                val whoHtml = if (withUser) {
+                    val name = users.find { it.id == b.userId }?.let { formatShortName(it.fullName) } ?: b.userId.take(8) + "…"
+                    """<span class="sd-history-who">${name.escapeHtml()}</span>"""
+                } else ""
+                """<div class="sd-history-row"><span class="sd-history-time">${formatTimeOnly(b.timestampMillis)}</span>$whoHtml<span class="sd-history-amount $typeClass">$typeStr${b.amount} тал.</span></div>"""
+            }
+            historyDayBlock(date, entries.size, rows)
+        }
+        return """<div class="sd-history-by-date">$days</div>"""
     }
-    return """<h2>История</h2>$loadingLine<div class="sd-block"><h3 class="sd-block-title">Занятия (${sessions.size})</h3><div class="sd-list">$sessionsHtml</div></div><div class="sd-block"><h3 class="sd-block-title">Баланс (${balance.size})</h3><div class="sd-list">$balanceHtml</div></div>"""
+
+    if (user.role == "admin") {
+        return """<h2>История</h2>$loadingLine<div class="sd-block"><h3 class="sd-block-title">Зачисления и списания (${balance.size})</h3>${balanceGroupedHtml(true)}</div>"""
+    }
+
+    return """<h2>История</h2>$loadingLine
+        <div class="sd-block"><h3 class="sd-block-title">Занятия (${sessions.size})</h3>${sessionsGroupedHtml()}</div>
+        <div class="sd-block"><h3 class="sd-block-title">Операции по балансу (${balance.size})</h3>${balanceGroupedHtml(false)}</div>"""
 }
 
 private fun renderSettingsTabContent(user: User): String =

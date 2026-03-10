@@ -49,24 +49,60 @@ body {
 }
 
 .sd-header {
-    background: var(--sd-primary);
+    position: sticky;
+    top: 0;
+    z-index: 100;
     color: white;
-    padding: 16px 24px;
+    padding: 16px 24px 14px;
     padding-left: max(24px, env(safe-area-inset-left));
+    padding-right: max(70px, calc(env(safe-area-inset-right) + 60px));
     padding-top: max(16px, env(safe-area-inset-top));
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    background: linear-gradient(160deg, #0d2347 0%, #0b1c38 55%, #05101f 100%);
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    box-shadow:
+        0 4px 20px rgba(0,0,0,0.45),
+        0 1px 0 rgba(255,255,255,0.05) inset;
+    overflow: hidden;
+}
+
+/* Глянцевый блик */
+.sd-header::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 45%;
+    background: linear-gradient(180deg, rgba(255,255,255,0.09) 0%, transparent 100%);
+    pointer-events: none;
+}
+
+/* Синяя акцентная полоска снизу */
+.sd-header::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg,
+        transparent 0%,
+        rgba(66,165,245,0.7) 30%,
+        rgba(100,200,255,0.9) 50%,
+        rgba(66,165,245,0.7) 70%,
+        transparent 100%);
 }
 
 .sd-header h1 {
     margin: 0;
-    font-size: 1.35rem;
-    font-weight: 600;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #ffffff;
+    letter-spacing: 0.01em;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.4);
 }
 
 .sd-header p {
-    margin: 4px 0 0 0;
-    font-size: 0.85rem;
-    opacity: 0.9;
+    margin: 3px 0 0;
+    font-size: 0.82rem;
+    color: rgba(180,210,255,0.75);
+    letter-spacing: 0.01em;
 }
 
 .sd-nav {
@@ -1921,7 +1957,6 @@ body {
 /* Панель с выходом */
 .sd-panel-header {
     position: relative;
-    padding-right: 120px;
 }
 
 .sd-btn-signout {
@@ -2153,19 +2188,20 @@ body {
 /* Адаптив под мобильные */
 @media (max-width: 640px) {
     .sd-header {
-        padding: 12px 16px;
+        padding: 12px 16px 11px;
         padding-left: max(16px, env(safe-area-inset-left));
+        padding-right: max(60px, calc(env(safe-area-inset-right) + 52px));
         padding-top: max(12px, env(safe-area-inset-top));
     }
     .sd-header h1 {
-        font-size: 1.15rem;
+        font-size: 1.1rem;
     }
     .sd-header p {
-        font-size: 0.8rem;
+        font-size: 0.78rem;
         word-break: break-word;
     }
     .sd-panel-header {
-        padding-right: 80px;
+        padding-right: max(60px, calc(env(safe-area-inset-right) + 52px));
     }
     .sd-btn-signout {
         top: max(10px, env(safe-area-inset-top));

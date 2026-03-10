@@ -36,8 +36,3 @@ waitForPort = 5000
 
 [workflows.workflow.metadata]
 outputType = "webview"
-
-[deployment]
-deploymentTarget = "autoscale"
-run = ["node", "serve.js"]
-build = ["bash", "-c", "./gradlew :webApp:jsBrowserDevelopmentWebpack --no-daemon --quiet"]

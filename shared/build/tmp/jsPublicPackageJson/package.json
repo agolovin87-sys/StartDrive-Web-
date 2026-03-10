@@ -1,0 +1,11 @@
+{
+  "name": "StartDrive-shared",
+  "version": "0.0.0-unspecified",
+  "main": "StartDrive-shared.js",
+  "types": "StartDrive-shared.d.ts",
+  "devDependencies": {},
+  "dependencies": {},
+  "peerDependencies": {},
+  "optionalDependencies": {},
+  "bundledDependencies": []
+}

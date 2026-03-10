@@ -1,0 +1,12 @@
+abi_version=2.2.0
+builtins_platform=JS
+compiler_version=2.2.10
+depends=org.jetbrains.kotlinx\:kotlinx-serialization-json org.jetbrains.kotlinx\:kotlinx-serialization-core org.jetbrains.kotlin\:kotlin-dom-api-compat kotlin
+ir_signature_versions=1,2
+jsOutputName=StartDrive-shared
+language_features=+JsAllowValueClassesInExternals +MultiPlatformProjects
+metadata_version=1.4.1
+serializedIrFileFingerprints=22q6huizg9b91.1c0t6ifzz3dzc 3jngdoqzyj049.35tb1k8epwpk 2aj8jhzpxkv1x.2cv4lqp6bsevj 194mkj7oi9x1e.366ykhkw4yc3f e00n15f78vuq.2l2o7h0qkdpi 3vhd446rbu1zk.1atyq6d9shaze o15p9ai1mz3k.1kvbyzg5kp4i1 1dn9yydcdb5cg.g926boqcthto
+serializedKlibFingerprint=18swt6y5hshjk.b56klyxlof4d
+unique_name=StartDrive\:shared
+wasm_targets=wasm-js

@@ -1,0 +1,12 @@
+abi_version=2.2.0
+builtins_platform=JS
+compiler_version=2.2.10
+depends=StartDrive\:shared org.jetbrains.kotlin\:kotlin-dom-api-compat kotlin
+ir_signature_versions=1,2
+jsOutputName=StartDrive-webApp
+language_features=+JsAllowValueClassesInExternals +MultiPlatformProjects
+metadata_version=1.4.1
+serializedIrFileFingerprints=1hi32r57y59di.1x2wla6ikg57k 17hzrc2hyd8q8.2py7lo3f777kl 2ox8g4b2tkagl.1ncyjau3plzgl 193rro0qnku6y.29r6o8ivbgvsl 3jcl1gu48veo9.1s7lzgulp5t6i
+serializedKlibFingerprint=al8b96fobvju.lhpj832090ym
+unique_name=StartDrive\:webApp
+wasm_targets=wasm-js

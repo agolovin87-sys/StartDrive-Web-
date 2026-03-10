@@ -1,6 +1,14 @@
 {
   "firestore": {
+    "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "hosting": {
+    "public": "webApp/build/kotlin-webpack/js/productionExecutable",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
   },
   "functions": {
     "source": "functions",

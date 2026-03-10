@@ -55,6 +55,7 @@ import androidx.compose.ui.layout.ContentScale
 import com.example.startdrive.data.repository.AppSettings
 import com.example.startdrive.data.repository.HiddenChatMessages
 import com.example.startdrive.data.repository.UserRepository
+import com.example.startdrive.shared.di.SharedFactory
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.runtime.LaunchedEffect
@@ -453,7 +454,7 @@ fun SettingsTab(
 
 private val aboutAppTitle = "StartDrive — Цифровая платформа для автошкол"
 
-private val aboutAppParagraphs = listOf(
+private fun aboutAppParagraphs(appInfo: com.example.startdrive.shared.model.AppInfo) = listOf(
     "StartDrive — это современное приложение, созданное для автоматизации работы автошкол и повышения качества обучения. Оно объединяет администраторов, инструкторов и курсантов в едином цифровом пространстве, делая процесс обучения прозрачным, удобным и эффективным.",
     "Ключевые возможности приложения:",
     "Удобная запись на вождение — курсанты могут видеть свободные окна инструкторов и бронировать занятия, а инструкторы — управлять своим расписанием.",
@@ -463,9 +464,9 @@ private val aboutAppParagraphs = listOf(
     "Встроенный чат с уведомлениями — возможность оперативно связаться с инструктором или администратором, обсудить детали занятий.",
     "Подготовка к теоретическому экзамену — решение экзаменационных билетов ПДД прямо в приложении с возможностью отслеживать прогресс и работать над ошибками.",
     "StartDrive — это ваш надежный помощник на пути к получению водительского удостоверения.",
-    "Версия: 1.0.0",
+    "Версия: ${appInfo.version}",
     "Разработчик: ООО \"Старт-Авто\"",
-    "Платформа: Android",
+    "Платформа: ${appInfo.platform}",
     "По всем вопросам обращайтесь: start-auto13@mail.ru",
 )
 
@@ -474,6 +475,8 @@ private fun AboutAppScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val appInfo = remember { SharedFactory.getAppInfoRepository().getAppInfo() }
+    val paragraphs = remember(appInfo) { aboutAppParagraphs(appInfo) }
     val scrollState = rememberScrollState()
     Column(modifier = modifier.fillMaxSize()) {
         Row(
@@ -507,7 +510,7 @@ private fun AboutAppScreen(
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            aboutAppParagraphs.forEachIndexed { index, paragraph ->
+            paragraphs.forEachIndexed { index, paragraph ->
                 val annotated = buildAnnotatedString {
                     when {
                         paragraph == "Ключевые возможности приложения:" -> {

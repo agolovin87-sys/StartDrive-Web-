@@ -10,6 +10,72 @@ import org.w3c.dom.HTMLSelectElement
 import org.w3c.dom.events.Event
 
 private var presenceUnsubscribes: MutableList<() -> Unit> = mutableListOf()
+private var voiceRecorderChunks: dynamic = null
+private var voiceRecorderStream: dynamic = null
+private var voiceRecorder: dynamic = null
+private var voiceRecorderMimeType: String = "audio/webm"
+private var voiceRecordInterval: Int = 0
+private var voicePlayInterval: Int = 0
+private val chatScrollByContactId = mutableMapOf<String, Int>()
+
+private fun saveChatScrollForCurrentContact() {
+    val contactId = appState.selectedChatContactId ?: return
+    val c = document.getElementById("sd-chat-messages")?.asDynamic()
+    if (c != null) {
+        val top = (c.scrollTop as? Number)?.toInt() ?: 0
+        chatScrollByContactId[contactId] = top
+    }
+}
+
+private fun applyScrollForChat(contactId: String) {
+    val saved = chatScrollByContactId[contactId]
+    val container = document.getElementById("sd-chat-messages")?.asDynamic()
+    if (container != null) {
+        if (saved != null) {
+            window.requestAnimationFrame {
+                window.requestAnimationFrame {
+                    val c = document.getElementById("sd-chat-messages")?.asDynamic()
+                    if (c != null) {
+                        val maxScroll = ((c.scrollHeight as Number).toDouble() - (c.clientHeight as Number).toDouble()).toInt().coerceAtLeast(0)
+                        c.scrollTop = saved.coerceIn(0, maxScroll)
+                    }
+                }
+            }
+        } else {
+            (document.getElementById("sd-chat-messages")?.lastElementChild?.unsafeCast<dynamic>())?.scrollIntoView(js("({ block: 'end', behavior: 'smooth' })"))
+        }
+    }
+}
+
+private val SD_ICON_PLAY_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>"""
+private val SD_ICON_PAUSE_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>"""
+
+private fun formatVoiceDurationSec(sec: Int): String {
+    val m = sec / 60
+    val s = sec % 60
+    return "$m:${s.toString().padStart(2, '0')}"
+}
+
+/** Обновляет только UI плеера голосовых сообщений без полного рендера (чтобы не сбрасывать прокрутку). */
+private fun patchVoicePlayerDOM() {
+    val playingId = appState.chatPlayingVoiceId
+    val currentMs = appState.chatPlayingVoiceCurrentMs
+    val voiceEls = document.querySelectorAll(".sd-msg-voice")
+    for (i in 0 until voiceEls.length) {
+        val el = voiceEls.item(i)?.asDynamic() ?: continue
+        val msgId = el.getAttribute("data-voice-id") as? String ?: continue
+        val dur = ((el.getAttribute("data-voice-duration") as? String) ?: "0").toIntOrNull() ?: 0
+        val isPlaying = playingId == msgId
+        val ms = if (isPlaying) currentMs else 0
+        val progress = if (dur > 0) (ms.toDouble() / 1000 / dur).coerceIn(0.0, 1.0) else 0.0
+        val progressPct = (progress * 100).toInt()
+        val currentStr = formatVoiceDurationSec((ms / 1000).coerceAtLeast(0).coerceAtMost(dur))
+        val totalStr = formatVoiceDurationSec(dur)
+        js("(function(el, isPlaying, progressPct, currentStr, totalStr, iconPlay, iconPause){ var btn=el.querySelector('.sd-voice-play-btn'); if(btn){ btn.innerHTML=isPlaying?iconPause:iconPlay; btn.setAttribute('title',isPlaying?'Пауза':'Воспроизвести'); btn.setAttribute('aria-label',isPlaying?'Пауза':'Воспроизвести'); } var wrap=el.querySelector('.sd-voice-progress-wrap'); if(wrap){ var bar=wrap.querySelector('.sd-voice-progress-bar'); if(isPlaying||progressPct>0){ if(!bar){ bar=document.createElement('div'); bar.className='sd-voice-progress-bar'; var ref=wrap.querySelector('.sd-voice-times'); if(ref) wrap.insertBefore(bar,ref); else wrap.appendChild(bar); } bar.style.width=progressPct+'%'; } else if(bar) bar.remove(); } var cur=el.querySelector('.sd-voice-current'); if(cur) cur.textContent=currentStr; var tot=el.querySelector('.sd-voice-total'); if(tot) tot.textContent=totalStr; })")(
+            el, isPlaying, progressPct, currentStr, totalStr, SD_ICON_PLAY_SVG, SD_ICON_PAUSE_SVG
+        )
+    }
+}
 
 private fun subscribeChatPresence(contactIds: List<String>) {
     presenceUnsubscribes.forEach { it() }
@@ -328,8 +394,17 @@ private fun renderChatTabContent(currentUser: User): String {
         val iconCheck = """<svg class="sd-msg-check" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>"""
         val iconSendSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>"""
         val iconBackSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>"""
+        val iconMicSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>"""
+        val iconStopSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12"/></svg>"""
+        val iconPlaySvg = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>"""
+        val iconPauseSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>"""
         val contactInitials = contact.initials().ifEmpty { "?" }.escapeHtml()
         val contactAvatarBg = avatarColorForId(contact.id).escapeHtml()
+        fun formatVoiceDuration(sec: Int): String {
+            val m = sec / 60
+            val s = sec % 60
+            return "$m:${s.toString().padStart(2, '0')}"
+        }
         val msgsHtml = messages.joinToString("") { msg ->
             val isMe = msg.senderId == myId
             val cls = if (isMe) "sd-msg sd-msg-me" else "sd-msg sd-msg-them"
@@ -341,7 +416,43 @@ private fun renderChatTabContent(currentUser: User): String {
                 """<span class="$checkClass" title="${if (isRead) "Прочитано" else "Доставлено"}">$checks</span>"""
             } else ""
             val timeRow = """<span class="sd-msg-time">$timeStr</span>"""
-            """<div class="$cls"><span class="sd-msg-text">${msg.text.escapeHtml()}</span><div class="sd-msg-footer">$timeRow$statusHtml</div></div>"""
+            if (msg.isVoice && !msg.voiceUrl.isNullOrBlank() && (msg.voiceDurationSec ?: 0) > 0) {
+                val dur = msg.voiceDurationSec!!
+                val totalStr = formatVoiceDuration(dur).escapeHtml()
+                val isPlaying = appState.chatPlayingVoiceId == msg.id
+                val currentMs = if (msg.id == appState.chatPlayingVoiceId) appState.chatPlayingVoiceCurrentMs else 0
+                val progress = if (dur > 0) (currentMs.toDouble() / 1000 / dur).coerceIn(0.0, 1.0) else 0.0
+                val progressPct = (progress * 100).toInt()
+                val currentStr = formatVoiceDuration((currentMs / 1000).coerceAtLeast(0).coerceAtMost(dur)).escapeHtml()
+                """<div class="$cls sd-msg-voice" data-voice-id="${msg.id.escapeHtml()}" data-voice-url="${msg.voiceUrl.escapeHtml()}" data-voice-duration="$dur">
+                    <div class="sd-voice-player">
+                        <button type="button" class="sd-voice-play-btn" title="${if (isPlaying) "Пауза" else "Воспроизвести"}" aria-label="${if (isPlaying) "Пауза" else "Воспроизвести"}">${if (isPlaying) iconPauseSvg else iconPlaySvg}</button>
+                        <div class="sd-voice-progress-wrap">
+                            ${if (isPlaying || currentMs > 0) """<div class="sd-voice-progress-bar" style="width:${progressPct}%"></div>""" else ""}
+                            <div class="sd-voice-times"><span class="sd-voice-current">$currentStr</span><span class="sd-voice-total">$totalStr</span></div>
+                        </div>
+                    </div>
+                    <audio id="sd-voice-audio-${msg.id.escapeHtml()}" class="sd-voice-audio" preload="metadata"></audio>
+                    <div class="sd-msg-footer">$timeRow$statusHtml</div>
+                </div>"""
+            } else {
+                """<div class="$cls"><span class="sd-msg-text">${msg.text.escapeHtml()}</span><div class="sd-msg-footer">$timeRow$statusHtml</div></div>"""
+            }
+        }
+        val recording = appState.chatVoiceRecording
+        val elapsed = appState.chatVoiceRecordElapsedSec
+        val recordTimeStr = "${elapsed / 60}:${(elapsed % 60).toString().padStart(2, '0')}"
+        val inputRowHtml = if (recording) {
+            """<div class="sd-chat-input-row sd-chat-voice-recording" id="sd-chat-voice-recording">
+                <span class="sd-chat-recording-text">Запись… $recordTimeStr</span>
+                <button type="button" id="sd-chat-voice-stop" class="sd-chat-voice-stop-btn" title="Остановить">$iconStopSvg</button>
+            </div>"""
+        } else {
+            """<div class="sd-chat-input-row">
+                <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="Сообщение..." maxlength="2000" />
+                <button type="button" id="sd-chat-send" class="sd-chat-send-btn" title="Отправить">$iconSendSvg</button>
+                <button type="button" id="sd-chat-voice-mic" class="sd-chat-voice-mic-btn" title="Голосовое сообщение">$iconMicSvg</button>
+            </div>"""
         }
         return """
             <div class="sd-chat-tab">
@@ -352,10 +463,7 @@ private fun renderChatTabContent(currentUser: User): String {
                     <span class="sd-chat-contact-name">${formatShortName(contact.fullName).escapeHtml()}</span>
                 </div>
                 <div class="sd-chat-messages" id="sd-chat-messages">$msgsHtml</div>
-                <div class="sd-chat-input-row">
-                    <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="Сообщение..." maxlength="2000" />
-                    <button type="button" id="sd-chat-send" class="sd-chat-send-btn" title="Отправить">$iconSendSvg</button>
-                </div>
+                $inputRowHtml
             </div>
             </div>
         """.trimIndent()
@@ -392,7 +500,13 @@ private fun renderChatTabContent(currentUser: User): String {
     return """<div class="sd-chat-tab"><div class="sd-chat-list-header"><h2 class="sd-chat-title">Чат</h2>$refreshBtnStyled</div>$loadingLine$contactsBlock</div>"""
 }
 
+/** Экранирует HTML, чтобы пользовательский ввод не приводил к XSS. */
 private fun String.escapeHtml(): String = this
+    .replace("&", "&amp;")
+    .replace("<", "&lt;")
+    .replace(">", "&gt;")
+    .replace("\"", "&quot;")
+    .replace("'", "&#39;")
 
 /** Формат даты и времени для сообщения (DD.MM.YYYY HH:mm). */
 private fun formatMessageDateTime(timestampMs: Long): String {
@@ -1027,6 +1141,7 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                 }
             }
             if (idx != 2) {
+                saveChatScrollForCurrentContact()
                 updateState { selectedChatContactId = null; chatMessages = emptyList() }
                 unsubscribeChat()
             }
@@ -1185,13 +1300,12 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
         if (chatContact != null) {
             val contactId = chatContact.getAttribute("data-contact-id") ?: return@addEventListener
             val uid = appState.user?.id ?: return@addEventListener
+            saveChatScrollForCurrentContact()
             updateState { selectedChatContactId = contactId; chatMessages = emptyList() }
             unsubscribeChat()
             subscribeMessages(chatRoomId(uid, contactId)) { list ->
                 updateState { chatMessages = list }
-                window.setTimeout({
-                    (document.getElementById("sd-chat-messages")?.lastElementChild?.unsafeCast<dynamic>())?.scrollIntoView(js("({ block: 'end', behavior: 'smooth' })"))
-                }, 100)
+                window.setTimeout({ applyScrollForChat(contactId) }, 100)
             }
             e.preventDefault(); e.stopPropagation()
             return@addEventListener
@@ -1200,13 +1314,12 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
         if (adminOpenChat != null) {
             val contactId = adminOpenChat.getAttribute("data-contact-id") ?: return@addEventListener
             val uid = appState.user?.id ?: return@addEventListener
+            saveChatScrollForCurrentContact()
             updateState { selectedTabIndex = 2; selectedChatContactId = contactId; chatMessages = emptyList() }
             unsubscribeChat()
             subscribeMessages(chatRoomId(uid, contactId)) { list ->
                 updateState { chatMessages = list }
-                window.setTimeout({
-                    (document.getElementById("sd-chat-messages")?.lastElementChild?.unsafeCast<dynamic>())?.scrollIntoView(js("({ block: 'end', behavior: 'smooth' })"))
-                }, 100)
+                window.setTimeout({ applyScrollForChat(contactId) }, 100)
             }
             e.preventDefault(); e.stopPropagation()
             return@addEventListener
@@ -1215,13 +1328,12 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
         if (cadetChatBtn != null) {
             val contactId = cadetChatBtn.getAttribute("data-contact-id") ?: return@addEventListener
             val uid = appState.user?.id ?: return@addEventListener
+            saveChatScrollForCurrentContact()
             updateState { selectedTabIndex = 2; selectedChatContactId = contactId; chatMessages = emptyList() }
             unsubscribeChat()
             subscribeMessages(chatRoomId(uid, contactId)) { list ->
                 updateState { chatMessages = list }
-                window.setTimeout({
-                    (document.getElementById("sd-chat-messages")?.lastElementChild?.unsafeCast<dynamic>())?.scrollIntoView(js("({ block: 'end', behavior: 'smooth' })"))
-                }, 100)
+                window.setTimeout({ applyScrollForChat(contactId) }, 100)
             }
             e.preventDefault(); e.stopPropagation()
         }
@@ -1497,7 +1609,15 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 signOut()
             })
             document.getElementById("sd-chat-back")?.addEventListener("click", {
-                updateState { selectedChatContactId = null; chatMessages = emptyList() }
+                try { (voiceRecorder.asDynamic()).stop() } catch (_: Throwable) { }
+                val stream = voiceRecorderStream
+                if (stream != null) {
+                    js("(function(s){ if(s&&s.getTracks) s.getTracks().forEach(function(t){ t.stop(); }); })").unsafeCast<(dynamic) -> Unit>().invoke(stream)
+                }
+                if (voiceRecordInterval != 0) { window.clearInterval(voiceRecordInterval); voiceRecordInterval = 0 }
+                if (voicePlayInterval != 0) { window.clearInterval(voicePlayInterval); voicePlayInterval = 0 }
+                saveChatScrollForCurrentContact()
+                updateState { selectedChatContactId = null; chatMessages = emptyList(); chatVoiceRecording = false; chatPlayingVoiceId = null }
                 unsubscribeChat()
             })
             val chatInput = document.getElementById("sd-chat-input") as? HTMLInputElement
@@ -1507,6 +1627,60 @@ private fun attachListeners(root: org.w3c.dom.Element) {
             chatInput?.addEventListener("keypress", { e: dynamic ->
                 if (e?.key == "Enter") sendChatMessage(chatInput, uid)
             })
+            document.getElementById("sd-chat-voice-mic")?.addEventListener("click", {
+                startVoiceRecording(uid)
+            })
+            document.getElementById("sd-chat-voice-stop")?.addEventListener("click", {
+                stopVoiceRecordingAndSend(uid)
+            })
+            if (document.getElementById("sd-chat-voice-recording") != null) {
+                if (voiceRecordInterval != 0) window.clearInterval(voiceRecordInterval)
+                voiceRecordInterval = window.setInterval({
+                    val start = appState.chatVoiceRecordStartMs
+                    if (start > 0) updateState { chatVoiceRecordElapsedSec = ((js("Date.now()").unsafeCast<Double>() - start) / 1000.0).toInt().coerceAtLeast(0) }
+                }, 1000).unsafeCast<Int>()
+            }
+            val playBtns = root.querySelectorAll(".sd-voice-play-btn")
+            for (i in 0 until playBtns.length) {
+                val btn = playBtns.item(i) as? org.w3c.dom.Element ?: continue
+                val msgEl = (btn.asDynamic().closest(".sd-msg-voice")) as? org.w3c.dom.Element ?: continue
+                val msgId = msgEl.getAttribute("data-voice-id") ?: continue
+                val voiceUrl = msgEl.getAttribute("data-voice-url") ?: continue
+                val durationSec = (msgEl.getAttribute("data-voice-duration") ?: "0").toIntOrNull() ?: 0
+                val audioEl = document.getElementById("sd-voice-audio-$msgId")
+                if (audioEl != null) {
+                    btn.addEventListener("click", {
+                        toggleVoicePlay(audioEl.asDynamic(), msgId, voiceUrl, durationSec)
+                    })
+                }
+            }
+            val progressWraps = root.querySelectorAll(".sd-voice-progress-wrap")
+            for (i in 0 until progressWraps.length) {
+                val wrap = progressWraps.item(i) as? org.w3c.dom.Element ?: continue
+                val msgEl = (wrap.asDynamic().closest(".sd-msg-voice")) as? org.w3c.dom.Element ?: continue
+                val msgId = msgEl.getAttribute("data-voice-id") ?: continue
+                val voiceUrl = msgEl.getAttribute("data-voice-url") ?: continue
+                val durationSec = (msgEl.getAttribute("data-voice-duration") ?: "0").toIntOrNull() ?: 0
+                attachVoiceProgressDrag(wrap, msgId, voiceUrl, durationSec)
+            }
+            val playingId = appState.chatPlayingVoiceId
+            if (playingId != null && voicePlayInterval == 0) {
+                val durAttr = root.querySelector(".sd-msg-voice[data-voice-id=\"$playingId\"]")?.getAttribute("data-voice-duration") ?: "0"
+                val durationSec = durAttr.toIntOrNull() ?: 0
+                voicePlayInterval = window.setInterval({
+                    val a = document.getElementById("sd-global-voice-audio")?.asDynamic()
+                    if (a != null && a.paused == false) {
+                        appState.chatPlayingVoiceCurrentMs = ((a.currentTime as Double) * 1000).toInt()
+                        patchVoicePlayerDOM()
+                    } else if (a != null && a.ended == true) {
+                        window.clearInterval(voicePlayInterval)
+                        voicePlayInterval = 0
+                        appState.chatPlayingVoiceId = null
+                        appState.chatPlayingVoiceCurrentMs = durationSec * 1000
+                        patchVoicePlayerDOM()
+                    }
+                }, 200).unsafeCast<Int>()
+            }
             document.getElementById("sd-add-window")?.addEventListener("click", {
                 val input = document.getElementById("sd-new-window-dt") as? HTMLInputElement
                 val v = input?.value ?: ""
@@ -1608,4 +1782,158 @@ private fun sendChatMessage(chatInput: HTMLInputElement?, uid: String?) {
         .catch { _ ->
             updateState { networkError = "Не удалось отправить сообщение." }
         }
+}
+
+private fun startVoiceRecording(uid: String?) {
+    if (uid == null || appState.selectedChatContactId == null) return
+    val nav = js("navigator").unsafeCast<dynamic>()
+    val mediaDevices = nav.mediaDevices
+    if (mediaDevices == null || mediaDevices.getUserMedia == null) {
+        updateState { networkError = "Нужен доступ к микрофону для голосовых сообщений." }
+        return
+    }
+    voiceRecorderChunks = js("[]")
+    val constraints = js("({ audio: true })")
+    mediaDevices.getUserMedia(constraints).then { stream: dynamic ->
+        voiceRecorderStream = stream
+        val Recorder = js("window.MediaRecorder")
+        if (Recorder == undefined) {
+            updateState { networkError = "MediaRecorder не поддерживается в этом браузере." }
+            js("(function(s){ if(s&&s.getTracks) s.getTracks().forEach(function(t){ t.stop(); }); })").unsafeCast<(dynamic) -> Unit>().invoke(stream)
+            return@then
+        }
+        val mime = js("(function(){ if(typeof MediaRecorder!=='undefined'&&MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) return 'audio/webm;codecs=opus'; if(typeof MediaRecorder!=='undefined'&&MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported('audio/webm')) return 'audio/webm'; return 'audio/webm'; })()").unsafeCast<String>()
+        voiceRecorderMimeType = mime
+        val opts = js("({ mimeType: mime })")
+        val recorder = js("new MediaRecorder(stream, opts)").unsafeCast<dynamic>()
+        window.asDynamic().__sdVoiceChunks = voiceRecorderChunks
+        recorder.ondataavailable = { e: dynamic ->
+            val data = e?.data
+            if (data != null) {
+                window.asDynamic().__sdVoiceChunkData = data
+                js("(function(){ var a=window.__sdVoiceChunks,d=window.__sdVoiceChunkData; if(a&&d){ a.push(d); } })()")
+            }
+        }
+        recorder.onstop = { _: dynamic ->
+            val chunks = voiceRecorderChunks
+            val mimeType = voiceRecorderMimeType
+            val stopStream = voiceRecorderStream
+            js("(function(s){ if(s&&s.getTracks) s.getTracks().forEach(function(t){ t.stop(); }); })").unsafeCast<(dynamic) -> Unit>().invoke(stopStream)
+            voiceRecorderStream = null
+            voiceRecorder = null
+            voiceRecorderChunks = null
+            if (voiceRecordInterval != 0) { window.clearInterval(voiceRecordInterval); voiceRecordInterval = 0 }
+            updateState { chatVoiceRecording = false; chatVoiceRecordElapsedSec = 0 }
+            if (chunks != null) {
+                val blob = js("(function(c,t){ return new Blob(c, { type: t || 'audio/webm' }); })").unsafeCast<(dynamic, String) -> dynamic>().invoke(chunks, mimeType)
+                val roomId = chatRoomId(uid, appState.selectedChatContactId!!)
+                val startMs = appState.chatVoiceRecordStartMs
+                val durationSec = ((js("Date.now()").unsafeCast<Double>() - startMs) / 1000.0).toInt().coerceAtLeast(1)
+                sendVoiceMessage(roomId, uid, blob, durationSec)
+                    .then {
+                        subscribeMessages(roomId) { list -> updateState { chatMessages = list } }
+                        window.setTimeout({
+                            (document.getElementById("sd-chat-messages")?.lastElementChild?.unsafeCast<dynamic>())?.scrollIntoView(js("({ block: 'end', behavior: 'smooth' })"))
+                        }, 100)
+                    }
+                    .catch { e: dynamic ->
+                        updateState { networkError = "Не удалось отправить голосовое: ${(e?.message as? String) ?: "ошибка"}" }
+                    }
+            }
+        }
+        recorder.start(1000)
+        voiceRecorder = recorder
+        updateState { chatVoiceRecording = true; chatVoiceRecordStartMs = js("Date.now()").unsafeCast<Double>(); chatVoiceRecordElapsedSec = 0 }
+    }.catch { _: dynamic ->
+        updateState { networkError = "Нужен доступ к микрофону для голосовых сообщений." }
+    }
+}
+
+private fun stopVoiceRecordingAndSend(uid: String?) {
+    val rec = voiceRecorder
+    if (rec != null) {
+        try {
+            if (js("rec.state").unsafeCast<String>() == "recording") rec.stop()
+        } catch (_: Throwable) { }
+    }
+}
+
+private fun getOrCreateGlobalVoiceAudio(): dynamic {
+    var el = document.getElementById("sd-global-voice-audio")
+    if (el == null) {
+        el = document.createElement("audio")
+        el.id = "sd-global-voice-audio"
+        el.setAttribute("class", "sd-voice-audio")
+        el.setAttribute("preload", "metadata")
+        document.body?.appendChild(el)
+    }
+    return el.asDynamic()
+}
+
+private fun toggleVoicePlay(audioEl: dynamic, msgId: String, voiceUrl: String, durationSec: Int) {
+    val globalAudio = getOrCreateGlobalVoiceAudio()
+    val currentlyPlaying = appState.chatPlayingVoiceId
+    if (currentlyPlaying == msgId) {
+        globalAudio.pause()
+        if (voicePlayInterval != 0) { window.clearInterval(voicePlayInterval); voicePlayInterval = 0 }
+        appState.chatPlayingVoiceId = null
+        appState.chatPlayingVoiceCurrentMs = 0
+        patchVoicePlayerDOM()
+        return
+    }
+    if (currentlyPlaying != null) {
+        globalAudio.pause()
+        if (voicePlayInterval != 0) { window.clearInterval(voicePlayInterval); voicePlayInterval = 0 }
+    }
+    globalAudio.src = voiceUrl
+    globalAudio.currentTime = 0.0
+    val playPromise = globalAudio.play()
+    if (playPromise != null) {
+        js("(function(p){ if(p&&typeof p.catch==='function') p.catch(function(){}); })").unsafeCast<(dynamic) -> Unit>().invoke(playPromise)
+    }
+    appState.chatPlayingVoiceId = msgId
+    appState.chatPlayingVoiceCurrentMs = 0
+    patchVoicePlayerDOM()
+    globalAudio.onended = {
+        if (voicePlayInterval != 0) { window.clearInterval(voicePlayInterval); voicePlayInterval = 0 }
+        appState.chatPlayingVoiceId = null
+        appState.chatPlayingVoiceCurrentMs = durationSec * 1000
+        patchVoicePlayerDOM()
+    }
+    voicePlayInterval = window.setInterval({
+        val a = document.getElementById("sd-global-voice-audio")?.asDynamic()
+        if (a != null && a.paused == false) {
+            appState.chatPlayingVoiceCurrentMs = ((a.currentTime as Double) * 1000).toInt()
+            patchVoicePlayerDOM()
+        } else if (a != null && a.ended == true) {
+            window.clearInterval(voicePlayInterval)
+            voicePlayInterval = 0
+            appState.chatPlayingVoiceId = null
+            appState.chatPlayingVoiceCurrentMs = durationSec * 1000
+            patchVoicePlayerDOM()
+        }
+    }, 200).unsafeCast<Int>()
+}
+
+private fun seekToVoicePosition(msgId: String, voiceUrl: String, durationSec: Int, ratio: Double) {
+    val r = ratio.coerceIn(0.0, 1.0)
+    val globalAudio = getOrCreateGlobalVoiceAudio()
+    val currentMs = (r * durationSec * 1000).toInt()
+    if (appState.chatPlayingVoiceId == msgId) {
+        globalAudio.currentTime = r * durationSec
+        appState.chatPlayingVoiceCurrentMs = currentMs
+        patchVoicePlayerDOM()
+    } else {
+        globalAudio.src = voiceUrl
+        globalAudio.currentTime = r * durationSec
+        appState.chatPlayingVoiceId = msgId
+        appState.chatPlayingVoiceCurrentMs = currentMs
+        patchVoicePlayerDOM()
+    }
+}
+
+private fun attachVoiceProgressDrag(wrap: org.w3c.dom.Element, msgId: String, voiceUrl: String, durationSec: Int) {
+    window.asDynamic().__sdSeekVoice = { a: String, b: String, c: Int, d: Double -> seekToVoicePosition(a, b, c, d) }
+    val setupDrag = js("(function(wrap, msgId, voiceUrl, durationSec){ var getRatio=function(cx){ var r=wrap.getBoundingClientRect(); if(r.width<=0)return 0; var x=cx-r.left; return Math.max(0,Math.min(1,x/r.width)); }; var onDown=function(e){ e.preventDefault(); var cx=e.clientX!=null?e.clientX:e.touches[0].clientX; if(window.__sdSeekVoice) window.__sdSeekVoice(msgId,voiceUrl,durationSec,getRatio(cx)); var onMove=function(ev){ ev.preventDefault(); var x=ev.clientX!=null?ev.clientX:(ev.touches&&ev.touches[0]?ev.touches[0].clientX:0); if(window.__sdSeekVoice) window.__sdSeekVoice(msgId,voiceUrl,durationSec,getRatio(x)); }; var onUp=function(){ document.removeEventListener('mousemove',onMove); document.removeEventListener('mouseup',onUp); document.removeEventListener('touchmove',onMove); document.removeEventListener('touchend',onUp); }; document.addEventListener('mousemove',onMove); document.addEventListener('mouseup',onUp); document.addEventListener('touchmove',onMove); document.addEventListener('touchend',onUp); }; wrap.addEventListener('mousedown',onDown); wrap.addEventListener('touchstart',onDown,{passive:false}); })")
+    setupDrag.unsafeCast<(dynamic, dynamic, dynamic, dynamic) -> Unit>().invoke(wrap, msgId, voiceUrl, durationSec)
 }

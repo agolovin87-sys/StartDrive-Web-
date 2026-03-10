@@ -6,7 +6,7 @@ kotlin {
     js(IR) {
         browser {
             runTask {
-                devServerProperty.set(devServerProperty.get().copy(port = 8080, open = true))
+                devServerProperty.set(devServerProperty.get().copy(port = 8081, open = true))
             }
         }
         binaries.executable()

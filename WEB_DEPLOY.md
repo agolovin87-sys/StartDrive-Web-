@@ -11,13 +11,10 @@
 Артефакты появятся в:
 
 ```
-webApp/build/dist/js/productionExecutable/
+webApp/build/kotlin-webpack/js/productionExecutable/
 ```
 
-В этой папке будут:
-- **index.html** — главная страница
-- **webApp.js** — минифицированный бандл
-- **style.css** — стили (если подключаются из `jsMain/resources`)
+В этой папке будут: **index.html**, **webApp.js**, **style.css**, **firebase-config.js**, изображения из `jsMain/resources`.
 
 ## Деплой на Firebase Hosting
 
@@ -26,7 +23,7 @@ webApp/build/dist/js/productionExecutable/
 
 ```json
 "hosting": {
-  "public": "webApp/build/dist/js/productionExecutable",
+  "public": "webApp/build/kotlin-webpack/js/productionExecutable",
   "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
 }
 ```
@@ -42,7 +39,7 @@ firebase deploy --only hosting
 
 ## Деплой на другой хостинг
 
-Скопируй целиком содержимое папки `webApp/build/dist/js/productionExecutable/` на любой статический хостинг (GitHub Pages, Netlify, Vercel, свой сервер). Корень сайта должен отдавать **index.html**, а в нём подключены **webApp.js** и **style.css**.
+Скопируй целиком содержимое папки `webApp/build/kotlin-webpack/js/productionExecutable/` на любой статический хостинг (GitHub Pages, Netlify, Vercel, свой сервер). Корень сайта должен отдавать **index.html**, а в нём подключены **webApp.js** и **style.css**.
 
 ## Разработка (dev-сервер)
 
@@ -56,4 +53,4 @@ firebase deploy --only hosting
 .\gradlew.bat :webApp:jsBrowserDevelopmentRun --continuous
 ```
 
-Откроется http://localhost:8080/.
+Откроется http://localhost:8081/.

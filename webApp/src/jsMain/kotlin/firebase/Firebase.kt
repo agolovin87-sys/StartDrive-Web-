@@ -29,6 +29,7 @@ fun getFirebaseConfig(): dynamic {
 }
 
 private var databaseInstance: dynamic = null
+private var storageInstance: dynamic = null
 
 fun initFirebase() {
     if (authInstance != null) return
@@ -36,12 +37,14 @@ fun initFirebase() {
     js("require('firebase/compat/auth')")
     js("require('firebase/compat/firestore')")
     js("require('firebase/compat/database')")
+    js("require('firebase/compat/storage')")
     firebaseCompat = firebase
     val config = getFirebaseConfig()
     val app = firebase.initializeApp(config)
     authInstance = firebase.auth(app)
     firestoreInstance = firebase.firestore(app)
     databaseInstance = firebase.database(app)
+    storageInstance = firebase.storage(app)
 }
 
 /** Текущее время как Firestore Timestamp (через firebase.firestore.Timestamp). */
@@ -61,6 +64,7 @@ fun getFirestoreTimestampFromMillis(ms: Long): dynamic {
 fun getAuth(): dynamic = authInstance
 fun getFirestore(): dynamic = firestoreInstance
 fun getDatabase(): dynamic = databaseInstance
+fun getStorage(): dynamic = storageInstance
 
 /** Плейсхолдер времени сервера для Realtime Database (подставить в timestamp при записи). */
 fun getDatabaseServerTimestamp(): dynamic =

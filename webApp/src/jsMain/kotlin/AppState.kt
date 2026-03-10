@@ -47,6 +47,11 @@ data class AppState(
     var adminInstructorCadetsModalId: String? = null,
     var cadetInstructor: User? = null,
     var instructorCadets: List<User> = emptyList(),
+    var chatVoiceRecording: Boolean = false,
+    var chatVoiceRecordStartMs: Double = 0.0,
+    var chatVoiceRecordElapsedSec: Int = 0,
+    var chatPlayingVoiceId: String? = null,
+    var chatPlayingVoiceCurrentMs: Int = 0,
 )
 
 var appState = AppState()

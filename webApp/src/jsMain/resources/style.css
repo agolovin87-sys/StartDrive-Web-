@@ -520,11 +520,7 @@ body {
     display: flex;
     flex-direction: column;
     position: relative;
-    transition: box-shadow 0.2s;
     border: 1px solid rgba(255,255,255,0.08);
-}
-.sd-ucard:hover {
-    box-shadow: 0 12px 36px rgba(0,0,0,0.5);
 }
 
 /* Инструктор — глубокий синий */

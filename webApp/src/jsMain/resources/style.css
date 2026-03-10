@@ -2336,6 +2336,150 @@ body {
         min-width: 32px;
         min-height: 32px;
     }
+
+    /* ── Карточки пользователей (sd-ucard) ── */
+    .sd-ucard {
+        border-radius: 14px;
+    }
+    .sd-ucard-top {
+        padding: 12px 12px 8px;
+        gap: 10px;
+    }
+    .sd-ucard-avatar {
+        width: 42px;
+        height: 42px;
+        font-size: 0.92rem;
+    }
+    .sd-ucard-name {
+        font-size: 0.85rem;
+    }
+    .sd-ucard-badge {
+        font-size: 0.6rem;
+        padding: 2px 8px;
+    }
+    .sd-ucard-icon-btn {
+        width: 32px;
+        height: 32px;
+    }
+    .sd-ucard-rows {
+        padding: 0 12px 8px;
+        gap: 5px;
+    }
+    .sd-ucard-row {
+        font-size: 0.8rem;
+        padding: 5px 8px;
+    }
+    .sd-ucard-tag-btn {
+        font-size: 0.72rem;
+        padding: 4px 8px;
+    }
+    .sd-ucard-footer {
+        padding: 8px 10px;
+        gap: 6px;
+    }
+    .sd-ucard-foot-btn {
+        flex: 1;
+        min-height: 36px;
+        font-size: 0.78rem;
+    }
+
+    /* ── Карточки баланса (sd-bcard) ── */
+    .sd-bcard {
+        padding: 10px 12px;
+        gap: 10px;
+        border-radius: 12px;
+    }
+    .sd-bcard-name {
+        font-size: 0.82rem;
+    }
+    .sd-bcard-balance {
+        font-size: 0.74rem;
+    }
+
+    /* ── Выбранный блок баланса (sd-balance-sel) ── */
+    .sd-balance-sel {
+        border-radius: 14px;
+        padding: 0;
+    }
+    .sd-balance-sel-top {
+        padding: 14px 14px 10px;
+        gap: 10px;
+    }
+    .sd-balance-sel-name {
+        font-size: 0.9rem;
+    }
+    .sd-balance-sel-role {
+        font-size: 0.7rem;
+    }
+    .sd-balance-sel-count {
+        font-size: 2rem;
+    }
+    .sd-balance-sel-count-label {
+        font-size: 0.72rem;
+    }
+    .sd-balance-sel-input-row {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 10px 14px;
+        gap: 8px;
+    }
+    .sd-balance-sel-input {
+        width: 100%;
+    }
+    .sd-balance-sel .sd-balance-selected-actions {
+        padding: 0 14px 14px;
+    }
+
+    /* ── Блоки/разделы ── */
+    .sd-block,
+    .sd-details-block {
+        margin: 10px 0;
+        border-radius: 8px;
+    }
+    .sd-block-title {
+        font-size: 0.88rem;
+        padding: 9px 12px;
+    }
+    .sd-block .sd-list,
+    .sd-block > p,
+    .sd-block > div:not(.sd-block-title) {
+        padding: 8px 12px;
+    }
+
+    /* ── Главная (sd-home-card) ── */
+    .sd-home-card {
+        font-size: 0.88rem;
+        padding: 10px 12px;
+    }
+
+    /* ── История ── */
+    .sd-history-day-header {
+        font-size: 0.75rem;
+        padding: 4px 10px;
+    }
+    .sd-history-row {
+        padding: 7px 10px;
+        font-size: 0.82rem;
+    }
+
+    /* ── Прочее ── */
+    .sd-muted {
+        font-size: 0.83rem;
+    }
+    .sd-card h2 {
+        font-size: 1.05rem;
+        margin-bottom: 10px;
+    }
+    .sd-card p {
+        font-size: 0.88rem;
+    }
+    .sd-footer {
+        padding: 16px;
+        font-size: 0.78rem;
+    }
+    .sd-recording-section h3 {
+        font-size: 0.92rem;
+    }
 }
 
 /* ═══════════════════════════════════════════
@@ -2864,26 +3008,108 @@ body {
 
 @media (max-width: 400px) {
     .sd-header h1 {
-        font-size: 1rem;
+        font-size: 0.97rem;
     }
     .sd-header p {
-        font-size: 0.75rem;
+        font-size: 0.72rem;
     }
     .sd-tab {
-        font-size: 0.6rem;
+        font-size: 0.58rem;
         padding: 6px 1px 5px;
     }
     .sd-tab-icon svg { width: 18px; height: 18px; }
     .sd-content {
-        padding: 10px 12px;
+        padding: 8px 10px;
         padding-bottom: calc(68px + max(0px, env(safe-area-inset-bottom)));
     }
+    .sd-card {
+        padding: 12px;
+        border-radius: 10px;
+    }
+    .sd-card h2 {
+        font-size: 0.97rem;
+    }
+    .sd-card p {
+        font-size: 0.83rem;
+    }
+    .sd-block-title {
+        font-size: 0.83rem;
+        padding: 8px 10px;
+    }
+    .sd-home-card {
+        font-size: 0.83rem;
+        padding: 8px 10px;
+    }
+    .sd-ucard-top {
+        padding: 10px 10px 6px;
+        gap: 8px;
+    }
+    .sd-ucard-avatar {
+        width: 38px;
+        height: 38px;
+        font-size: 0.82rem;
+    }
+    .sd-ucard-name {
+        font-size: 0.8rem;
+    }
+    .sd-ucard-rows {
+        padding: 0 10px 6px;
+    }
+    .sd-ucard-row {
+        font-size: 0.75rem;
+        padding: 4px 6px;
+    }
+    .sd-ucard-footer {
+        padding: 6px 8px;
+    }
+    .sd-ucard-foot-btn {
+        min-height: 34px;
+        font-size: 0.73rem;
+    }
+    .sd-bcard {
+        padding: 8px 10px;
+        gap: 8px;
+    }
+    .sd-bcard-name {
+        font-size: 0.78rem;
+    }
+    .sd-balance-sel-count {
+        font-size: 1.75rem;
+    }
+    .sd-btn {
+        padding: 10px 14px;
+        font-size: 0.88rem;
+    }
+    .sd-balance-btn {
+        padding: 8px 10px;
+        font-size: 0.8rem;
+    }
     .sd-chat-tab {
-        margin-left: -10px;
-        margin-right: -10px;
-        padding: 10px;
+        margin-left: -8px;
+        margin-right: -8px;
     }
     .sd-msg {
         max-width: 95%;
+    }
+    .sd-msg-text {
+        font-size: 0.85rem;
+    }
+    .sd-chat-input {
+        font-size: 15px;
+    }
+    .sd-history-row {
+        font-size: 0.78rem;
+        padding: 6px 8px;
+    }
+    .sd-history-day-header {
+        font-size: 0.7rem;
+    }
+    .sd-btn-signout {
+        width: 34px;
+        height: 34px;
+    }
+    .sd-btn-signout svg {
+        width: 17px;
+        height: 17px;
     }
 }

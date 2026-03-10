@@ -133,18 +133,12 @@ private fun renderLogin(error: String?, loading: Boolean): String {
                 <div class="sd-auth-panel-deco2"></div>
                 <div class="sd-auth-panel-deco3"></div>
                 <div class="sd-auth-panel-inner">
-                    <div class="sd-auth-panel-logo">
-                        <svg viewBox="0 0 48 48" fill="none">
-                            <rect width="48" height="48" rx="14" fill="rgba(255,255,255,0.15)"/>
-                            <path d="M8 30l4-10h24l4 10" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
-                            <rect x="6" y="29" width="36" height="10" rx="3" fill="white" fill-opacity="0.2" stroke="white" stroke-width="2"/>
-                            <circle cx="14" cy="34" r="3" fill="white"/>
-                            <circle cx="34" cy="34" r="3" fill="white"/>
-                            <path d="M18 22l2-5h8l2 5" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                        <span>StartDrive</span>
+                    <div class="sd-auth-panel-logo-wrap">
+                        <div class="sd-auth-logo-gloss">
+                            <img src="startdrive-logo.png" alt="StartDrive" class="sd-auth-logo-img" />
+                            <div class="sd-auth-logo-gloss-layer"></div>
+                        </div>
                     </div>
-                    <h2 class="sd-auth-panel-title">Онлайн-кабинет<br>автошколы</h2>
                     <p class="sd-auth-panel-desc">Управляйте расписанием, общайтесь с инструктором и следите за своим прогрессом.</p>
                     <ul class="sd-auth-features">
                         <li><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>Запись на занятия онлайн</li>
@@ -172,10 +166,12 @@ private fun renderLogin(error: String?, loading: Boolean): String {
                             <input type="password" id="sd-password" class="sd-auth-input" placeholder="••••••••" autocomplete="current-password" />
                         </div>
                     </div>
-                    <label class="sd-auth-checkbox">
-                        <input type="checkbox" id="sd-stay" checked />
-                        <span class="sd-auth-checkbox-box"></span>
+                    <label class="sd-auth-toggle-row">
                         <span>Оставаться в системе</span>
+                        <span class="sd-auth-toggle">
+                            <input type="checkbox" id="sd-stay" checked />
+                            <span class="sd-auth-toggle-track"><span class="sd-auth-toggle-thumb"></span></span>
+                        </span>
                     </label>
                     <button type="button" id="sd-btn-signin" class="sd-auth-btn sd-auth-btn-primary" ${if (loading) "disabled" else ""}>$btn</button>
                     <p class="sd-auth-switch">Нет аккаунта? <button type="button" id="sd-btn-register" class="sd-auth-link">Зарегистрироваться</button></p>
@@ -195,18 +191,12 @@ private fun renderRegister(error: String?, loading: Boolean): String {
                 <div class="sd-auth-panel-deco2"></div>
                 <div class="sd-auth-panel-deco3"></div>
                 <div class="sd-auth-panel-inner">
-                    <div class="sd-auth-panel-logo">
-                        <svg viewBox="0 0 48 48" fill="none">
-                            <rect width="48" height="48" rx="14" fill="rgba(255,255,255,0.15)"/>
-                            <path d="M8 30l4-10h24l4 10" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
-                            <rect x="6" y="29" width="36" height="10" rx="3" fill="white" fill-opacity="0.2" stroke="white" stroke-width="2"/>
-                            <circle cx="14" cy="34" r="3" fill="white"/>
-                            <circle cx="34" cy="34" r="3" fill="white"/>
-                            <path d="M18 22l2-5h8l2 5" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                        <span>StartDrive</span>
+                    <div class="sd-auth-panel-logo-wrap">
+                        <div class="sd-auth-logo-gloss">
+                            <img src="startdrive-logo.png" alt="StartDrive" class="sd-auth-logo-img" />
+                            <div class="sd-auth-logo-gloss-layer"></div>
+                        </div>
                     </div>
-                    <h2 class="sd-auth-panel-title">Создайте<br>свой аккаунт</h2>
                     <p class="sd-auth-panel-desc">Всего несколько шагов — и личный кабинет уже готов к работе.</p>
                     <ul class="sd-auth-features">
                         <li><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>Быстрая регистрация</li>

@@ -1064,6 +1064,59 @@ body {
     height: 44px;
     flex-shrink: 0;
 }
+
+/* Лого с эффектом объёмного глянца */
+.sd-auth-panel-logo-wrap {
+    margin-bottom: 44px;
+}
+.sd-auth-logo-gloss {
+    position: relative;
+    display: inline-block;
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow:
+        0 8px 32px rgba(0,0,0,0.45),
+        0 2px 8px rgba(0,0,0,0.3),
+        0 0 0 1px rgba(255,255,255,0.12) inset;
+    background: rgba(255,255,255,0.08);
+    backdrop-filter: blur(4px);
+}
+.sd-auth-logo-img {
+    display: block;
+    width: 220px;
+    height: auto;
+    border-radius: 18px;
+    filter: drop-shadow(0 4px 12px rgba(0,0,0,0.5));
+}
+.sd-auth-logo-gloss-layer {
+    position: absolute;
+    inset: 0;
+    border-radius: 18px;
+    background: linear-gradient(
+        145deg,
+        rgba(255,255,255,0.32) 0%,
+        rgba(255,255,255,0.10) 35%,
+        rgba(255,255,255,0.0) 55%,
+        rgba(0,0,0,0.08) 100%
+    );
+    pointer-events: none;
+}
+.sd-auth-logo-gloss-layer::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 45%;
+    border-radius: 18px 18px 60% 60%;
+    background: linear-gradient(
+        180deg,
+        rgba(255,255,255,0.18) 0%,
+        transparent 100%
+    );
+    pointer-events: none;
+}
+
 .sd-auth-panel-title {
     margin: 0 0 16px;
     font-size: 2.1rem;
@@ -1267,6 +1320,57 @@ body {
     transform: rotate(-45deg) translateY(-1px);
 }
 
+/* Ползунок «Оставаться в системе» */
+.sd-auth-toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 2px 0 22px;
+    cursor: pointer;
+    font-size: 0.88rem;
+    color: #6b7280;
+    user-select: none;
+    gap: 10px;
+}
+.sd-auth-toggle {
+    position: relative;
+    flex-shrink: 0;
+}
+.sd-auth-toggle input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+.sd-auth-toggle-track {
+    display: block;
+    width: 42px;
+    height: 24px;
+    border-radius: 999px;
+    background: #d1d5db;
+    position: relative;
+    transition: background 0.22s cubic-bezier(0.4,0,0.2,1);
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.12);
+}
+.sd-auth-toggle input[type="checkbox"]:checked + .sd-auth-toggle-track {
+    background: #1976D2;
+}
+.sd-auth-toggle-thumb {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.22), 0 0 0 0.5px rgba(0,0,0,0.06);
+    transition: transform 0.22s cubic-bezier(0.4,0,0.2,1), box-shadow 0.15s;
+}
+.sd-auth-toggle input[type="checkbox"]:checked + .sd-auth-toggle-track .sd-auth-toggle-thumb {
+    transform: translateX(18px);
+    box-shadow: 0 2px 6px rgba(25,118,210,0.35), 0 0 0 0.5px rgba(0,0,0,0.06);
+}
+
 .sd-auth-btn {
     display: flex;
     align-items: center;
@@ -1348,6 +1452,8 @@ body {
     .sd-auth-panel-desc, .sd-auth-features { display: none; }
     .sd-auth-panel-logo { margin-bottom: 8px; font-size: 1.2rem; }
     .sd-auth-panel-logo svg { width: 34px; height: 34px; }
+    .sd-auth-panel-logo-wrap { margin-bottom: 16px; }
+    .sd-auth-logo-img { width: 160px; }
     .sd-auth-panel-deco1, .sd-auth-panel-deco2, .sd-auth-panel-deco3 { display: none; }
     .sd-auth-form-side { padding: 28px 20px 40px; }
     .sd-auth-form-wrap { max-width: none; }

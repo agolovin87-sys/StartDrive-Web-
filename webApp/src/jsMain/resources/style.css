@@ -374,15 +374,15 @@ body {
     padding: 10px 14px 14px;
 }
 
-/* ── Карточка курсанта (тёмный изумрудный стиль) ── */
+/* ── Карточка курсанта (изумрудный стиль) ── */
 .sd-cadet-card {
-    background: linear-gradient(145deg, #072d26 0%, #0b4b3e 50%, #0e6655 100%);
+    background: linear-gradient(145deg, #0f5c4a 0%, #1a8266 50%, #22a87e 100%);
     border-radius: 16px;
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    border: 1px solid rgba(255,255,255,0.08);
-    box-shadow: 0 6px 24px rgba(5,35,30,0.28), 0 2px 8px rgba(5,35,30,0.18);
+    border: 1px solid rgba(255,255,255,0.15);
+    box-shadow: 0 6px 24px rgba(5,70,50,0.30), 0 2px 8px rgba(5,70,50,0.18);
 }
 
 /* Цветная полоска сверху */

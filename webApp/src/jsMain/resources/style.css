@@ -1982,54 +1982,50 @@ body {
     .sd-chat-tab {
         margin-left: -12px;
         margin-right: -12px;
-        padding: 12px;
+        border-radius: 0;
         min-height: 240px;
     }
-    /* Окно чата по размеру экрана на мобильных */
     .sd-chat-tab:has(.sd-chat-conversation) {
         height: 75dvh;
         min-height: 400px;
         max-height: 85dvh;
         display: flex;
         flex-direction: column;
-        padding-bottom: max(12px, env(safe-area-inset-bottom));
     }
-    .sd-chat-tab .sd-chat-conversation {
+    .sd-chat-conversation {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
-        padding: 6px;
     }
-    .sd-chat-tab .sd-chat-messages {
+    .sd-chat-messages {
         flex: 1 1 0;
         min-height: 0;
         max-height: none;
         -webkit-overflow-scrolling: touch;
     }
     .sd-msg {
-        max-width: 92%;
-        padding: 8px 10px;
+        max-width: 88%;
     }
     .sd-msg-text {
         font-size: 0.9rem;
     }
-    .sd-chat-tab .sd-chat-contact {
-        min-height: 44px;
-        padding: 12px 14px;
+    .sd-chat-contact {
+        min-height: 56px;
+        padding: 10px 14px;
     }
     .sd-chat-contact-avatar {
-        width: 36px;
-        height: 36px;
-        font-size: 0.8rem;
+        width: 38px;
+        height: 38px;
+        font-size: 0.82rem;
     }
-    .sd-chat-input-row .sd-input {
-        font-size: 16px; /* без зума при фокусе на iOS */
-        min-height: 44px;
+    .sd-chat-input {
+        font-size: 16px;
+        min-height: 40px;
     }
-    .sd-chat-input-row .sd-btn {
-        min-height: 44px;
-        padding: 10px 16px;
+    .sd-chat-send-btn {
+        width: 44px;
+        height: 44px;
     }
     .sd-btn {
         padding: 12px 18px;
@@ -2066,224 +2062,329 @@ body {
     }
 }
 
-/* Чат — фон вкладки (список контактов) без картинки */
+/* ═══════════════════════════════════════════
+   CHAT TAB — полный редизайн
+   ═══════════════════════════════════════════ */
+
 .sd-chat-tab {
-    background: linear-gradient(160deg, rgba(255,255,255,0.65) 0%, rgba(255,255,255,0.28) 40%, transparent 70%), linear-gradient(to bottom, transparent 50%, rgba(0,0,0,0.03) 100%), #64B5F6;
-    border: 1px solid #42A5F5;
-    border-radius: 8px;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.45);
-    color: #fff;
-    margin: -1rem;
-    padding: 1rem;
-    min-height: 280px;
-}
-
-.sd-chat-tab .sd-chat-title {
-    color: #fff;
-    margin: 0 0 0.5rem 0;
-}
-
-.sd-chat-tab .sd-loading-text,
-.sd-chat-tab .sd-chat-empty-hint {
-    color: rgba(255, 255, 255, 0.8);
-}
-
-/* Окно с сообщениями — фон картинкой как в приложении Android */
-.sd-chat-tab .sd-chat-conversation {
-    display: flex;
-    flex-direction: column;
-    min-height: 320px;
-    background: #243D3D url("chat_background.png") center/cover no-repeat;
-    border-radius: 8px;
-    padding: 8px;
-}
-.sd-chat-tab .sd-chat-messages {
-    background: transparent;
-}
-
-.sd-chat-header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 12px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.25);
-}
-
-.sd-chat-back-btn {
-    padding: 8px 12px;
-    font-size: 1.25rem;
-    line-height: 1;
-    min-width: 40px;
-}
-
-.sd-chat-contact-name {
-    font-weight: 600;
-    color: #000;
-    background: #fff;
-    padding: 6px 14px;
-    border-radius: 999px;
-    display: inline-block;
-}
-
-.sd-chat-messages {
-    flex: 1;
-    overflow-y: auto;
-    max-height: 360px;
-    min-height: 200px;
-    padding: 8px 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.sd-msg {
-    display: flex;
-    flex-direction: column;
-    max-width: 85%;
-    padding: 8px 12px;
+    background: linear-gradient(160deg, #0d1f3e 0%, #112244 60%, #0a1628 100%);
     border-radius: 12px;
-    color: #000;
+    margin: -1rem;
+    padding: 0;
+    min-height: 300px;
+    overflow: hidden;
+    color: #fff;
 }
 
-.sd-msg-me {
-    align-self: flex-end;
-    background: #dcf8c6;
-}
-
-.sd-msg-them {
-    align-self: flex-start;
-    background: #fff;
-    border: 1px solid rgba(0, 0, 0, 0.08);
-}
-
-.sd-msg-name {
-    font-size: 0.75rem;
-    color: #000;
-    margin-bottom: 2px;
-}
-
-.sd-msg-text {
-    font-size: 0.95rem;
-    white-space: pre-wrap;
-    word-break: break-word;
-    color: #000;
-}
-
-.sd-msg-footer {
+/* ── Шапка списка контактов ── */
+.sd-chat-list-header {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
-    gap: 6px;
-    margin-top: 4px;
+    justify-content: space-between;
+    padding: 16px 16px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
 }
 
-.sd-msg-time {
-    font-size: 0.7rem;
-    color: rgba(0, 0, 0, 0.55);
-    margin-right: auto;
+.sd-chat-title {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: 0.01em;
 }
 
-.sd-msg-checks {
+.sd-chat-refresh-btn {
     display: inline-flex;
     align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 20px;
+    color: rgba(255,255,255,0.75);
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+    touch-action: manipulation;
+}
+.sd-chat-refresh-btn:hover {
+    background: rgba(255,255,255,0.15);
+    color: #fff;
 }
 
-.sd-msg-checks-sent .sd-msg-check {
-    color: #8e8e93;
+.sd-chat-loading-text {
+    padding: 8px 16px;
+    color: rgba(255,255,255,0.55);
+    font-size: 0.85rem;
+    margin: 0;
 }
 
-.sd-msg-checks-read .sd-msg-check {
-    color: #34c759;
+.sd-chat-empty-hint {
+    padding: 24px 16px;
+    color: rgba(255,255,255,0.5);
+    font-size: 0.9rem;
+    text-align: center;
+    margin: 0;
 }
 
-.sd-chat-input-row {
-    display: flex;
-    gap: 8px;
-    margin-top: 8px;
-}
-
-.sd-chat-input-row .sd-input {
-    flex: 1;
-    margin-bottom: 0;
-}
-
+/* ── Группа контактов ── */
 .sd-chat-contacts-group {
-    margin-bottom: 1rem;
+    padding: 10px 0 0;
 }
 .sd-chat-contacts-group:last-child {
-    margin-bottom: 0;
+    padding-bottom: 12px;
 }
 .sd-chat-contacts-group-title {
-    margin: 0 0 6px 0;
-    font-size: 0.9rem;
+    margin: 0 0 4px;
+    padding: 0 16px;
+    font-size: 0.72rem;
     font-weight: 600;
-    color: rgba(255, 255, 255, 0.9);
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.38);
 }
-.sd-chat-tab .sd-chat-contacts-group-title {
-    color: #000;
-}
-.sd-chat-tab .sd-chat-contacts {
+.sd-chat-contacts {
     display: flex;
     flex-direction: column;
-    gap: 6px;
 }
 
-.sd-chat-tab .sd-chat-contact {
+/* ── Карточка контакта ── */
+.sd-chat-contact {
     display: flex;
     align-items: center;
     gap: 12px;
     width: 100%;
     text-align: left;
-    padding: 10px 14px;
-    border: 1px solid rgba(255, 255, 255, 0.5);
-    background: rgba(255, 255, 255, 0.4);
-    border-radius: 8px;
+    padding: 10px 16px;
+    border: none;
+    background: transparent;
     cursor: pointer;
-    font-size: 0.95rem;
-    color: #000;
+    font-family: inherit;
+    touch-action: manipulation;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.sd-chat-contact:last-child { border-bottom: none; }
+.sd-chat-contact:hover {
+    background: rgba(255,255,255,0.06);
 }
 
-.sd-chat-contact-avatar {
+.sd-chat-contact-avatar-wrap {
+    position: relative;
     flex-shrink: 0;
-    width: 40px;
-    height: 40px;
+}
+.sd-chat-contact-avatar {
+    width: 44px;
+    height: 44px;
     border-radius: 50%;
-    background: linear-gradient(135deg, var(--sd-primary-light) 0%, var(--sd-primary) 100%);
     color: #fff;
-    font-size: 0.85rem;
-    font-weight: 600;
+    font-size: 0.9rem;
+    font-weight: 700;
     display: flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
 }
+.sd-chat-contact-dot {
+    position: absolute;
+    bottom: 1px;
+    right: 1px;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    border: 2px solid #0d1f3e;
+}
+.sd-chat-contact-dot-online  { background: #4ade80; }
+.sd-chat-contact-dot-offline { background: rgba(255,255,255,0.25); }
 
 .sd-chat-contact-info {
     flex: 1;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
 }
-
+.sd-chat-contact-name-row {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
+}
+.sd-chat-contact-meta {
+    font-size: 0.78rem;
+    color: rgba(255,255,255,0.45);
+    display: block;
+}
+.sd-chat-contact-role {
+    color: rgba(255,255,255,0.45);
+}
 .sd-chat-contact-status {
-    font-size: 0.85em;
+    font-size: 1em;
 }
-.sd-chat-contact-status-online {
-    color: var(--sd-online);
-}
-.sd-chat-contact-status-offline {
-    color: var(--sd-text-secondary);
+.sd-chat-contact-status-online  { color: #4ade80; }
+.sd-chat-contact-status-offline { color: rgba(255,255,255,0.35); }
+
+/* ══════════════════════════════════════════
+   ОКНО ПЕРЕПИСКИ
+   ══════════════════════════════════════════ */
+
+.sd-chat-conversation {
+    display: flex;
+    flex-direction: column;
+    min-height: 420px;
+    background: #1a2e1f url("chat_background.png") center/cover no-repeat;
 }
 
-.sd-chat-tab .sd-chat-contact:hover {
-    background: rgba(255, 255, 255, 0.52);
-    border-color: var(--sd-primary-light);
+.sd-chat-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: rgba(13,31,62,0.92);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
 }
 
-.sd-chat-tab .sd-chat-contact-status-offline {
-    color: #666;
+.sd-chat-back-btn {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-family: inherit;
+    touch-action: manipulation;
 }
-.sd-chat-tab .sd-chat-contact-status-online {
-    color: #4CAF50;
+.sd-chat-back-btn:hover { background: rgba(255,255,255,0.18); }
+
+.sd-chat-header-avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    color: #fff;
+    font-size: 0.8rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
 }
+
+.sd-chat-contact-name {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #fff;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ── Лента сообщений ── */
+.sd-chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    max-height: 380px;
+    min-height: 220px;
+    padding: 12px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: transparent;
+}
+
+.sd-msg {
+    display: flex;
+    flex-direction: column;
+    max-width: 82%;
+    padding: 7px 11px 5px;
+    border-radius: 14px;
+    color: #111;
+}
+.sd-msg-me {
+    align-self: flex-end;
+    background: #d9fdd3;
+    border-radius: 14px 14px 4px 14px;
+}
+.sd-msg-them {
+    align-self: flex-start;
+    background: #fff;
+    border-radius: 14px 14px 14px 4px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+.sd-msg-text {
+    font-size: 0.93rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #111;
+    line-height: 1.45;
+}
+.sd-msg-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    margin-top: 3px;
+}
+.sd-msg-time {
+    font-size: 0.68rem;
+    color: rgba(0,0,0,0.45);
+    margin-right: auto;
+}
+.sd-msg-checks { display: inline-flex; align-items: center; }
+.sd-msg-checks-sent .sd-msg-check  { color: #8e8e93; }
+.sd-msg-checks-read .sd-msg-check  { color: #34c759; }
+
+/* ── Поле ввода ── */
+.sd-chat-input-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    background: rgba(13,31,62,0.88);
+    backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(255,255,255,0.08);
+}
+.sd-chat-input {
+    flex: 1;
+    padding: 9px 14px;
+    border-radius: 22px;
+    border: 1px solid rgba(255,255,255,0.15);
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+    font-size: 0.93rem;
+    font-family: inherit;
+    outline: none;
+}
+.sd-chat-input::placeholder { color: rgba(255,255,255,0.4); }
+.sd-chat-input:focus {
+    border-color: rgba(255,255,255,0.35);
+    background: rgba(255,255,255,0.14);
+}
+.sd-chat-send-btn {
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: none;
+    background: #2563eb;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-family: inherit;
+    touch-action: manipulation;
+}
+.sd-chat-send-btn:hover { background: #1d4ed8; }
 
 .sd-loading-text {
     color: var(--sd-text-secondary);

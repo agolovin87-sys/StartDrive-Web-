@@ -298,6 +298,10 @@ private fun renderChatTabContent(currentUser: User): String {
     if (contactId != null) {
         val contact = contacts.find { it.id == contactId } ?: return """<p class="sd-error">Контакт не найден.</p>"""
         val iconCheck = """<svg class="sd-msg-check" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>"""
+        val iconSendSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>"""
+        val iconBackSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>"""
+        val contactInitials = contact.initials().ifEmpty { "?" }.escapeHtml()
+        val contactAvatarBg = avatarColorForId(contact.id).escapeHtml()
         val msgsHtml = messages.joinToString("") { msg ->
             val isMe = msg.senderId == myId
             val cls = if (isMe) "sd-msg sd-msg-me" else "sd-msg sd-msg-them"
@@ -315,35 +319,49 @@ private fun renderChatTabContent(currentUser: User): String {
             <div class="sd-chat-tab">
             <div class="sd-chat-conversation">
                 <div class="sd-chat-header">
-                    <button type="button" id="sd-chat-back" class="sd-btn sd-btn-secondary sd-chat-back-btn" title="Назад" aria-label="Назад">←</button>
-                    <span class="sd-chat-contact-name">${contact.fullName.escapeHtml()}</span>
+                    <button type="button" id="sd-chat-back" class="sd-chat-back-btn" title="Назад" aria-label="Назад">$iconBackSvg</button>
+                    <div class="sd-chat-header-avatar" style="background:$contactAvatarBg">$contactInitials</div>
+                    <span class="sd-chat-contact-name">${formatShortName(contact.fullName).escapeHtml()}</span>
                 </div>
                 <div class="sd-chat-messages" id="sd-chat-messages">$msgsHtml</div>
                 <div class="sd-chat-input-row">
-                    <input type="text" id="sd-chat-input" class="sd-input" placeholder="Сообщение..." maxlength="2000" />
-                    <button type="button" id="sd-chat-send" class="sd-btn sd-btn-primary">Отправить</button>
+                    <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="Сообщение..." maxlength="2000" />
+                    <button type="button" id="sd-chat-send" class="sd-chat-send-btn" title="Отправить">$iconSendSvg</button>
                 </div>
             </div>
             </div>
         """.trimIndent()
     }
-    val loadingLine = if (loading) """<p class="sd-loading-text">Загрузка контактов… <button type="button" id="sd-chat-stop-loading" class="sd-btn sd-btn-small sd-btn-secondary">Показать пусто</button></p>""" else ""
-    val refreshBtn = """<button type="button" id="sd-chat-refresh" class="sd-btn sd-btn-small sd-btn-secondary">Обновить список контактов</button>"""
+    val loadingLine = if (loading) """<p class="sd-chat-loading-text">Загрузка контактов…</p>""" else ""
+    val iconRefreshSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>"""
     fun contactRow(c: User) = run {
         val initials = c.initials().ifEmpty { "?" }.escapeHtml()
         val avatarBg = avatarColorForId(c.id).escapeHtml()
-        val statusClass = if (appState.chatContactOnlineIds.contains(c.id)) "sd-chat-contact-status sd-chat-contact-status-online" else "sd-chat-contact-status sd-chat-contact-status-offline"
-        val statusText = if (appState.chatContactOnlineIds.contains(c.id)) " (в сети)" else " (не в сети)"
-        """<button type="button" class="sd-chat-contact" data-contact-id="${c.id.escapeHtml()}"><span class="sd-chat-contact-avatar" style="background:$avatarBg">$initials</span><span class="sd-chat-contact-info">${c.fullName.escapeHtml()} · ${c.role}<span class="$statusClass">$statusText</span></span></button>"""
+        val isOnline = appState.chatContactOnlineIds.contains(c.id)
+        val onlineDot = if (isOnline) """<span class="sd-chat-contact-dot sd-chat-contact-dot-online"></span>""" else """<span class="sd-chat-contact-dot sd-chat-contact-dot-offline"></span>"""
+        val roleLabel = when (c.role) { "instructor" -> "Инструктор" "cadet" -> "Курсант" "admin" -> "Администратор" else -> c.role }.escapeHtml()
+        val statusText = if (isOnline) "в сети" else "не в сети"
+        val statusCls = if (isOnline) "sd-chat-contact-status-online" else "sd-chat-contact-status-offline"
+        """<button type="button" class="sd-chat-contact" data-contact-id="${c.id.escapeHtml()}">
+            <div class="sd-chat-contact-avatar-wrap">
+                <span class="sd-chat-contact-avatar" style="background:$avatarBg">$initials</span>
+                $onlineDot
+            </div>
+            <span class="sd-chat-contact-info">
+                <span class="sd-chat-contact-name-row">${formatShortName(c.fullName).escapeHtml()}</span>
+                <span class="sd-chat-contact-meta"><span class="sd-chat-contact-role">$roleLabel</span> · <span class="sd-chat-contact-status $statusCls">$statusText</span></span>
+            </span>
+        </button>"""
     }
     val instructors = contacts.filter { it.role == "instructor" }.sortedBy { it.fullName }
     val cadets = contacts.filter { it.role == "cadet" }.sortedBy { it.fullName }
     val others = contacts.filter { it.role !in listOf("instructor", "cadet") }.sortedBy { it.fullName }
-    val instructorsSection = if (instructors.isEmpty()) "" else """<div class="sd-chat-contacts-group"><h4 class="sd-chat-contacts-group-title">Инструкторы (${instructors.size})</h4><div class="sd-chat-contacts">${instructors.joinToString("") { contactRow(it) }}</div></div>"""
-    val cadetsSection = if (cadets.isEmpty()) "" else """<div class="sd-chat-contacts-group"><h4 class="sd-chat-contacts-group-title">Курсанты (${cadets.size})</h4><div class="sd-chat-contacts">${cadets.joinToString("") { contactRow(it) }}</div></div>"""
-    val othersSection = if (others.isEmpty()) "" else """<div class="sd-chat-contacts-group"><h4 class="sd-chat-contacts-group-title">Другие (${others.size})</h4><div class="sd-chat-contacts">${others.joinToString("") { contactRow(it) }}</div></div>"""
-    val contactsBlock = if (contacts.isEmpty() && !loading) """<p class="sd-chat-empty-hint">Нет контактов для чата. Админ: все пользователи кроме админов. Инструктор: админ + назначенные курсанты. Курсант: админ + ваш инструктор.</p>""" else """$instructorsSection$cadetsSection$othersSection"""
-    return """<div class="sd-chat-tab"><h2 class="sd-chat-title">Чат</h2>$loadingLine<p>$refreshBtn</p>$contactsBlock</div>"""
+    val instructorsSection = if (instructors.isEmpty()) "" else """<div class="sd-chat-contacts-group"><p class="sd-chat-contacts-group-title">Инструкторы</p><div class="sd-chat-contacts">${instructors.joinToString("") { contactRow(it) }}</div></div>"""
+    val cadetsSection = if (cadets.isEmpty()) "" else """<div class="sd-chat-contacts-group"><p class="sd-chat-contacts-group-title">Курсанты</p><div class="sd-chat-contacts">${cadets.joinToString("") { contactRow(it) }}</div></div>"""
+    val othersSection = if (others.isEmpty()) "" else """<div class="sd-chat-contacts-group"><p class="sd-chat-contacts-group-title">Другие</p><div class="sd-chat-contacts">${others.joinToString("") { contactRow(it) }}</div></div>"""
+    val contactsBlock = if (contacts.isEmpty() && !loading) """<p class="sd-chat-empty-hint">Нет доступных контактов.</p>""" else """$instructorsSection$cadetsSection$othersSection"""
+    val refreshBtnStyled = """<button type="button" id="sd-chat-refresh" class="sd-chat-refresh-btn">$iconRefreshSvg Обновить контакты</button>"""
+    return """<div class="sd-chat-tab"><div class="sd-chat-list-header"><h2 class="sd-chat-title">Чат</h2>$refreshBtnStyled</div>$loadingLine$contactsBlock</div>"""
 }
 
 private fun String.escapeHtml(): String = this

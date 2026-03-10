@@ -128,47 +128,58 @@ private fun renderLogin(error: String?, loading: Boolean): String {
     val btn = if (loading) """<span class="sd-auth-spinner"></span>Вход…""" else "Войти"
     return """
         <div class="sd-auth-page">
-            <div class="sd-auth-bg"></div>
-            <div class="sd-auth-card">
-                <div class="sd-auth-logo">
-                    <div class="sd-auth-logo-icon">
-                        <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <rect width="48" height="48" rx="14" fill="#1976D2"/>
+            <div class="sd-auth-panel">
+                <div class="sd-auth-panel-deco1"></div>
+                <div class="sd-auth-panel-deco2"></div>
+                <div class="sd-auth-panel-deco3"></div>
+                <div class="sd-auth-panel-inner">
+                    <div class="sd-auth-panel-logo">
+                        <svg viewBox="0 0 48 48" fill="none">
+                            <rect width="48" height="48" rx="14" fill="rgba(255,255,255,0.15)"/>
                             <path d="M8 30l4-10h24l4 10" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
-                            <rect x="6" y="29" width="36" height="10" rx="3" fill="white" fill-opacity="0.15" stroke="white" stroke-width="2"/>
+                            <rect x="6" y="29" width="36" height="10" rx="3" fill="white" fill-opacity="0.2" stroke="white" stroke-width="2"/>
                             <circle cx="14" cy="34" r="3" fill="white"/>
                             <circle cx="34" cy="34" r="3" fill="white"/>
                             <path d="M18 22l2-5h8l2 5" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
+                        <span>StartDrive</span>
                     </div>
-                    <div>
-                        <h1 class="sd-auth-brand">StartDrive</h1>
-                        <p class="sd-auth-tagline">Автошкола онлайн</p>
+                    <h2 class="sd-auth-panel-title">Онлайн-кабинет<br>автошколы</h2>
+                    <p class="sd-auth-panel-desc">Управляйте расписанием, общайтесь с инструктором и следите за своим прогрессом.</p>
+                    <ul class="sd-auth-features">
+                        <li><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>Запись на занятия онлайн</li>
+                        <li><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>Чат с инструктором</li>
+                        <li><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>История занятий и баланс</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="sd-auth-form-side">
+                <div class="sd-auth-form-wrap">
+                    <h2 class="sd-auth-title">Вход</h2>
+                    <p class="sd-auth-subtitle">Введите данные своего аккаунта</p>
+                    $err
+                    <div class="sd-auth-field">
+                        <label class="sd-auth-label">Email</label>
+                        <div class="sd-auth-input-wrap">
+                            <span class="sd-auth-field-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></span>
+                            <input type="email" id="sd-email" class="sd-auth-input" placeholder="you@example.com" autocomplete="email" />
+                        </div>
                     </div>
+                    <div class="sd-auth-field">
+                        <label class="sd-auth-label">Пароль</label>
+                        <div class="sd-auth-input-wrap">
+                            <span class="sd-auth-field-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+                            <input type="password" id="sd-password" class="sd-auth-input" placeholder="••••••••" autocomplete="current-password" />
+                        </div>
+                    </div>
+                    <label class="sd-auth-checkbox">
+                        <input type="checkbox" id="sd-stay" checked />
+                        <span class="sd-auth-checkbox-box"></span>
+                        <span>Оставаться в системе</span>
+                    </label>
+                    <button type="button" id="sd-btn-signin" class="sd-auth-btn sd-auth-btn-primary" ${if (loading) "disabled" else ""}>$btn</button>
+                    <p class="sd-auth-switch">Нет аккаунта? <button type="button" id="sd-btn-register" class="sd-auth-link">Зарегистрироваться</button></p>
                 </div>
-                <h2 class="sd-auth-title">Добро пожаловать</h2>
-                <p class="sd-auth-subtitle">Войдите в свой аккаунт</p>
-                $err
-                <div class="sd-auth-field">
-                    <span class="sd-auth-field-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-                    </span>
-                    <input type="email" id="sd-email" class="sd-auth-input" placeholder="Email" autocomplete="email" />
-                </div>
-                <div class="sd-auth-field">
-                    <span class="sd-auth-field-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                    </span>
-                    <input type="password" id="sd-password" class="sd-auth-input" placeholder="Пароль" autocomplete="current-password" />
-                </div>
-                <label class="sd-auth-checkbox">
-                    <input type="checkbox" id="sd-stay" checked />
-                    <span class="sd-auth-checkbox-box"></span>
-                    <span>Оставаться в системе</span>
-                </label>
-                <button type="button" id="sd-btn-signin" class="sd-auth-btn sd-auth-btn-primary" ${if (loading) "disabled" else ""}>$btn</button>
-                <div class="sd-auth-divider"><span>или</span></div>
-                <button type="button" id="sd-btn-register" class="sd-auth-btn sd-auth-btn-outline">Создать аккаунт</button>
             </div>
         </div>
     """.trimIndent()
@@ -179,64 +190,80 @@ private fun renderRegister(error: String?, loading: Boolean): String {
     val btn = if (loading) """<span class="sd-auth-spinner"></span>Регистрация…""" else "Зарегистрироваться"
     return """
         <div class="sd-auth-page">
-            <div class="sd-auth-bg"></div>
-            <div class="sd-auth-card sd-auth-card-register">
-                <div class="sd-auth-logo">
-                    <div class="sd-auth-logo-icon">
-                        <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <rect width="48" height="48" rx="14" fill="#1976D2"/>
+            <div class="sd-auth-panel">
+                <div class="sd-auth-panel-deco1"></div>
+                <div class="sd-auth-panel-deco2"></div>
+                <div class="sd-auth-panel-deco3"></div>
+                <div class="sd-auth-panel-inner">
+                    <div class="sd-auth-panel-logo">
+                        <svg viewBox="0 0 48 48" fill="none">
+                            <rect width="48" height="48" rx="14" fill="rgba(255,255,255,0.15)"/>
                             <path d="M8 30l4-10h24l4 10" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
-                            <rect x="6" y="29" width="36" height="10" rx="3" fill="white" fill-opacity="0.15" stroke="white" stroke-width="2"/>
+                            <rect x="6" y="29" width="36" height="10" rx="3" fill="white" fill-opacity="0.2" stroke="white" stroke-width="2"/>
                             <circle cx="14" cy="34" r="3" fill="white"/>
                             <circle cx="34" cy="34" r="3" fill="white"/>
                             <path d="M18 22l2-5h8l2 5" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
+                        <span>StartDrive</span>
                     </div>
-                    <div>
-                        <h1 class="sd-auth-brand">StartDrive</h1>
-                        <p class="sd-auth-tagline">Автошкола онлайн</p>
+                    <h2 class="sd-auth-panel-title">Создайте<br>свой аккаунт</h2>
+                    <p class="sd-auth-panel-desc">Всего несколько шагов — и личный кабинет уже готов к работе.</p>
+                    <ul class="sd-auth-features">
+                        <li><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>Быстрая регистрация</li>
+                        <li><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>Три роли: курсант, инструктор, администратор</li>
+                        <li><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>Безопасный вход через Firebase</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="sd-auth-form-side">
+                <div class="sd-auth-form-wrap">
+                    <h2 class="sd-auth-title">Регистрация</h2>
+                    <p class="sd-auth-subtitle">Заполните данные для создания аккаунта</p>
+                    $err
+                    <div class="sd-auth-field">
+                        <label class="sd-auth-label">ФИО</label>
+                        <div class="sd-auth-input-wrap">
+                            <span class="sd-auth-field-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
+                            <input type="text" id="sd-fullName" class="sd-auth-input" placeholder="Иванов Иван Иванович" autocomplete="name" />
+                        </div>
                     </div>
+                    <div class="sd-auth-field">
+                        <label class="sd-auth-label">Email</label>
+                        <div class="sd-auth-input-wrap">
+                            <span class="sd-auth-field-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></span>
+                            <input type="email" id="sd-reg-email" class="sd-auth-input" placeholder="you@example.com" autocomplete="email" />
+                        </div>
+                    </div>
+                    <div class="sd-auth-row2">
+                        <div class="sd-auth-field">
+                            <label class="sd-auth-label">Телефон</label>
+                            <div class="sd-auth-input-wrap">
+                                <span class="sd-auth-field-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.5 2 2 0 0 1 3.59 1.31h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 9a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg></span>
+                                <input type="tel" id="sd-phone" class="sd-auth-input" placeholder="+7 900 000-00-00" autocomplete="tel" />
+                            </div>
+                        </div>
+                        <div class="sd-auth-field">
+                            <label class="sd-auth-label">Роль</label>
+                            <div class="sd-auth-input-wrap">
+                                <span class="sd-auth-field-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+                                <select id="sd-role" class="sd-auth-input sd-auth-select">
+                                    <option value="cadet">Курсант</option>
+                                    <option value="instructor">Инструктор</option>
+                                    <option value="admin">Администратор</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="sd-auth-field">
+                        <label class="sd-auth-label">Пароль</label>
+                        <div class="sd-auth-input-wrap">
+                            <span class="sd-auth-field-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+                            <input type="password" id="sd-reg-password" class="sd-auth-input" placeholder="Минимум 6 символов" autocomplete="new-password" />
+                        </div>
+                    </div>
+                    <button type="button" id="sd-btn-do-register" class="sd-auth-btn sd-auth-btn-primary" ${if (loading) "disabled" else ""}>$btn</button>
+                    <p class="sd-auth-switch">Уже есть аккаунт? <button type="button" id="sd-btn-back" class="sd-auth-link">Войти</button></p>
                 </div>
-                <h2 class="sd-auth-title">Создать аккаунт</h2>
-                <p class="sd-auth-subtitle">Заполните данные для регистрации</p>
-                $err
-                <div class="sd-auth-field">
-                    <span class="sd-auth-field-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                    </span>
-                    <input type="text" id="sd-fullName" class="sd-auth-input" placeholder="ФИО" autocomplete="name" />
-                </div>
-                <div class="sd-auth-field">
-                    <span class="sd-auth-field-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-                    </span>
-                    <input type="email" id="sd-reg-email" class="sd-auth-input" placeholder="Email" autocomplete="email" />
-                </div>
-                <div class="sd-auth-field">
-                    <span class="sd-auth-field-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.5 2 2 0 0 1 3.59 1.31h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 9a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
-                    </span>
-                    <input type="tel" id="sd-phone" class="sd-auth-input" placeholder="Телефон (+7...)" autocomplete="tel" />
-                </div>
-                <div class="sd-auth-field">
-                    <span class="sd-auth-field-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                    </span>
-                    <input type="password" id="sd-reg-password" class="sd-auth-input" placeholder="Пароль (мин. 6 символов)" autocomplete="new-password" />
-                </div>
-                <div class="sd-auth-field sd-auth-field-select">
-                    <span class="sd-auth-field-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                    </span>
-                    <select id="sd-role" class="sd-auth-input sd-auth-select">
-                        <option value="cadet">Курсант</option>
-                        <option value="instructor">Инструктор</option>
-                        <option value="admin">Администратор</option>
-                    </select>
-                </div>
-                <button type="button" id="sd-btn-do-register" class="sd-auth-btn sd-auth-btn-primary" ${if (loading) "disabled" else ""}>$btn</button>
-                <div class="sd-auth-divider"><span>или</span></div>
-                <button type="button" id="sd-btn-back" class="sd-auth-btn sd-auth-btn-outline">Уже есть аккаунт? Войти</button>
             </div>
         </div>
     """.trimIndent()

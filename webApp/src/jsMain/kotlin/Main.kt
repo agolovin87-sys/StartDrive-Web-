@@ -597,20 +597,29 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
         val phoneDisplay = (c.phone.ifBlank { "—" }).escapeHtml()
         val phoneHref = if (c.phone.isNotBlank()) "tel:${c.phone.escapeHtml()}" else "#"
         val phoneClass = if (c.phone.isNotBlank()) "sd-btn sd-btn-circle sd-btn-phone" else "sd-btn sd-btn-circle sd-btn-phone sd-btn-disabled"
+        val svgChat = """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>"""
+        val svgPhone = """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.6 1.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.77a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.02z"/></svg>"""
+        val svgPhoneRow = """<svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" style="opacity:0.6;flex-shrink:0"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.6 1.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.77a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.02z"/></svg>"""
+        val svgCar = """<svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" style="opacity:0.6;flex-shrink:0"><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/></svg>"""
+        val svgTicket = """<svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" style="opacity:0.6;flex-shrink:0"><path d="M22 10V6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v4c1.1 0 2 .9 2 2s-.9 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2s.9-2 2-2zm-2-1.46c-1.19.69-2 1.99-2 3.46s.81 2.77 2 3.46V18H4v-2.54c1.19-.69 2-1.99 2-3.46 0-1.48-.8-2.77-2-3.46L4 6h16v2.54z"/></svg>"""
+        val phoneDisabled = if (c.phone.isBlank()) " sd-cadet-icon-btn-disabled" else ""
         """<div class="sd-cadet-card">
-            <p class="sd-cadet-card-title">Карточка курсанта:</p>
-            <div class="sd-cadet-card-body">
+            <div class="sd-cadet-accent-bar"></div>
+            <div class="sd-cadet-top">
                 <div class="sd-cadet-avatar">$initials</div>
-                <div class="sd-cadet-info">
-                    <p class="sd-cadet-name">${c.fullName.escapeHtml()}</p>
-                    <p class="sd-cadet-row"><span class="sd-cadet-label">Телефон:</span> $phoneDisplay</p>
-                    <p class="sd-cadet-row"><span class="sd-cadet-label">Вождений:</span> $completedCount</p>
-                    <p class="sd-cadet-row"><span class="sd-cadet-label">Баланс:</span> ${c.balance} талонов</p>
+                <div class="sd-cadet-head">
+                    <p class="sd-cadet-name">${formatShortName(c.fullName).escapeHtml()}</p>
+                    <span class="sd-cadet-badge">Курсант</span>
+                </div>
+                <div class="sd-cadet-quick">
+                    <button type="button" class="sd-cadet-icon-btn sd-cadet-chat-btn" data-contact-id="${c.id.escapeHtml()}" title="Чат">$svgChat</button>
+                    <a href="$phoneHref" class="sd-cadet-icon-btn$phoneDisabled" title="Позвонить">$svgPhone</a>
                 </div>
             </div>
-            <div class="sd-cadet-card-actions">
-                <button type="button" class="sd-btn sd-btn-circle sd-btn-chat sd-cadet-chat-btn" data-contact-id="${c.id.escapeHtml()}" title="Чат">Чат</button>
-                <a href="$phoneHref" class="$phoneClass" title="Позвонить">Телефон</a>
+            <div class="sd-cadet-rows">
+                <div class="sd-cadet-row">$svgPhoneRow $phoneDisplay</div>
+                <div class="sd-cadet-row">$svgCar $completedCount вождений</div>
+                <div class="sd-cadet-row">$svgTicket ${c.balance} талонов</div>
             </div>
         </div>"""
     }

@@ -494,7 +494,10 @@ body {
     flex-shrink: 0;
 }
 
-.sd-cadet-icon-btn {
+.sd-cadet-icon-btn,
+a.sd-cadet-icon-btn,
+a.sd-cadet-icon-btn:visited,
+a.sd-cadet-icon-btn:active {
     width: 38px;
     height: 38px;
     border-radius: 12px;
@@ -503,7 +506,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #ffffff;
+    color: #ffffff !important;
     cursor: pointer;
     text-decoration: none;
     font-family: inherit;

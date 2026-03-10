@@ -787,19 +787,44 @@ private fun renderBalanceTabContent(user: User): String {
     }
     val instRows = instructors.joinToString("") { balanceCardHtml(it) }
     val cadetRows = cadets.joinToString("") { balanceCardHtml(it) }
-    val selectedBlock = if (selectedUser != null) """
-        <div class="sd-block" id="sd-balance-selected-block">
-            <h3 class="sd-block-title">Выбран</h3>
-            <p><strong>${selectedUser.fullName.escapeHtml()}</strong> (${selectedUser.role}). Баланс: ${selectedUser.balance} талонов.</p>
-            <label>Количество талонов</label><input type="number" id="sd-balance-amount" class="sd-input" value="0" min="0" />
-            <div class="sd-balance-selected-actions">
-                <button type="button" id="sd-balance-credit" class="sd-btn sd-balance-btn sd-balance-btn-credit">$iconCreditSvg Зачислить (+N)</button>
-                <button type="button" id="sd-balance-debit" class="sd-btn sd-balance-btn sd-balance-btn-debit">$iconDebitSvg Списать (−N)</button>
-                <button type="button" id="sd-balance-set" class="sd-btn sd-balance-btn sd-balance-btn-set">$iconSetSvg Изменить на (= N)</button>
-                <button type="button" id="sd-balance-clear-selection" class="sd-btn sd-balance-btn sd-balance-btn-clear">$iconResetSvg Сбросить выбор</button>
+    val selectedBlock = if (selectedUser != null) run {
+        val isInst = selectedUser.role == "instructor"
+        val cardCls = if (isInst) "sd-balance-sel-instructor" else "sd-balance-sel-cadet"
+        val avatarCls = if (isInst) "sd-ucard-avatar-blue" else "sd-ucard-avatar-teal"
+        val roleLabel = if (isInst) "Инструктор" else "Курсант"
+        val initials = selectedUser.fullName.split(" ").take(2).mapNotNull { it.firstOrNull()?.uppercase() }.joinToString("")
+        val shortName = formatShortName(selectedUser.fullName).escapeHtml()
+        val bal = selectedUser.balance
+        fun ticketWord(n: Int) = when {
+            n % 100 in 11..14 -> "талонов"
+            n % 10 == 1 -> "талон"
+            n % 10 in 2..4 -> "талона"
+            else -> "талонов"
+        }
+        """<div class="sd-balance-sel $cardCls" id="sd-balance-selected-block">
+            <div class="sd-balance-sel-top">
+                <div class="sd-ucard-avatar $avatarCls">$initials</div>
+                <div class="sd-balance-sel-info">
+                    <p class="sd-balance-sel-name">$shortName</p>
+                    <span class="sd-balance-sel-role">$roleLabel</span>
+                </div>
+                <div class="sd-balance-sel-counter">
+                    <span class="sd-balance-sel-count">$bal</span>
+                    <span class="sd-balance-sel-count-label">${ticketWord(bal)}</span>
+                </div>
             </div>
-        </div>
-    """ else ""
+            <div class="sd-balance-sel-input-row">
+                <span class="sd-balance-sel-input-label">Количество талонов</span>
+                <input type="number" id="sd-balance-amount" class="sd-balance-sel-input" value="0" min="0" />
+            </div>
+            <div class="sd-balance-selected-actions">
+                <button type="button" id="sd-balance-credit" class="sd-btn sd-balance-btn sd-balance-btn-credit">$iconCreditSvg Зачислить</button>
+                <button type="button" id="sd-balance-debit" class="sd-btn sd-balance-btn sd-balance-btn-debit">$iconDebitSvg Списать</button>
+                <button type="button" id="sd-balance-set" class="sd-btn sd-balance-btn sd-balance-btn-set">$iconSetSvg Установить</button>
+                <button type="button" id="sd-balance-clear-selection" class="sd-btn sd-balance-btn sd-balance-btn-clear">$iconResetSvg Сбросить</button>
+            </div>
+        </div>"""
+    } else ""
     val history = appState.balanceAdminHistory.take(50)
     val typeLabel = { t: String -> when (t) { "credit" -> "зачислено"; "debit" -> "списано"; "set" -> "установлено"; else -> t } }
     fun ticketWord(n: Int): String {

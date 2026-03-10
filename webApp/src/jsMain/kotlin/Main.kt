@@ -123,6 +123,34 @@ fun main() {
     } as (Event) -> dynamic
 }
 
+private fun launchConfetti() {
+    val container = document.createElement("div")
+    container.setAttribute("class", "sd-confetti-container")
+    document.body?.appendChild(container)
+    val colors = arrayOf("#ff4081","#ff6d00","#ffd600","#00e676","#2979ff","#d500f9","#00bcd4","#ff1744")
+    val shapes = arrayOf("square","rect","circle")
+    for (i in 0 until 90) {
+        val p = document.createElement("div")
+        val color = colors[i % colors.size]
+        val shape = shapes[i % shapes.size]
+        val left = (kotlin.random.Random.nextDouble() * 100)
+        val delay = (kotlin.random.Random.nextDouble() * 2.5)
+        val dur = 2.0 + kotlin.random.Random.nextDouble() * 2.0
+        val size = 6 + kotlin.random.Random.nextInt(6)
+        val drift = -40 + kotlin.random.Random.nextInt(80)
+        val rot = kotlin.random.Random.nextInt(720)
+        val w = if (shape == "rect") (size * 2.2).toInt() else size
+        val br = if (shape == "circle") "50%" else "2px"
+        p.setAttribute("style",
+            "position:absolute;top:-12px;left:${left}%;width:${w}px;height:${size}px;" +
+            "background:$color;border-radius:$br;opacity:0.92;" +
+            "animation:sd-confetti-fall ${dur}s ease-in ${delay}s forwards;" +
+            "--sd-drift:${drift}px;--sd-rot:${rot}deg;")
+        container.appendChild(p)
+    }
+    window.setTimeout({ document.body?.removeChild(container) }, 5500)
+}
+
 private fun renderLogin(error: String?, loading: Boolean): String {
     val err = if (error != null) """<div class="sd-auth-error"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>$error</div>""" else ""
     val btn = if (loading) """<span class="sd-auth-spinner"></span>Вход…""" else "Войти"
@@ -1260,6 +1288,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 updateState { loading = true; error = null }
                 signIn(email, password)
                     .then {
+                        launchConfetti()
                         updateState { loading = false }
                     }
                     .catch { e ->

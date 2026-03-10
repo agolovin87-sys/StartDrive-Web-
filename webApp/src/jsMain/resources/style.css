@@ -111,6 +111,7 @@ body {
     max-width: 720px;
     margin: 0 auto;
     padding: 24px;
+    padding-bottom: calc(70px + env(safe-area-inset-bottom, 0px));
 }
 
 .sd-card {
@@ -1940,34 +1941,144 @@ body {
     background: rgba(255,255,255,0.35);
 }
 
-/* Вкладки панели */
+/* ═══════════════════════════════════════
+   НИЖНЯЯ НАВИГАЦИЯ (мобильный стиль)
+   ═══════════════════════════════════════ */
+
 .sd-tabs {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 200;
     display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    padding: 12px 24px;
-    background: white;
-    border-bottom: 1px solid var(--sd-border);
+    align-items: stretch;
+    background: linear-gradient(to top, #05101f 0%, #0b1c38 60%, #0f2147 100%);
+    border-top: 1px solid rgba(255,255,255,0.08);
+    box-shadow:
+        0 -4px 24px rgba(0,0,0,0.45),
+        0 -1px 0 rgba(255,255,255,0.04) inset;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    /* Общий глянец поверх всей панели */
+    overflow: hidden;
+}
+.sd-tabs::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 42%;
+    background: linear-gradient(180deg, rgba(255,255,255,0.07) 0%, transparent 100%);
+    pointer-events: none;
+    z-index: 0;
 }
 
 .sd-tab {
-    padding: 8px 16px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 8px 4px 7px;
     border: none;
     background: transparent;
-    color: var(--sd-text-secondary);
+    color: rgba(255,255,255,0.38);
     cursor: pointer;
-    border-radius: 6px;
-    font-size: 0.95rem;
+    font-family: inherit;
+    font-size: 0.67rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    position: relative;
+    z-index: 1;
+    overflow: hidden;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    transition: color 0.18s ease;
+}
+
+/* Объёмный глянец на каждой кнопке */
+.sd-tab::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 8%; right: 8%;
+    height: 44%;
+    background: linear-gradient(180deg, rgba(255,255,255,0.11) 0%, transparent 100%);
+    border-radius: 0 0 50% 50% / 0 0 20px 20px;
+    pointer-events: none;
+}
+
+/* Радиальный ripple-эффект при нажатии */
+.sd-tab::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at 50% 60%, rgba(120,180,255,0.35) 0%, transparent 70%);
+    opacity: 0;
+    transform: scale(0.4);
+    pointer-events: none;
+}
+.sd-tab:active::after {
+    animation: sd-tab-ripple 0.38s ease-out forwards;
+}
+@keyframes sd-tab-ripple {
+    0%   { opacity: 1; transform: scale(0.4); }
+    60%  { opacity: 0.6; transform: scale(1.6); }
+    100% { opacity: 0; transform: scale(2); }
 }
 
 .sd-tab:hover {
-    background: var(--sd-surface);
-    color: var(--sd-text);
+    color: rgba(255,255,255,0.65);
 }
 
+/* Иконка SVG внутри кнопки */
+.sd-tab-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+}
+.sd-tab-icon svg {
+    width: 22px;
+    height: 22px;
+}
+.sd-tab-label {
+    line-height: 1;
+    white-space: nowrap;
+}
+
+/* Активная вкладка */
 .sd-tab.sd-active {
-    background: var(--sd-primary);
-    color: white;
+    color: #fff;
+    animation: sd-tab-activate 0.45s ease-out forwards;
+}
+.sd-tab.sd-active .sd-tab-icon {
+    filter: drop-shadow(0 0 5px rgba(120,180,255,0.8));
+}
+/* Переливающаяся полоска сверху активной вкладки */
+.sd-tab.sd-active::before {
+    background: linear-gradient(90deg,
+        transparent 0%,
+        rgba(120,180,255,0.55) 30%,
+        rgba(200,230,255,0.8) 50%,
+        rgba(120,180,255,0.55) 70%,
+        transparent 100%);
+    height: 2px;
+    border-radius: 0 0 2px 2px;
+    top: 0;
+    left: 0; right: 0;
+    animation: sd-tab-shimmer 0.55s ease-out forwards;
+}
+@keyframes sd-tab-activate {
+    0%   { transform: translateY(2px); }
+    60%  { transform: translateY(-1px); }
+    100% { transform: translateY(0); }
+}
+@keyframes sd-tab-shimmer {
+    0%   { opacity: 0; background-position: -100% 0; }
+    40%  { opacity: 1; }
+    100% { opacity: 0.7; background-position: 200% 0; }
 }
 
 /* Индикатор загрузки */
@@ -2054,22 +2165,17 @@ body {
         min-width: 44px;
         box-sizing: border-box;
     }
-    .sd-tabs {
-        padding: 8px 12px;
-        gap: 6px;
-        flex-wrap: wrap;
-    }
     .sd-tab {
-        padding: 10px 14px;
-        font-size: 0.85rem;
-        min-height: 44px;
-        box-sizing: border-box;
+        font-size: 0.62rem;
+        padding: 7px 2px 6px;
+        min-height: 56px;
     }
+    .sd-tab-icon svg { width: 20px; height: 20px; }
     .sd-content {
         padding: 12px 16px;
         padding-left: max(16px, env(safe-area-inset-left));
         padding-right: max(16px, env(safe-area-inset-right));
-        padding-bottom: max(16px, env(safe-area-inset-bottom));
+        padding-bottom: calc(72px + max(0px, env(safe-area-inset-bottom)));
         max-width: 100%;
     }
     .sd-card {
@@ -2720,11 +2826,13 @@ body {
         font-size: 0.75rem;
     }
     .sd-tab {
-        padding: 8px 10px;
-        font-size: 0.8rem;
+        font-size: 0.6rem;
+        padding: 6px 1px 5px;
     }
+    .sd-tab-icon svg { width: 18px; height: 18px; }
     .sd-content {
         padding: 10px 12px;
+        padding-bottom: calc(68px + max(0px, env(safe-area-inset-bottom)));
     }
     .sd-chat-tab {
         margin-left: -10px;

@@ -3215,3 +3215,36 @@ body {
         display: none;
     }
 }
+
+/* ── Чат: полноэкранный оверлей на мобильных (после базовых стилей) ── */
+@media (max-width: 640px) {
+    .sd-chat-conversation {
+        position: fixed;
+        inset: 0;
+        height: 100dvh;
+        min-height: unset;
+        z-index: 300;
+        display: flex;
+        flex-direction: column;
+        background: #1a2e1f url("chat_background.png") center/cover no-repeat;
+        overscroll-behavior: none;
+    }
+    .sd-chat-messages {
+        flex: 1 1 0;
+        min-height: 0;
+        max-height: none;
+        height: auto;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+    }
+    .sd-chat-input-row {
+        flex-shrink: 0;
+        padding-top: 10px;
+        padding-bottom: max(14px, env(safe-area-inset-bottom));
+    }
+    .sd-chat-header {
+        flex-shrink: 0;
+        padding-top: max(10px, env(safe-area-inset-top));
+    }
+}

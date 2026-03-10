@@ -711,14 +711,17 @@ private fun renderBalanceTabContent(user: User): String {
     val instructors = users.filter { it.role == "instructor" }
     val cadets = users.filter { it.role == "cadet" }
     val balanceCardHtml = { u: User ->
-        """<div class="sd-balance-card">
-            <div class="sd-balance-card-body">
-                <p class="sd-balance-card-row"><span class="sd-balance-card-label">$iconUserSvg ФИО:</span> ${u.fullName.escapeHtml()}</p>
-                <p class="sd-balance-card-row"><span class="sd-balance-card-label">$iconTicketSvg Баланс талонов:</span> ${u.balance}</p>
+        val initials = u.fullName.split(" ").take(2).mapNotNull { it.firstOrNull()?.uppercase() }.joinToString("")
+        val roleClass = if (u.role == "instructor") "sd-bcard-instructor" else "sd-bcard-cadet"
+        val avatarClass = if (u.role == "instructor") "sd-ucard-avatar-blue" else "sd-ucard-avatar-teal"
+        val selectedClass = if (u.id == selectedId) " sd-bcard-selected" else ""
+        """<div class="sd-bcard $roleClass$selectedClass">
+            <div class="sd-ucard-avatar $avatarClass">$initials</div>
+            <div class="sd-bcard-info">
+                <p class="sd-bcard-name">${u.fullName.escapeHtml()}</p>
+                <span class="sd-bcard-balance">$iconTicketSvg ${u.balance} талонов</span>
             </div>
-            <div class="sd-balance-card-action">
-                <button type="button" class="sd-btn sd-btn-select" data-balance-select="${u.id.escapeHtml()}">$iconSelectSvg Выбрать</button>
-            </div>
+            <button type="button" class="sd-bcard-select-btn" data-balance-select="${u.id.escapeHtml()}" title="Выбрать">$iconSelectSvg</button>
         </div>"""
     }
     val instRows = instructors.joinToString("") { balanceCardHtml(it) }

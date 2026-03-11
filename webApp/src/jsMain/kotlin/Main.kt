@@ -1263,10 +1263,7 @@ private fun renderTicketsTabContent(): String {
         return """<h2>Билеты ПДД</h2>
         <div class="sd-tickets-content">
             <div class="sd-ticket-categories">$categoriesHtml</div>
-            <p class="sd-tickets-links">
-                <a href="https://play.google.com/store/apps/details?id=com.example.startdrive" target="_blank" rel="noopener" class="sd-btn sd-btn-primary sd-btn-inline">Скачать приложение StartDrive (Google Play)</a>
-                <a href="https://pdd.ru/" target="_blank" rel="noopener" class="sd-link">ПДД РФ на pdd.ru</a>
-            </p>
+
         </div>"""
     }
 

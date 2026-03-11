@@ -1262,7 +1262,6 @@ private fun renderTicketsTabContent(): String {
         }
         return """<h2>Билеты ПДД</h2>
         <div class="sd-tickets-content">
-            <p class="sd-tickets-intro">Выберите категорию — как в приложении Android.</p>
             <div class="sd-ticket-categories">$categoriesHtml</div>
             <p class="sd-tickets-links">
                 <a href="https://play.google.com/store/apps/details?id=com.example.startdrive" target="_blank" rel="noopener" class="sd-btn sd-btn-primary sd-btn-inline">Скачать приложение StartDrive (Google Play)</a>

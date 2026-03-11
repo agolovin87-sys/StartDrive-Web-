@@ -11,7 +11,7 @@
 
 1. Создайте проект в [Firebase Console](https://console.firebase.google.com).
 2. Добавьте Android-приложение с package name `com.example.startdrive`.
-3. Скачайте `google-services.json` и замените им файл `app/google-services.json` (сейчас в проекте — заглушка).
+3. Скачайте `google-services.json` и поместите его в `app/google-services.json`.
 4. Включите в консоли:
    - **Authentication** (Email/Password)
    - **Firestore Database**

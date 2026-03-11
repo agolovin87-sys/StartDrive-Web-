@@ -4,6 +4,37 @@ import firebase.DrivingSession
 import firebase.InstructorOpenWindow
 import firebase.BalanceHistoryEntry
 
+/** Вопрос билета ПДД (как в Android PddQuestion). */
+data class PddQuestion(
+    val id: String,
+    val title: String,
+    val ticketNumber: String,
+    val ticketCategory: String,
+    val image: String?,
+    val question: String,
+    val answers: List<PddAnswer>,
+    val correctAnswer: String,
+    val answerTip: String,
+    val topic: List<String>,
+)
+
+/** Вариант ответа на вопрос ПДД. */
+data class PddAnswer(val answerText: String, val isCorrect: Boolean)
+
+/** Секция дорожных знаков (как в Android PddRepository.SignsSection). */
+data class PddSignsSection(val name: String, val items: List<PddSignItem>)
+data class PddSignItem(val number: String, val title: String, val imagePath: String, val description: String)
+
+/** Секция разметки (как в Android PddRepository.MarkupSection). */
+data class PddMarkupSection(val name: String, val items: List<PddMarkupItem>)
+data class PddMarkupItem(val number: String, val imagePath: String, val description: String)
+
+/** Элемент штрафов (как в Android PddRepository.PenaltyItem). */
+data class PddPenaltyItem(val articlePart: String, val text: String, val penalty: String)
+
+/** Вопросы по теме (для категории «Вопросы по разделам»). */
+data class PddTopicSection(val name: String, val questions: List<PddQuestion>)
+
 enum class AppScreen {
     Login,
     Register,
@@ -52,6 +83,17 @@ data class AppState(
     var chatVoiceRecordElapsedSec: Int = 0,
     var chatPlayingVoiceId: String? = null,
     var chatPlayingVoiceCurrentMs: Int = 0,
+    var pddCategoryId: String? = null,
+    var pddTicketName: String? = null,
+    var pddQuestions: List<PddQuestion> = emptyList(),
+    var pddCurrentIndex: Int = 0,
+    var pddUserSelections: Map<Int, Int> = emptyMap(),
+    var pddFinished: Boolean = false,
+    var pddLoading: Boolean = false,
+    var pddSignsSections: List<PddSignsSection> = emptyList(),
+    var pddMarkupSections: List<PddMarkupSection> = emptyList(),
+    var pddPenalties: List<PddPenaltyItem> = emptyList(),
+    var pddByTopicSections: List<PddTopicSection> = emptyList(),
 )
 
 var appState = AppState()

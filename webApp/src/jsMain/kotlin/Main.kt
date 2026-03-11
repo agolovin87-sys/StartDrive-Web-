@@ -528,6 +528,16 @@ private fun avatarColorForId(id: String): String {
     return "hsl($h,$s%,$l%)"
 }
 
+/** Дни недели с понедельника по воскресенье (для раздела «Мой график»). */
+private val WEEKDAY_NAMES = listOf("Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье")
+
+/** Индекс дня недели 0=Пн .. 6=Вс по timestamp. */
+private fun getWeekdayIndex(startTimeMillis: Long?): Int {
+    if (startTimeMillis == null || startTimeMillis <= 0) return 0
+    val fn = js("(function(ms){ var d = new Date(ms).getDay(); return (d+6)%7; })").unsafeCast<(Long) -> Int>()
+    return fn(startTimeMillis)
+}
+
 /** Формат «Фамилия И.О.» для списка курсантов */
 private fun formatShortName(fullName: String): String {
     val parts = fullName.trim().split(" ").filter { it.isNotBlank() }
@@ -555,7 +565,243 @@ private val iconCreditSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="16
 private val iconDebitSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>"""
 private val iconSetSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="9" x2="19" y2="9"/><line x1="5" y1="15" x2="19" y2="15"/></svg>"""
 private val iconResetSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>"""
+private val iconCalendarSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>"""
+private val iconClockSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>"""
+private val iconPlaySvg = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>"""
+private val iconLateSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>"""
 
+
+/** Длительность занятия вождением (минуты). */
+private const val LESSON_DURATION_MINUTES = 90L
+private val LESSON_DURATION_MS = LESSON_DURATION_MINUTES * 60 * 1000
+
+/** За сколько минут до вождения активируется кнопка «Начать вождение». */
+private const val START_ALLOWED_MINUTES_BEFORE = 15L
+
+/** Категории билетов ПДД — как в Android (PddRepository.getCategories). */
+private val PDD_CATEGORIES = listOf(
+    "A_B" to "Категория AB",
+    "C_D" to "Категория CD",
+    "by_topic" to "Вопросы по разделам",
+    "signs" to "Дорожные знаки",
+    "markup" to "Дорожная разметка",
+    "penalties" to "Штрафы",
+)
+
+/** Парсит JSON билета (массив вопросов) в List<PddQuestion>. */
+private fun parseTicketJson(jsonText: String): List<PddQuestion> {
+    return try {
+        val parsed = js("JSON.parse").unsafeCast<(String) -> dynamic>().invoke(jsonText)
+        val len = (parsed.asDynamic().length as Int)
+        val list = mutableListOf<PddQuestion>()
+        for (i in 0 until len) {
+            val obj = parsed.asDynamic()[i]
+            val answersArr = obj.answers
+            val answersLen = (answersArr.asDynamic().length as Int)
+            val answers = (0 until answersLen).map { j ->
+                val a = answersArr.asDynamic()[j]
+                PddAnswer(
+                    answerText = (a.answer_text as? String) ?: "",
+                    isCorrect = (a.is_correct as? Boolean) ?: false,
+                )
+            }
+            val topicArr = obj.topic
+            val topicLen = (topicArr.asDynamic().length as Int)
+            val topic = (0 until topicLen).map { (topicArr.asDynamic()[it] as? String) ?: "" }
+            val img = obj.image as? String
+            val image = if (img.isNullOrBlank() || img.endsWith("no_image.jpg")) null else img
+            list.add(PddQuestion(
+                id = (obj.id as? String) ?: "",
+                title = (obj.title as? String) ?: "",
+                ticketNumber = (obj.ticket_number as? String) ?: "",
+                ticketCategory = (obj.ticket_category as? String) ?: "",
+                image = image,
+                question = (obj.question as? String) ?: "",
+                answers = answers,
+                correctAnswer = (obj.correct_answer as? String) ?: "",
+                answerTip = (obj.answer_tip as? String) ?: "",
+                topic = topic,
+            ))
+        }
+        list
+    } catch (_: Throwable) {
+        emptyList()
+    }
+}
+
+/** Обработка клика по категории ПДД: переход или загрузка данных. */
+private fun handlePddCategoryClick(catId: String) {
+    when (catId) {
+        "A_B", "C_D" -> updateState { pddCategoryId = catId }
+        "signs" -> {
+            updateState { pddCategoryId = catId; pddLoading = true }
+            window.fetch("pdd/signs/signs.json").then { r: dynamic ->
+                r.text().then { text: dynamic ->
+                    val list = parseSignsJson(text.unsafeCast<String>())
+                    updateState { pddSignsSections = list; pddLoading = false }
+                }
+            }.catch { _: dynamic -> updateState { pddLoading = false; pddSignsSections = emptyList() } }
+        }
+        "markup" -> {
+            updateState { pddCategoryId = catId; pddLoading = true }
+            window.fetch("pdd/markup/markup.json").then { r: dynamic ->
+                r.text().then { text: dynamic ->
+                    val list = parseMarkupJson(text.unsafeCast<String>())
+                    updateState { pddMarkupSections = list; pddLoading = false }
+                }
+            }.catch { _: dynamic -> updateState { pddLoading = false; pddMarkupSections = emptyList() } }
+        }
+        "penalties" -> {
+            updateState { pddCategoryId = catId; pddLoading = true }
+            window.fetch("pdd/penalties/penalties.json").then { r: dynamic ->
+                r.text().then { text: dynamic ->
+                    val list = parsePenaltiesJson(text.unsafeCast<String>())
+                    updateState { pddPenalties = list; pddLoading = false }
+                }
+            }.catch { _: dynamic -> updateState { pddLoading = false; pddPenalties = emptyList() } }
+        }
+        "by_topic" -> {
+            updateState { pddCategoryId = catId; pddLoading = true }
+            loadAllTicketsByTopic()
+        }
+        else -> updateState { pddCategoryId = catId }
+    }
+}
+
+private fun parseSignsJson(jsonText: String): List<PddSignsSection> {
+    return try {
+        val root = js("JSON.parse").unsafeCast<(String) -> dynamic>().invoke(jsonText)
+        val keys = js("Object.keys").unsafeCast<(dynamic) -> Array<dynamic>>().invoke(root)
+        val list = mutableListOf<PddSignsSection>()
+        for (i in 0 until (keys.asDynamic().length as Int)) {
+            val sectionName = keys[i].unsafeCast<String>()
+            val sectionObj = root.asDynamic()[sectionName]
+            val itemKeys = js("Object.keys").unsafeCast<(dynamic) -> Array<dynamic>>().invoke(sectionObj)
+            val items = mutableListOf<PddSignItem>()
+            for (j in 0 until (itemKeys.asDynamic().length as Int)) {
+                val num = itemKeys[j].unsafeCast<String>()
+                val obj = sectionObj.asDynamic()[num]
+                val img = (obj.image as? String)?.trim() ?: ""
+                val imagePath = when {
+                    img.isEmpty() -> ""
+                    img.startsWith("./") -> "pdd/images" + img.removePrefix("./images").replace("\\", "/")
+                    else -> "pdd/images/$img"
+                }
+                items.add(PddSignItem(
+                    number = (obj.number as? String) ?: num,
+                    title = (obj.title as? String) ?: "",
+                    imagePath = imagePath,
+                    description = (obj.description as? String) ?: "",
+                ))
+            }
+            list.add(PddSignsSection(name = sectionName, items = items))
+        }
+        list
+    } catch (_: Throwable) { emptyList() }
+}
+
+private fun parseMarkupJson(jsonText: String): List<PddMarkupSection> {
+    return try {
+        val root = js("JSON.parse").unsafeCast<(String) -> dynamic>().invoke(jsonText)
+        val keys = js("Object.keys").unsafeCast<(dynamic) -> Array<dynamic>>().invoke(root)
+        val list = mutableListOf<PddMarkupSection>()
+        for (i in 0 until (keys.asDynamic().length as Int)) {
+            val sectionName = keys[i].unsafeCast<String>()
+            val sectionObj = root.asDynamic()[sectionName]
+            val itemKeys = js("Object.keys").unsafeCast<(dynamic) -> Array<dynamic>>().invoke(sectionObj)
+            val items = mutableListOf<PddMarkupItem>()
+            for (j in 0 until (itemKeys.asDynamic().length as Int)) {
+                val num = itemKeys[j].unsafeCast<String>()
+                val obj = sectionObj.asDynamic()[num]
+                val img = (obj.image as? String)?.trim() ?: ""
+                val imagePath = when {
+                    img.isEmpty() -> ""
+                    img.startsWith("./") -> "pdd/images" + img.removePrefix("./images").replace("\\", "/")
+                    else -> "pdd/images/$img"
+                }
+                items.add(PddMarkupItem(
+                    number = (obj.number as? String) ?: num,
+                    imagePath = imagePath,
+                    description = (obj.description as? String) ?: "",
+                ))
+            }
+            list.add(PddMarkupSection(name = sectionName, items = items))
+        }
+        list
+    } catch (_: Throwable) { emptyList() }
+}
+
+private fun parsePenaltiesJson(jsonText: String): List<PddPenaltyItem> {
+    return jsonText.lines().mapNotNull { line ->
+        val trimmed = line.trim()
+        if (trimmed.isBlank()) return@mapNotNull null
+        try {
+            val obj = js("JSON.parse").unsafeCast<(String) -> dynamic>().invoke(trimmed)
+            PddPenaltyItem(
+                articlePart = (obj.article_part as? String) ?: "",
+                text = (obj.text as? String) ?: "",
+                penalty = (obj.penalty as? String) ?: "",
+            )
+        } catch (_: Throwable) { null }
+    }
+}
+
+private fun loadAllTicketsByTopic() {
+    val tickets = (1..40).map { "Билет $it" }
+    val promises = tickets.map { name ->
+        val fileName = js("encodeURIComponent").unsafeCast<(String) -> String>().invoke("$name.json")
+        window.fetch("pdd/tickets/$fileName").then { r: dynamic -> r.text() }
+    }
+    js("Promise.all").unsafeCast<(Array<dynamic>) -> dynamic>().invoke(promises.toTypedArray()).then { results: dynamic ->
+        val allQuestions = mutableListOf<PddQuestion>()
+        val len = (results.asDynamic().length as Int)
+        for (i in 0 until len) {
+            val text = results.asDynamic()[i].unsafeCast<String>()
+            allQuestions.addAll(parseTicketJson(text))
+        }
+        val order = mutableListOf<String>()
+        val byTopic = mutableMapOf<String, MutableList<PddQuestion>>()
+        for (q in allQuestions) {
+            val topic = q.topic.firstOrNull()?.takeIf { it.isNotBlank() } ?: "Прочее"
+            if (topic !in order) order.add(topic)
+            byTopic.getOrPut(topic) { mutableListOf() }.add(q)
+        }
+        val sections = order.map { name -> PddTopicSection(name = name, questions = byTopic[name] ?: emptyList()) }
+        updateState { pddByTopicSections = sections; pddLoading = false }
+    }.catch { _: dynamic -> updateState { pddLoading = false; pddByTopicSections = emptyList() } }
+}
+
+/** Текущие дата и время в формате для min атрибута datetime-local (нельзя выбрать прошлое). */
+private fun getDatetimeLocalMin(): String {
+    return js("(function(){ var d=new Date(); var p=function(n){ return (n<10?'0':'')+n; }; return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes()); })()").unsafeCast<String>()
+}
+
+/** Проверка: занято ли время (сессии и окна по 1.5 ч). Возвращает сообщение об ошибке или null. */
+private fun findOccupiedMessage(
+    selectedMs: Long,
+    sessions: List<DrivingSession>,
+    windows: List<InstructorOpenWindow>,
+    cadets: List<User>,
+): String? {
+    val selectedEnd = selectedMs + LESSON_DURATION_MS
+    for (s in sessions) {
+        if (s.status != "scheduled" && s.status != "inProgress") continue
+        val startMs = s.startTimeMillis ?: continue
+        val endMs = startMs + LESSON_DURATION_MS
+        if (selectedMs < endMs && selectedEnd > startMs) {
+            val name = cadets.find { it.id == s.cadetId }?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "Курсант"
+            return "Это время занято: $name записан до ${formatTimeOnly(endMs)}"
+        }
+    }
+    for (w in windows) {
+        val startMs = w.dateTimeMillis ?: continue
+        val endMs = startMs + LESSON_DURATION_MS
+        if (selectedMs < endMs && selectedEnd > startMs) {
+            return "Это время уже есть в свободных окнах. Выберите другое."
+        }
+    }
+    return null
+}
 
 private fun formatDateTime(ms: Long?): String {
     if (ms == null || ms <= 0) return "—"
@@ -580,6 +826,24 @@ private fun formatDateTimeEkaterinburg(ms: Long?): String {
     if (ms == null || ms <= 0) return "—"
     val d = js("new Date(ms)")
     return js("d.toLocaleString('ru-RU', { timeZone: 'Asia/Yekaterinburg', dateStyle: 'short', timeStyle: 'short' })").unsafeCast<String>()
+}
+
+/** Показать всплывающее сообщение (toast), исчезает через 4 с или по клику. */
+private fun showToast(message: String) {
+    val existing = document.querySelector(".sd-toast")
+    existing?.parentNode?.removeChild(existing)
+    val div = document.createElement("div")
+    div.className = "sd-toast"
+    div.setAttribute("role", "alert")
+    div.textContent = message
+    document.body?.appendChild(div)
+    var timeoutId: dynamic = js("0")
+    val remove = {
+        div.parentNode?.removeChild(div)
+        window.clearTimeout(timeoutId)
+    }
+    timeoutId = window.setTimeout({ remove() }, 4000)
+    div.addEventListener("click", { remove() })
 }
 
 private fun renderAdminHomeContent(): String {
@@ -750,7 +1014,7 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
             <div class="sd-cadet-top">
                 <div class="sd-cadet-avatar">$initials</div>
                 <div class="sd-cadet-head">
-                    <p class="sd-cadet-name">${formatShortName(c.fullName).escapeHtml()}</p>
+                    <p class="sd-cadet-name">${(c.fullName.ifBlank { "—" }).escapeHtml()}</p>
                     <span class="sd-cadet-badge">Курсант</span>
                 </div>
                 <div class="sd-cadet-quick">
@@ -765,9 +1029,44 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
             </div>
         </div>"""
     }
-    val sessList = sessions.joinToString("") { s ->
-        """<div class="sd-record-row"><span>${formatDateTime(s.startTimeMillis)}</span> — ${s.status}</div>"""
+    val sessionsByWeekday = sessions.groupBy { getWeekdayIndex(it.startTimeMillis) }
+    val scheduleSectionsHtml = if (sessions.isEmpty()) {
+        """<p class="sd-muted">Нет записанных на вождение курсантов</p>"""
+    } else {
+        WEEKDAY_NAMES.mapIndexed { index, dayName ->
+            val daySessions = (sessionsByWeekday[index] ?: emptyList()).sortedBy { it.startTimeMillis ?: 0L }
+            val count = daySessions.size
+            val cardsHtml = daySessions.joinToString("") { s ->
+                val cadetName = cadets.find { it.id == s.cadetId }?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "Курсант (${s.cadetId.take(8)})"
+                val dateStr = formatDateOnly(s.startTimeMillis)
+                val timeStr = formatTimeOnly(s.startTimeMillis)
+                val startMs = s.startTimeMillis ?: 0L
+                val bookedByCadet = s.openWindowId.isNotBlank()
+                val statusText = when {
+                    bookedByCadet && !s.instructorConfirmed -> "Курсант забронировал — ожидает вашего подтверждения"
+                    !s.instructorConfirmed -> "Ожидает подтверждения записи курсантом"
+                    s.status == "inProgress" -> "В процессе"
+                    else -> "Подтверждён"
+                }
+                val showConfirm = bookedByCadet && !s.instructorConfirmed
+                val showStart = s.status == "scheduled" && s.instructorConfirmed
+                val confirmBtn = if (showConfirm) """<button type="button" class="sd-btn sd-btn-small sd-btn-primary sd-home-schedule-confirm" data-session-id="${s.id.escapeHtml()}" title="Подтвердить бронь">$iconSelectSvg Подтвердить</button>""" else ""
+                val startBtn = if (showStart) """<button type="button" class="sd-btn sd-btn-small sd-btn-primary sd-home-schedule-start" data-session-id="${s.id.escapeHtml()}" data-start-ms="$startMs" title="Начать вождение (доступно за 15 мин)">$iconPlaySvg Начать</button>""" else ""
+                val lateBtn = if (s.status == "scheduled") """<button type="button" class="sd-btn sd-btn-small sd-btn-late sd-home-schedule-late" data-session-id="${s.id.escapeHtml()}" title="Опаздываю">$iconLateSvg Опаздываю</button>""" else ""
+                """<div class="sd-schedule-card" data-session-id="${s.id.escapeHtml()}" data-start-ms="$startMs">
+                <div class="sd-schedule-card-body">
+                    <div class="sd-schedule-card-row">$iconCalendarSvg <span class="sd-schedule-card-label">Дата:</span> $dateStr</div>
+                    <div class="sd-schedule-card-row">$iconClockSvg <span class="sd-schedule-card-label">Время:</span> $timeStr</div>
+                    <div class="sd-schedule-card-row">$iconUserSvg <span class="sd-schedule-card-label">Курсант:</span> ${cadetName.escapeHtml()}</div>
+                    <div class="sd-schedule-card-status">$statusText</div>
+                </div>
+                <div class="sd-schedule-card-actions">$confirmBtn $startBtn $lateBtn <button type="button" class="sd-btn sd-btn-small sd-btn-delete sd-home-schedule-cancel" data-session-id="${s.id.escapeHtml()}">$iconTrashSvg Отменить</button></div>
+            </div>"""
+            }
+            """<details class="sd-schedule-day" ${if (count > 0) "open" else ""}><summary class="sd-schedule-day-title">$dayName ($count)</summary><div class="sd-schedule-list">$cardsHtml</div></details>"""
+        }.joinToString("")
     }
+    val runningLateModalHtml = """<div class="sd-modal-overlay sd-hidden" id="sd-running-late-modal"><div class="sd-modal"><h3 class="sd-modal-title">Опаздываю</h3><p>Выберите задержку:</p><div class="sd-running-late-options"><label class="sd-radio"><input type="radio" name="sd-late-mins" value="5" /> 5 мин.</label><label class="sd-radio"><input type="radio" name="sd-late-mins" value="10" /> 10 мин.</label><label class="sd-radio"><input type="radio" name="sd-late-mins" value="15" /> 15 мин.</label></div><p class="sd-modal-actions"><button type="button" id="sd-running-late-confirm" class="sd-btn sd-btn-primary">Подтвердить</button><button type="button" id="sd-running-late-cancel" class="sd-btn sd-btn-secondary">Отмена</button></p></div></div>"""
     val instrInitials = user.fullName.split(" ").filter { it.isNotBlank() }.take(2).joinToString("") { it.first().uppercase() }.ifBlank { "?" }
     val instrAvatarHue = (user.fullName.hashCode() and 0x7FFFFFFF) % 360
     val instrAvatarBg = "hsl($instrAvatarHue,50%,32%)"
@@ -795,7 +1094,7 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
         $profileCard
         <div class="sd-block"><h3 class="sd-block-title">Мои курсанты (${cadets.size})</h3><div class="sd-cadet-cards">$cadetsListHtml</div></div>
         $loadingLine
-        <div class="sd-block"><h3 class="sd-block-title">Мой график</h3><div class="sd-list">$sessList</div></div>
+        <div class="sd-block sd-block-schedule"><h3 class="sd-block-title">Мой график</h3><div class="sd-schedule-days">$scheduleSectionsHtml</div>$runningLateModalHtml</div>
         <p class="sd-version">Версия: $version</p>"""
 }
 
@@ -822,21 +1121,58 @@ private fun renderRecordingTabContent(user: User): String {
     val loading = appState.recordingLoading
     val windows = appState.recordingOpenWindows
     val sessions = appState.recordingSessions
+    val cadets = appState.instructorCadets
     val loadingLine = if (loading) """<p class="sd-loading-text">Загрузка… <button type="button" id="sd-stop-loading" class="sd-btn sd-btn-small sd-btn-secondary">Показать пусто</button></p>""" else ""
     return when (user.role) {
         "instructor" -> {
-            val list = windows.joinToString("") { w ->
-                val dt = formatDateTime(w.dateTimeMillis)
-                val status = if (w.status == "booked") " (забронировано)" else ""
-                """<div class="sd-record-row"><span>$dt</span> $status <button type="button" class="sd-btn sd-btn-small sd-btn-delete" data-window-id="${w.id.escapeHtml()}">Удалить</button></div>"""
+            val scheduledSessions = sessions.filter { it.status == "scheduled" || it.status == "inProgress" }.take(50)
+            val assignedList = if (scheduledSessions.isEmpty()) """<p class="sd-muted">Нет записей</p>""" else scheduledSessions.joinToString("") { s ->
+                val cadetName = cadets.find { it.id == s.cadetId }?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "Курсант (${s.cadetId.take(8)})"
+                val dateStr = formatDateOnly(s.startTimeMillis)
+                val timeStr = formatTimeOnly(s.startTimeMillis)
+                val bookedByCadet = s.openWindowId.isNotBlank()
+                val statusText = when {
+                    bookedByCadet && !s.instructorConfirmed -> "Курсант забронировал — ожидает вашего подтверждения"
+                    !s.instructorConfirmed -> "Ожидает подтверждения записи курсантом"
+                    else -> "Подтверждён"
+                }
+                val showConfirm = bookedByCadet && !s.instructorConfirmed
+                val confirmBtn = if (showConfirm) """<button type="button" class="sd-btn sd-btn-small sd-btn-primary sd-recording-confirm-session" data-session-id="${s.id.escapeHtml()}">Подтвердить</button>""" else ""
+                """<div class="sd-recording-assigned-card">
+                    <div class="sd-recording-assigned-head"><strong>${cadetName.escapeHtml()}</strong></div>
+                    <div class="sd-recording-assigned-datetime">$dateStr, $timeStr</div>
+                    <div class="sd-recording-assigned-status">$statusText</div>
+                    <div class="sd-recording-assigned-actions">$confirmBtn <button type="button" class="sd-btn sd-btn-small sd-btn-delete sd-recording-cancel-session" data-session-id="${s.id.escapeHtml()}">Отменить</button></div>
+                </div>"""
             }
-            val sessionsList = sessions.filter { it.status == "scheduled" || it.status == "inProgress" }.take(20).joinToString("") { s ->
-                """<div class="sd-record-row"><span>${formatDateTime(s.startTimeMillis)}</span> — ${s.status}</div>"""
+            val freeWindows = windows.filter { it.status == "free" }
+            val freeWindowsList = if (freeWindows.isEmpty()) """<p class="sd-muted">Нет свободных окон</p>""" else freeWindows.joinToString("") { w ->
+                val dt = formatDateTime(w.dateTimeMillis)
+                """<div class="sd-recording-window-row"><span class="sd-recording-window-dt">$dt</span><span class="sd-recording-window-status">свободно</span><button type="button" class="sd-btn sd-btn-small sd-btn-delete" data-window-id="${w.id.escapeHtml()}">Удалить</button></div>"""
+            }
+            val cadetOptions = cadets.sortedBy { it.fullName }.joinToString("") { c ->
+                """<option value="${c.id.escapeHtml()}">${formatShortName(c.fullName).escapeHtml()}</option>"""
             }
             """<h2>Запись</h2>$loadingLine
-               <div class="sd-recording-section"><h3>Свободные окна</h3><div class="sd-list">$list</div></div>
-               <div class="sd-recording-section"><h3>Добавить окно</h3><p><input type="datetime-local" id="sd-new-window-dt" class="sd-input" /> <button type="button" id="sd-add-window" class="sd-btn sd-btn-primary">Добавить</button></p></div>
-               <div class="sd-recording-section"><h3>Ближайшие занятия</h3><div class="sd-list">$sessionsList</div></div>"""
+               <div class="sd-recording-block">
+                 <h3 class="sd-recording-section-title">Записанные на вождение</h3>
+                 <div class="sd-recording-assigned-list">$assignedList</div>
+               </div>
+               <div class="sd-recording-block">
+                 <h3 class="sd-recording-section-title">Свободные окна</h3>
+                 <div class="sd-list">$freeWindowsList</div>
+               </div>
+               <div class="sd-recording-block">
+                 <h3 class="sd-recording-section-title">Записать на вождение</h3>
+                 <p><label>Курсант</label><select id="sd-recording-book-cadet" class="sd-input"><option value="">Выберите курсанта</option>$cadetOptions</select></p>
+                 <p><label>Дата и время</label><input type="datetime-local" id="sd-recording-book-dt" class="sd-input" min="" /></p>
+                 <p><button type="button" id="sd-recording-book-btn" class="sd-btn sd-btn-primary">Записать</button></p>
+               </div>
+               <div class="sd-recording-block">
+                 <h3 class="sd-recording-section-title">Добавить окно</h3>
+                 <p><label>Дата и время</label><input type="datetime-local" id="sd-recording-add-dt" class="sd-input" min="" /></p>
+                 <p><button type="button" id="sd-recording-add-btn" class="sd-btn sd-btn-primary">Подтвердить</button></p>
+               </div>"""
         }
         "cadet" -> {
             val slotsHtml = windows.joinToString("") { w ->
@@ -844,8 +1180,8 @@ private fun renderRecordingTabContent(user: User): String {
             }
             val myRecords = sessions.filter { it.status == "scheduled" }.take(10).joinToString("") { """<div class="sd-record-row">${formatDateTime(it.startTimeMillis)} — ${it.status}</div>""" }
             """<h2>Запись на вождение</h2>$loadingLine
-               <div class="sd-recording-section"><h3>Свободные слоты</h3><div class="sd-list">$slotsHtml</div></div>
-               <div class="sd-recording-section"><h3>Мои записи</h3><div class="sd-list">$myRecords</div></div>"""
+               <div class="sd-recording-block"><h3 class="sd-recording-section-title">Свободные слоты</h3><div class="sd-list">$slotsHtml</div></div>
+               <div class="sd-recording-block"><h3 class="sd-recording-section-title">Мои записи</h3><div class="sd-list">$myRecords</div></div>"""
         }
         else -> """<h2>Запись</h2><p>Доступно инструктору и курсанту.</p>"""
     }
@@ -906,6 +1242,272 @@ private fun renderHistoryTabContent(user: User): String {
     return """<h2>История</h2>$loadingLine
         <div class="sd-block"><h3 class="sd-block-title">Занятия (${sessions.size})</h3>${sessionsGroupedHtml()}</div>
         <div class="sd-block"><h3 class="sd-block-title">Операции по балансу (${balance.size})</h3>${balanceGroupedHtml(false)}</div>"""
+}
+
+private fun renderTicketsTabContent(): String {
+    val catId = appState.pddCategoryId
+    val ticketName = appState.pddTicketName
+    val questions = appState.pddQuestions
+    val loading = appState.pddLoading
+    val finished = appState.pddFinished
+    val currentIdx = appState.pddCurrentIndex
+    val userSelections = appState.pddUserSelections
+
+    if (catId == null) {
+        val categoriesHtml = PDD_CATEGORIES.joinToString("") { (id, title) ->
+            """<div class="sd-ticket-category-card sd-ticket-category-clickable" data-pdd-category="${id.escapeHtml()}">
+                <span class="sd-ticket-category-icon">$iconTicketSvg</span>
+                <span class="sd-ticket-category-title">${title.escapeHtml()}</span>
+            </div>"""
+        }
+        return """<h2>Билеты ПДД</h2>
+        <div class="sd-tickets-content">
+            <p class="sd-tickets-intro">Выберите категорию — как в приложении Android.</p>
+            <div class="sd-ticket-categories">$categoriesHtml</div>
+            <p class="sd-tickets-links">
+                <a href="https://play.google.com/store/apps/details?id=com.example.startdrive" target="_blank" rel="noopener" class="sd-btn sd-btn-primary sd-btn-inline">Скачать приложение StartDrive (Google Play)</a>
+                <a href="https://pdd.ru/" target="_blank" rel="noopener" class="sd-link">ПДД РФ на pdd.ru</a>
+            </p>
+        </div>"""
+    }
+
+    if (catId == "A_B" || catId == "C_D") {
+        if (ticketName == null) {
+            val categoryTitle = PDD_CATEGORIES.find { it.first == catId }?.second ?: catId
+            val tickets = (1..40).map { "Билет $it" }
+            val ticketsHtml = tickets.joinToString("") { name ->
+                """<div class="sd-ticket-category-card sd-ticket-category-clickable sd-pdd-ticket" data-pdd-ticket="${name.escapeHtml()}" data-pdd-category="${catId.escapeHtml()}">
+                    <span class="sd-ticket-category-icon">$iconTicketSvg</span>
+                    <span class="sd-ticket-category-title">${name.escapeHtml()}</span>
+                </div>"""
+            }
+            return """<h2>Билеты ПДД</h2>
+            <div class="sd-tickets-content">
+                <button type="button" class="sd-btn sd-btn-secondary sd-pdd-back-categories">← К категориям</button>
+                <h3 class="sd-pdd-subtitle">$categoryTitle</h3>
+                <p class="sd-tickets-intro">Выберите билет (1–40).</p>
+                <div class="sd-ticket-categories">$ticketsHtml</div>
+            </div>"""
+        }
+
+        if (loading) {
+            return """<h2>Билеты ПДД</h2><div class="sd-tickets-content"><p class="sd-loading-text">Загрузка билета…</p></div>"""
+        }
+
+        if (questions.isEmpty()) {
+            return """<h2>Билеты ПДД</h2><div class="sd-tickets-content"><p class="sd-muted">Не удалось загрузить билет.</p><button type="button" class="sd-btn sd-btn-secondary sd-pdd-back-tickets">← К списку билетов</button></div>"""
+        }
+
+        if (finished) {
+            val correctCount = userSelections.entries.count { (qIdx, ansIdx) ->
+                questions.getOrNull(qIdx)?.answers?.getOrNull(ansIdx)?.isCorrect == true
+            }
+            val total = questions.size
+            val pct = if (total > 0) (correctCount * 100 / total) else 0
+            val pass = pct >= 80
+            return """<h2>Билеты ПДД</h2>
+            <div class="sd-tickets-content">
+                <div class="sd-pdd-result ${if (pass) "sd-pdd-result-pass" else "sd-pdd-result-fail"}">
+                    <p class="sd-pdd-result-title">${ticketName.escapeHtml()}</p>
+                    <p class="sd-pdd-result-score">Правильно: $correctCount из $total ($pct%)</p>
+                    <p class="sd-pdd-result-verdict">${if (pass) "Сдано" else "Не сдано (нужно не менее 80%)"}</p>
+                </div>
+                <button type="button" class="sd-btn sd-btn-primary sd-pdd-back-tickets">← К списку билетов</button>
+            </div>"""
+        }
+
+        val q = questions.getOrNull(currentIdx) ?: return ""
+        val selectedAns = userSelections[currentIdx]
+        val answered = selectedAns != null
+        val correctIdx = q.answers.indexOfFirst { it.isCorrect }
+        val answersHtml = q.answers.mapIndexed { idx, a ->
+            val isCorrectAnswer = a.isCorrect
+            val isSelectedWrong = answered && selectedAns == idx && !isCorrectAnswer
+            val showCorrect = answered && isCorrectAnswer
+            val cls = buildString {
+                append("sd-pdd-answer")
+                if (selectedAns == idx) append(" sd-pdd-answer-selected")
+                if (showCorrect) append(" sd-pdd-answer-correct")
+                if (isSelectedWrong) append(" sd-pdd-answer-wrong")
+            }
+            val disabledAttr = if (answered) " disabled" else ""
+            """<button type="button" class="$cls" data-pdd-answer-index="$idx" data-pdd-question-index="$currentIdx"$disabledAttr>${(idx + 1).toString().escapeHtml()}. ${a.answerText.escapeHtml()}</button>"""
+        }.joinToString("")
+        val imageSrc = q.image?.let { img ->
+            if (img.startsWith("./")) "pdd/${img.drop(2)}" else "pdd/images/$img"
+        }
+        val imageHtml = if (imageSrc != null) """<div class="sd-pdd-question-image"><img src="${imageSrc.escapeHtml()}" alt="" loading="lazy" /></div>""" else ""
+        val explanationHtml = if (answered && q.correctAnswer.isNotBlank()) {
+            val tipHtml = if (q.answerTip.isNotBlank()) """<p class="sd-pdd-answer-tip">${q.answerTip.escapeHtml()}</p>""" else ""
+            """<div class="sd-pdd-explanation">
+                <p class="sd-pdd-correct-answer">${q.correctAnswer.escapeHtml()}</p>
+                $tipHtml
+            </div>"""
+        } else ""
+        val progress = "${currentIdx + 1} / ${questions.size}"
+        val nextDisabled = !answered
+        val nextBtn = """<button type="button" class="sd-btn sd-btn-primary sd-pdd-next" ${if (nextDisabled) "disabled" else ""} data-pdd-question-index="$currentIdx">${if (currentIdx == questions.size - 1) "Завершить" else "Далее"}</button>"""
+        val backLabel = if (catId == "by_topic") "← К разделам" else "← К списку билетов"
+        return """<h2>Билеты ПДД</h2>
+        <div class="sd-tickets-content">
+            <button type="button" class="sd-btn sd-btn-secondary sd-pdd-back-tickets">$backLabel</button>
+            <p class="sd-pdd-progress">$progress</p>
+            <div class="sd-pdd-question-block">
+                <p class="sd-pdd-question-text">${q.question.escapeHtml()}</p>
+                $imageHtml
+                <div class="sd-pdd-answers">$answersHtml</div>
+                $explanationHtml
+                <div class="sd-pdd-next-row">$nextBtn</div>
+            </div>
+        </div>"""
+    }
+
+    if (catId == "signs") {
+        val categoryTitle = PDD_CATEGORIES.find { it.first == catId }?.second ?: catId
+        if (loading) return """<h2>Билеты ПДД</h2><div class="sd-tickets-content"><p class="sd-loading-text">Загрузка…</p></div>"""
+        val sections = appState.pddSignsSections
+        val sectionsHtml = sections.joinToString("") { sec ->
+            val itemsHtml = sec.items.joinToString("") { item ->
+                val imgSrc = if (item.imagePath.isNotBlank()) """<img src="${item.imagePath.escapeHtml()}" alt="" class="sd-pdd-sign-img" loading="lazy" />""" else ""
+                """<div class="sd-pdd-sign-item">
+                    $imgSrc
+                    <div class="sd-pdd-sign-info"><strong>${item.number.escapeHtml()} ${item.title.escapeHtml()}</strong><p class="sd-pdd-sign-desc">${item.description.escapeHtml()}</p></div>
+                </div>"""
+            }
+            """<details class="sd-pdd-section"><summary class="sd-pdd-section-title">${sec.name.escapeHtml()} (${sec.items.size})</summary><div class="sd-pdd-section-list">$itemsHtml</div></details>"""
+        }
+        return """<h2>Билеты ПДД</h2>
+        <div class="sd-tickets-content">
+            <button type="button" class="sd-btn sd-btn-secondary sd-pdd-back-categories">← К категориям</button>
+            <h3 class="sd-pdd-subtitle">$categoryTitle</h3>
+            <div class="sd-pdd-sections">$sectionsHtml</div>
+        </div>"""
+    }
+
+    if (catId == "markup") {
+        val categoryTitle = PDD_CATEGORIES.find { it.first == catId }?.second ?: catId
+        if (loading) return """<h2>Билеты ПДД</h2><div class="sd-tickets-content"><p class="sd-loading-text">Загрузка…</p></div>"""
+        val sections = appState.pddMarkupSections
+        val sectionsHtml = sections.joinToString("") { sec ->
+            val itemsHtml = sec.items.joinToString("") { item ->
+                val imgSrc = if (item.imagePath.isNotBlank()) """<img src="${item.imagePath.escapeHtml()}" alt="" class="sd-pdd-markup-img" loading="lazy" />""" else ""
+                """<div class="sd-pdd-markup-item">
+                    $imgSrc
+                    <div class="sd-pdd-markup-info"><strong>${item.number.escapeHtml()}</strong><p class="sd-pdd-markup-desc">${item.description.escapeHtml()}</p></div>
+                </div>"""
+            }
+            """<details class="sd-pdd-section"><summary class="sd-pdd-section-title">${sec.name.escapeHtml()} (${sec.items.size})</summary><div class="sd-pdd-section-list">$itemsHtml</div></details>"""
+        }
+        return """<h2>Билеты ПДД</h2>
+        <div class="sd-tickets-content">
+            <button type="button" class="sd-btn sd-btn-secondary sd-pdd-back-categories">← К категориям</button>
+            <h3 class="sd-pdd-subtitle">$categoryTitle</h3>
+            <div class="sd-pdd-sections">$sectionsHtml</div>
+        </div>"""
+    }
+
+    if (catId == "penalties") {
+        val categoryTitle = PDD_CATEGORIES.find { it.first == catId }?.second ?: catId
+        if (loading) return """<h2>Билеты ПДД</h2><div class="sd-tickets-content"><p class="sd-loading-text">Загрузка…</p></div>"""
+        val list = appState.pddPenalties
+        val itemsHtml = list.joinToString("") { p ->
+            """<div class="sd-pdd-penalty-item">
+                <span class="sd-pdd-penalty-art">${p.articlePart.escapeHtml()}</span>
+                <p class="sd-pdd-penalty-text">${p.text.escapeHtml()}</p>
+                <p class="sd-pdd-penalty-penalty">${p.penalty.escapeHtml()}</p>
+            </div>"""
+        }
+        return """<h2>Билеты ПДД</h2>
+        <div class="sd-tickets-content">
+            <button type="button" class="sd-btn sd-btn-secondary sd-pdd-back-categories">← К категориям</button>
+            <h3 class="sd-pdd-subtitle">$categoryTitle</h3>
+            <div class="sd-pdd-penalties-list">$itemsHtml</div>
+        </div>"""
+    }
+
+    if (catId == "by_topic") {
+        val categoryTitle = PDD_CATEGORIES.find { it.first == catId }?.second ?: catId
+        if (loading) return """<h2>Билеты ПДД</h2><div class="sd-tickets-content"><p class="sd-loading-text">Загрузка вопросов по разделам…</p></div>"""
+        if (questions.isNotEmpty() && finished) {
+            val correctCount = userSelections.entries.count { (qIdx, ansIdx) ->
+                questions.getOrNull(qIdx)?.answers?.getOrNull(ansIdx)?.isCorrect == true
+            }
+            val total = questions.size
+            val pct = if (total > 0) (correctCount * 100 / total) else 0
+            val pass = pct >= 80
+            return """<h2>Билеты ПДД</h2>
+            <div class="sd-tickets-content">
+                <div class="sd-pdd-result ${if (pass) "sd-pdd-result-pass" else "sd-pdd-result-fail"}">
+                    <p class="sd-pdd-result-title">${(ticketName ?: "Тест по разделу").escapeHtml()}</p>
+                    <p class="sd-pdd-result-score">Правильно: $correctCount из $total ($pct%)</p>
+                    <p class="sd-pdd-result-verdict">${if (pass) "Сдано" else "Не сдано (нужно не менее 80%)"}</p>
+                </div>
+                <button type="button" class="sd-btn sd-btn-primary sd-pdd-back-tickets">← К разделам</button>
+            </div>"""
+        }
+        if (questions.isNotEmpty() && !finished) {
+            val q = questions.getOrNull(currentIdx) ?: return ""
+            val selectedAns = userSelections[currentIdx]
+            val answered = selectedAns != null
+            val answersHtml = q.answers.mapIndexed { idx, a ->
+                val cls = buildString {
+                    append("sd-pdd-answer")
+                    if (selectedAns == idx) append(" sd-pdd-answer-selected")
+                    if (answered && a.isCorrect) append(" sd-pdd-answer-correct")
+                    if (answered && selectedAns == idx && !a.isCorrect) append(" sd-pdd-answer-wrong")
+                }
+            val disabledAttr = if (answered) " disabled" else ""
+                """<button type="button" class="$cls" data-pdd-answer-index="$idx" data-pdd-question-index="$currentIdx"$disabledAttr>${(idx + 1).toString().escapeHtml()}. ${a.answerText.escapeHtml()}</button>"""
+            }.joinToString("")
+            val imageSrc = q.image?.let { img -> if (img.startsWith("./")) "pdd/${img.drop(2)}" else "pdd/images/$img" }
+            val imageHtml = if (imageSrc != null) """<div class="sd-pdd-question-image"><img src="${imageSrc.escapeHtml()}" alt="" loading="lazy" /></div>""" else ""
+            val explanationHtml = if (answered && q.correctAnswer.isNotBlank()) {
+                val tipHtml = if (q.answerTip.isNotBlank()) """<p class="sd-pdd-answer-tip">${q.answerTip.escapeHtml()}</p>""" else ""
+                """<div class="sd-pdd-explanation"><p class="sd-pdd-correct-answer">${q.correctAnswer.escapeHtml()}</p>$tipHtml</div>"""
+            } else ""
+            val nextDisabled = !answered
+            val nextBtn = """<button type="button" class="sd-btn sd-btn-primary sd-pdd-next" ${if (nextDisabled) "disabled" else ""} data-pdd-question-index="$currentIdx">${if (currentIdx == questions.size - 1) "Завершить" else "Далее"}</button>"""
+            return """<h2>Билеты ПДД</h2>
+        <div class="sd-tickets-content">
+            <button type="button" class="sd-btn sd-btn-secondary sd-pdd-back-tickets">← К разделам</button>
+            <p class="sd-pdd-progress">Вопрос ${currentIdx + 1} из ${questions.size}</p>
+            <div class="sd-pdd-question-block">
+                <p class="sd-pdd-question-text">${q.question.escapeHtml()}</p>
+                $imageHtml
+                <div class="sd-pdd-answers">$answersHtml</div>
+                $explanationHtml
+                <div class="sd-pdd-next-row">$nextBtn</div>
+            </div>
+        </div>"""
+        }
+        val sections = appState.pddByTopicSections
+        val sectionsHtml = sections.mapIndexed { secIdx, sec ->
+            val count = sec.questions.size
+            val questionsPreview = sec.questions.take(2).joinToString("") { q ->
+                """<p class="sd-pdd-topic-q">${q.question.escapeHtml()}</p>"""
+            }
+            """<details class="sd-pdd-section"><summary class="sd-pdd-section-title">${sec.name.escapeHtml()} ($count вопросов)</summary><div class="sd-pdd-topic-questions">$questionsPreview${if (sec.questions.size > 2) """<p class="sd-pdd-topic-more">… и ещё ${sec.questions.size - 2}</p>""" else ""}<button type="button" class="sd-btn sd-btn-primary sd-pdd-topic-start" data-pdd-topic-index="$secIdx">Пройти тест</button></div></details>"""
+        }.joinToString("")
+        return """<h2>Билеты ПДД</h2>
+        <div class="sd-tickets-content">
+            <button type="button" class="sd-btn sd-btn-secondary sd-pdd-back-categories">← К категориям</button>
+            <h3 class="sd-pdd-subtitle">$categoryTitle</h3>
+            <p class="sd-tickets-intro">Вопросы по разделам из билетов категории AB. Выберите раздел и пройдите тест.</p>
+            <div class="sd-pdd-sections">$sectionsHtml</div>
+        </div>"""
+    }
+
+    return renderTicketsTabContentCategoriesOnly()
+}
+
+private fun renderTicketsTabContentCategoriesOnly(): String {
+    val categoriesHtml = PDD_CATEGORIES.joinToString("") { (id, title) ->
+        """<div class="sd-ticket-category-card" data-pdd-category="${id.escapeHtml()}">
+            <span class="sd-ticket-category-icon">$iconTicketSvg</span>
+            <span class="sd-ticket-category-title">${title.escapeHtml()}</span>
+        </div>"""
+    }
+    return """<h2>Билеты ПДД</h2><div class="sd-tickets-content"><p class="sd-tickets-intro">Выберите категорию.</p><div class="sd-ticket-categories">$categoriesHtml</div></div>"""
 }
 
 private fun renderSettingsTabContent(user: User): String =
@@ -1039,7 +1641,7 @@ private fun getPanelTabButtonsAndContent(user: User, tabs: List<String>): Pair<S
         "Баланс" -> renderBalanceTabContent(user)
         "Запись", "Запись на вождение" -> renderRecordingTabContent(user)
         "История" -> renderHistoryTabContent(user)
-        "Билеты" -> """<h2>Билеты ПДД</h2><div class="sd-tickets-content"><p>Билеты ПДД — в приложении: темы, знаки, разметка, штрафы, билеты.</p><p><a href="https://play.google.com/store/apps/details?id=com.example.startdrive" target="_blank" rel="noopener">Скачать приложение StartDrive (Google Play)</a></p><p><a href="https://pdd.ru/" target="_blank" rel="noopener">ПДД РФ на pdd.ru</a></p></div>"""
+        "Билеты" -> renderTicketsTabContent()
         "ПДД" -> """<h2>$tabName</h2><p>Правила дорожного движения — полный функционал в приложении.</p><p><a href="https://play.google.com/store/apps/details?id=com.example.startdrive" target="_blank" rel="noopener">Приложение StartDrive</a> · <a href="https://pdd.ru/" target="_blank" rel="noopener">ПДД РФ (pdd.ru)</a></p>"""
         "Настройки" -> renderSettingsTabContent(user)
         else -> """<h2>$tabName</h2><p>Раздел в разработке.</p>"""
@@ -1082,6 +1684,100 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             try {
                 closestHelper(target, s) as? org.w3c.dom.Element
             } catch (_: Throwable) { null }
+        }
+        if (appState.user?.role == "instructor" || appState.user?.role == "cadet") {
+            val pddCategoryCard = closest(".sd-ticket-category-card")
+            if (pddCategoryCard != null) {
+                val catId = pddCategoryCard.getAttribute("data-pdd-category")
+                if (catId != null && catId.isNotBlank()) {
+                    handlePddCategoryClick(catId)
+                    (e as? org.w3c.dom.events.Event)?.preventDefault()
+                    (e as? org.w3c.dom.events.Event)?.stopPropagation()
+                    return@addEventListener
+                }
+            }
+            val pddBackCat = closest(".sd-pdd-back-categories")
+            if (pddBackCat != null) {
+                updateState {
+                    pddCategoryId = null; pddTicketName = null; pddQuestions = emptyList()
+                    pddCurrentIndex = 0; pddUserSelections = emptyMap(); pddFinished = false
+                    pddSignsSections = emptyList(); pddMarkupSections = emptyList(); pddPenalties = emptyList(); pddByTopicSections = emptyList()
+                }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
+            val pddTicket = closest(".sd-pdd-ticket")
+            if (pddTicket != null) {
+                val ticketName = pddTicket.getAttribute("data-pdd-ticket") ?: return@addEventListener
+                val categoryId = pddTicket.getAttribute("data-pdd-category") ?: return@addEventListener
+                updateState { pddTicketName = ticketName; pddLoading = true }
+                val fileName = js("encodeURIComponent").unsafeCast<(String) -> String>().invoke("$ticketName.json")
+                val path = if (categoryId == "A_B") "pdd/tickets/$fileName" else "pdd/tickets/$categoryId/$fileName"
+                window.fetch(path).then { r: dynamic ->
+                    r.text().then { text: dynamic ->
+                        val jsonText = text.unsafeCast<String>()
+                        val questions = parseTicketJson(jsonText)
+                        updateState {
+                            pddQuestions = questions; pddCurrentIndex = 0; pddUserSelections = emptyMap()
+                            pddFinished = false; pddLoading = false
+                        }
+                    }
+                }.catch { _: dynamic ->
+                    updateState { pddLoading = false; pddQuestions = emptyList() }
+                }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
+            val pddBackTickets = closest(".sd-pdd-back-tickets")
+            if (pddBackTickets != null) {
+                updateState {
+                    pddTicketName = null; pddQuestions = emptyList(); pddCurrentIndex = 0
+                    pddUserSelections = emptyMap(); pddFinished = false
+                }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
+            val pddAnswer = closest(".sd-pdd-answer")
+            if (pddAnswer != null) {
+                if (pddAnswer.getAttribute("disabled") != null) return@addEventListener
+                val answerIndex = pddAnswer.getAttribute("data-pdd-answer-index")?.toIntOrNull() ?: return@addEventListener
+                val questionIndex = pddAnswer.getAttribute("data-pdd-question-index")?.toIntOrNull() ?: return@addEventListener
+                updateState {
+                    val m = pddUserSelections.toMutableMap()
+                    m[questionIndex] = answerIndex
+                    pddUserSelections = m
+                }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
+            val pddNext = closest(".sd-pdd-next")
+            if (pddNext != null && pddNext.getAttribute("disabled") == null) {
+                val idx = appState.pddCurrentIndex
+                val total = appState.pddQuestions.size
+                val sel = appState.pddUserSelections[idx]
+                if (sel != null) {
+                    if (idx >= total - 1) updateState { pddFinished = true }
+                    else updateState { pddCurrentIndex = idx + 1 }
+                }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
+            val pddTopicStart = closest(".sd-pdd-topic-start")
+            if (pddTopicStart != null) {
+                val idxStr = pddTopicStart.getAttribute("data-pdd-topic-index") ?: return@addEventListener
+                val secIdx = idxStr.toIntOrNull() ?: return@addEventListener
+                val sections = appState.pddByTopicSections
+                val sec = sections.getOrNull(secIdx) ?: return@addEventListener
+                updateState {
+                    pddQuestions = sec.questions
+                    pddTicketName = "По разделу: ${sec.name}"
+                    pddCurrentIndex = 0
+                    pddUserSelections = emptyMap()
+                    pddFinished = false
+                }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
         }
         val summaryInMainSection = closest("details[data-admin-section] summary")
         if (summaryInMainSection != null && appState.user?.role == "admin") {
@@ -1480,12 +2176,12 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 }
             })
             document.getElementById("sd-btn-signout-pending")?.addEventListener("click", {
-                signOut()
+                signOutAndClearPresence()
             })
         }
         AppScreen.ProfileNotFound -> {
             document.getElementById("sd-btn-signout-profile-not-found")?.addEventListener("click", {
-                signOut()
+                signOutAndClearPresence()
             })
         }
         AppScreen.Admin, AppScreen.Instructor, AppScreen.Cadet -> {
@@ -1606,8 +2302,83 @@ private fun attachListeners(root: org.w3c.dom.Element) {
             val u = appState.user
             u?.let { usr ->
                 document.getElementById("sd-btn-signout")?.addEventListener("click", {
-                signOut()
+                signOutAndClearPresence()
             })
+            if (usr.role == "instructor") {
+                val homeConfirmNodes = root.querySelectorAll(".sd-home-schedule-confirm")
+                for (k in 0 until homeConfirmNodes.length) {
+                    val btn = homeConfirmNodes.item(k) as? org.w3c.dom.Element ?: continue
+                    val sessionId = btn.getAttribute("data-session-id") ?: continue
+                    btn.addEventListener("click", {
+                        confirmBookingByInstructor(sessionId) { err ->
+                            if (err != null) updateState { networkError = err }
+                            else getSessionsForInstructor(usr.id) { sess -> updateState { recordingSessions = sess } }
+                        }
+                    })
+                }
+                val homeStartNodes = root.querySelectorAll(".sd-home-schedule-start")
+                val startThresholdMs = START_ALLOWED_MINUTES_BEFORE * 60 * 1000
+                for (k in 0 until homeStartNodes.length) {
+                    val btn = homeStartNodes.item(k) as? org.w3c.dom.Element ?: continue
+                    val sessionId = btn.getAttribute("data-session-id") ?: continue
+                    val startMsStr = btn.getAttribute("data-start-ms")
+                    btn.addEventListener("click", {
+                        val startMs = startMsStr?.toLongOrNull() ?: 0L
+                        val now = js("Date.now()").unsafeCast<Double>().toLong()
+                        if (now < startMs - startThresholdMs) {
+                            showToast("Ещё рано! Кнопка активируется за 15 мин. до вождения.")
+                            return@addEventListener
+                        }
+                        requestStartByInstructor(sessionId) { err ->
+                            if (err != null) updateState { networkError = err }
+                            else getSessionsForInstructor(usr.id) { sess -> updateState { recordingSessions = sess } }
+                        }
+                    })
+                }
+                val homeLateNodes = root.querySelectorAll(".sd-home-schedule-late")
+                for (k in 0 until homeLateNodes.length) {
+                    val btn = homeLateNodes.item(k) as? org.w3c.dom.Element ?: continue
+                    val sessionId = btn.getAttribute("data-session-id") ?: continue
+                    btn.addEventListener("click", {
+                        val modal = document.getElementById("sd-running-late-modal") ?: return@addEventListener
+                        modal.asDynamic().dataset["sessionId"] = sessionId
+                        (root.querySelector("input[name=\"sd-late-mins\"][value=\"5\"]")?.asDynamic())?.checked = true
+                        modal.classList.remove("sd-hidden")
+                    })
+                }
+                document.getElementById("sd-running-late-confirm")?.addEventListener("click", {
+                    val modal = document.getElementById("sd-running-late-modal") ?: return@addEventListener
+                    val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
+                    val checkedEl = root.querySelector("input[name=\"sd-late-mins\"]:checked")?.asDynamic()
+                    val delay = (checkedEl?.value as? String)?.toIntOrNull() ?: run { showToast("Выберите задержку"); return@addEventListener }
+                    setInstructorRunningLate(sessionId, delay) { err ->
+                        if (err != null) updateState { networkError = err }
+                        else {
+                            getSessionsForInstructor(usr.id) { sess -> updateState { recordingSessions = sess } }
+                            modal.classList.add("sd-hidden")
+                        }
+                    }
+                })
+                document.getElementById("sd-running-late-cancel")?.addEventListener("click", {
+                    document.getElementById("sd-running-late-modal")?.classList?.add("sd-hidden")
+                })
+                val homeCancelNodes = root.querySelectorAll(".sd-home-schedule-cancel")
+                for (k in 0 until homeCancelNodes.length) {
+                    val btn = homeCancelNodes.item(k) as? org.w3c.dom.Element ?: continue
+                    val sessionId = btn.getAttribute("data-session-id") ?: continue
+                    btn.addEventListener("click", {
+                        if (!window.confirm("Вы уверены, что хотите отменить вождение?")) return@addEventListener
+                        cancelByInstructor(sessionId) { err ->
+                            if (err != null) updateState { networkError = err }
+                            else getOpenWindowsForInstructor(usr.id) { wins ->
+                                getSessionsForInstructor(usr.id) { sess ->
+                                    updateState { recordingOpenWindows = wins; recordingSessions = sess }
+                                }
+                            }
+                        }
+                    })
+                }
+            }
             document.getElementById("sd-chat-back")?.addEventListener("click", {
                 try { (voiceRecorder.asDynamic()).stop() } catch (_: Throwable) { }
                 val stream = voiceRecorderStream
@@ -1681,22 +2452,86 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     }
                 }, 200).unsafeCast<Int>()
             }
-            document.getElementById("sd-add-window")?.addEventListener("click", {
-                val input = document.getElementById("sd-new-window-dt") as? HTMLInputElement
+            document.getElementById("sd-recording-book-dt")?.setAttribute("min", getDatetimeLocalMin())
+            document.getElementById("sd-recording-add-dt")?.setAttribute("min", getDatetimeLocalMin())
+            document.getElementById("sd-recording-add-btn")?.addEventListener("click", {
+                val input = document.getElementById("sd-recording-add-dt") as? HTMLInputElement
                 val v = input?.value ?: ""
-                if (v.isBlank()) return@addEventListener
+                if (v.isBlank()) { updateState { networkError = "Укажите дату и время" }; return@addEventListener }
                 val dateFn = js("function(s){ return new Date(s).getTime(); }").unsafeCast<(String) -> Number>()
                 val ms = dateFn(v).toLong()
                 if (ms <= 0) return@addEventListener
+                val nowMs = js("Date.now()").unsafeCast<Double>().toLong()
+                if (ms < nowMs) { showToast("Нельзя выбрать прошедшую дату и время"); return@addEventListener }
+                val occupied = findOccupiedMessage(ms, appState.recordingSessions, appState.recordingOpenWindows, appState.instructorCadets)
+                if (occupied != null) { showToast(occupied); return@addEventListener }
                 addOpenWindow(usr.id, ms) { _, err ->
                     if (err != null) updateState { networkError = err }
-                    else getOpenWindowsForInstructor(usr.id) { wins ->
-                        getSessionsForInstructor(usr.id) { sess ->
-                            updateState { recordingOpenWindows = wins; recordingSessions = sess }
+                    else {
+                        getOpenWindowsForInstructor(usr.id) { wins ->
+                            getSessionsForInstructor(usr.id) { sess ->
+                                updateState { recordingOpenWindows = wins; recordingSessions = sess; networkError = null }
+                            }
                         }
+                        input?.value = ""
                     }
                 }
             })
+            document.getElementById("sd-recording-book-btn")?.addEventListener("click", {
+                val cadetSelect = document.getElementById("sd-recording-book-cadet") as? HTMLSelectElement
+                val cadetId = cadetSelect?.value?.takeIf { it.isNotBlank() } ?: run { updateState { networkError = "Выберите курсанта" }; return@addEventListener }
+                val input = document.getElementById("sd-recording-book-dt") as? HTMLInputElement
+                val v = input?.value ?: ""
+                if (v.isBlank()) { updateState { networkError = "Укажите дату и время" }; return@addEventListener }
+                val dateFn = js("function(s){ return new Date(s).getTime(); }").unsafeCast<(String) -> Number>()
+                val ms = dateFn(v).toLong()
+                if (ms <= 0) return@addEventListener
+                val nowMs = js("Date.now()").unsafeCast<Double>().toLong()
+                if (ms < nowMs) { showToast("Нельзя выбрать прошедшую дату и время"); return@addEventListener }
+                val occupied = findOccupiedMessage(ms, appState.recordingSessions, appState.recordingOpenWindows, appState.instructorCadets)
+                if (occupied != null) { showToast(occupied); return@addEventListener }
+                val cadet = appState.instructorCadets.find { it.id == cadetId }
+                if (cadet == null) { updateState { networkError = "Курсант не найден" }; return@addEventListener }
+                if (cadet.balance <= 0) { updateState { networkError = "У курсанта 0 талонов, запись невозможна" }; return@addEventListener }
+                val scheduledCount = appState.recordingSessions.count { it.cadetId == cadetId && (it.status == "scheduled" || it.status == "inProgress") }
+                if (scheduledCount >= cadet.balance) { updateState { networkError = "По балансу курсанта уже запланировано макс. вождений" }; return@addEventListener }
+                createSession(usr.id, cadetId, ms, null) { _, err ->
+                    if (err != null) updateState { networkError = err }
+                    else {
+                        getSessionsForInstructor(usr.id) { sess ->
+                            updateState { recordingSessions = sess; networkError = null }
+                        }
+                        input?.value = ""
+                    }
+                }
+            })
+            val confirmSessionNodes = root.querySelectorAll(".sd-recording-confirm-session")
+            for (k in 0 until confirmSessionNodes.length) {
+                val btn = confirmSessionNodes.item(k) as? org.w3c.dom.Element ?: continue
+                val sessionId = btn.getAttribute("data-session-id") ?: continue
+                btn.addEventListener("click", {
+                    confirmBookingByInstructor(sessionId) { err ->
+                        if (err != null) updateState { networkError = err }
+                        else getSessionsForInstructor(usr.id) { sess -> updateState { recordingSessions = sess } }
+                    }
+                })
+            }
+            val cancelSessionNodes = root.querySelectorAll(".sd-recording-cancel-session")
+            for (k in 0 until cancelSessionNodes.length) {
+                val btn = cancelSessionNodes.item(k) as? org.w3c.dom.Element ?: continue
+                val sessionId = btn.getAttribute("data-session-id") ?: continue
+                btn.addEventListener("click", {
+                    if (!window.confirm("Вы уверены, что хотите отменить вождение?")) return@addEventListener
+                    cancelByInstructor(sessionId) { err ->
+                        if (err != null) updateState { networkError = err }
+                        else getOpenWindowsForInstructor(usr.id) { wins ->
+                            getSessionsForInstructor(usr.id) { sess ->
+                                updateState { recordingOpenWindows = wins; recordingSessions = sess }
+                            }
+                        }
+                    }
+                })
+            }
             val delNodes = root.querySelectorAll(".sd-btn-delete[data-window-id]")
             for (k in 0 until delNodes.length) {
                 val btn = delNodes.item(k) as? org.w3c.dom.Element ?: continue
@@ -1766,6 +2601,18 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     .catch { e -> updateState { networkError = (e.asDynamic().message as? String) ?: "Ошибка смены пароля" } }
             })
             }
+        }
+    }
+
+    root.querySelectorAll(".sd-ticket-category-card[data-pdd-category]").let { nodeList ->
+        for (k in 0 until nodeList.length) {
+            val el = nodeList.item(k) as? org.w3c.dom.Element ?: continue
+            val catId = el.getAttribute("data-pdd-category") ?: continue
+            el.addEventListener("click", {
+                if (appState.user?.role == "instructor" || appState.user?.role == "cadet") {
+                    handlePddCategoryClick(catId)
+                }
+            })
         }
     }
 }

@@ -22,6 +22,7 @@ fun getFirebaseConfig(): dynamic {
         "apiKey" to "YOUR_WEB_API_KEY",
         "authDomain" to "startdrive-573fa.firebaseapp.com",
         "projectId" to "startdrive-573fa",
+        "databaseURL" to "https://startdrive-573fa-default-rtdb.europe-west1.firebasedatabase.app",
         "storageBucket" to "startdrive-573fa.firebasestorage.app",
         "messagingSenderId" to "YOUR_SENDER_ID",
         "appId" to "YOUR_APP_ID",
@@ -81,6 +82,12 @@ fun signIn(email: String, password: String): Promise<Unit> =
     getAuth().signInWithEmailAndPassword(email, password).then { js("undefined") }
 
 fun signOut(): Promise<Unit> = getAuth().signOut()
+
+/** Выход с предварительным сбросом статуса «онлайн» в Realtime Database. */
+fun signOutAndClearPresence(): Promise<Unit> {
+    getCurrentUserId()?.let { setPresence(it, false) }
+    return signOut()
+}
 
 fun register(
     fullName: String,

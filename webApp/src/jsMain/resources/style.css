@@ -18,6 +18,8 @@
     box-sizing: border-box;
 }
 
+.sd-hidden { display: none !important; }
+
 /* Все кнопки и кликабельные элементы — с первого нажатия, без задержки на тач-устройствах */
 button,
 .sd-btn,
@@ -1558,7 +1560,176 @@ a.sd-cadet-icon-btn:active {
 }
 .sd-cadets-list { margin: 8px 0 16px 0; }
 .sd-recording-section { margin: 16px 0; }
-.sd-recording-section h3 { font-size: 1rem; margin: 0 0 8px 0; color: var(--sd-text); }
+.sd-recording-block {
+    margin-bottom: 20px;
+    padding: 16px 18px;
+    border-radius: 14px;
+    border: 1px solid rgba(0,80,140,0.25);
+    background: #d0e3f5;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.sd-recording-block:last-child { margin-bottom: 0; }
+.sd-recording-block h3,
+.sd-recording-section-title { font-size: 1rem; margin: 0 0 12px 0; color: var(--sd-text); font-weight: 600; }
+.sd-recording-block .sd-recording-section-title { margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid rgba(0,80,140,0.2); }
+.sd-recording-assigned-list { display: flex; flex-direction: column; gap: 10px; }
+.sd-recording-assigned-card {
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 2px solid rgba(255,255,255,0.2);
+    background: rgba(208, 227, 245, 0.25);
+}
+.sd-recording-assigned-head { margin-bottom: 4px; }
+.sd-recording-assigned-datetime { font-size: 0.9rem; color: var(--sd-text-muted); margin-bottom: 4px; }
+.sd-recording-assigned-status { font-size: 0.88rem; margin-bottom: 8px; }
+.sd-recording-assigned-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    justify-content: center;
+}
+.sd-recording-window-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 10px 0;
+    justify-content: space-between;
+}
+.sd-recording-window-dt { flex: 1 1 auto; min-width: 0; }
+.sd-recording-window-status { font-size: 0.9rem; color: var(--sd-text-muted); flex-shrink: 0; }
+.sd-recording-block select.sd-input { width: 100%; max-width: 320px; }
+.sd-recording-block label { display: block; font-size: 0.9rem; margin-bottom: 4px; color: var(--sd-text-muted); }
+.sd-recording-block p { margin: 0 0 12px 0; }
+.sd-recording-block p:last-child { margin-bottom: 0; }
+.sd-recording-block #sd-recording-book-btn,
+.sd-recording-block #sd-recording-add-btn {
+    display: block;
+    width: 100%;
+}
+
+/* Мой график — карточки записанных курсантов (Главная инструктора) */
+.sd-block-schedule .sd-schedule-list { display: flex; flex-direction: column; gap: 12px; }
+.sd-schedule-card {
+    padding: 14px 16px;
+    border-radius: 14px;
+    border: 2px solid rgba(0,80,140,0.25);
+    background: #d0e3f5;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+}
+.sd-schedule-card-head { margin-bottom: 6px; }
+.sd-schedule-card-datetime { font-size: 0.9rem; color: var(--sd-text-muted); margin-bottom: 4px; }
+.sd-schedule-card-status { font-size: 0.88rem; margin-bottom: 10px; }
+.sd-schedule-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    justify-content: center;
+}
+.sd-schedule-card-actions .sd-btn { display: inline-flex; align-items: center; gap: 6px; }
+.sd-schedule-card-actions .sd-btn svg { flex-shrink: 0; }
+
+.sd-schedule-days { display: flex; flex-direction: column; gap: 4px; }
+.sd-schedule-day { margin-bottom: 4px; }
+.sd-schedule-day-title {
+    padding: 10px 14px;
+    font-weight: 600;
+    font-size: 1rem;
+    cursor: pointer;
+    list-style: none;
+    border-radius: 10px;
+    background: rgba(0,80,140,0.12);
+    color: var(--sd-text);
+}
+.sd-schedule-day-title::-webkit-details-marker { display: none; }
+.sd-schedule-day[open] .sd-schedule-day-title { border-radius: 10px 10px 0 0; }
+.sd-schedule-day .sd-schedule-list { padding: 10px 14px 14px; border: 1px solid rgba(0,80,140,0.2); border-top: none; border-radius: 0 0 10px 10px; background: rgba(255,255,255,0.5); display: flex; flex-direction: column; gap: 12px; }
+.sd-schedule-card-body { margin-bottom: 10px; }
+.sd-schedule-card-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9rem;
+    margin-bottom: 4px;
+}
+.sd-schedule-card-row svg { flex-shrink: 0; opacity: 0.85; }
+.sd-schedule-card-label { color: var(--sd-text-secondary); min-width: 56px; }
+.sd-schedule-card-status { font-size: 0.88rem; margin-top: 6px; margin-bottom: 0; }
+.sd-btn-late { background: #f57c00; color: #fff; border: none; }
+.sd-btn-late:hover { background: #e65100; color: #fff; }
+
+.sd-running-late-options { display: flex; flex-direction: column; gap: 10px; margin: 14px 0; }
+.sd-radio { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 1rem; }
+
+/* Билеты ПДД — категории как в Android */
+.sd-tickets-content { padding: 0 2px; }
+.sd-tickets-intro { margin: 0 0 16px 0; color: var(--sd-text-secondary); font-size: 0.95rem; }
+.sd-ticket-categories { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+.sd-ticket-category-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 18px;
+    border-radius: 12px;
+    background: var(--sd-card);
+    border: 1px solid var(--sd-border);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    cursor: default;
+    transition: background 0.2s, border-color 0.2s;
+}
+.sd-ticket-category-card:hover { background: #f0f7ff; border-color: rgba(25, 118, 210, 0.3); }
+.sd-ticket-category-icon { display: inline-flex; flex-shrink: 0; color: var(--sd-primary); }
+.sd-ticket-category-icon svg { width: 24px; height: 24px; }
+.sd-ticket-category-title { font-weight: 600; font-size: 1rem; color: var(--sd-text); }
+.sd-ticket-category-hint { font-size: 0.85rem; color: var(--sd-text-secondary); margin-left: auto; }
+.sd-ticket-category-clickable { cursor: pointer; }
+.sd-ticket-category-clickable:hover { background: #e3f2fd !important; }
+.sd-pdd-subtitle { margin: 12px 0 8px 0; font-size: 1.1rem; color: var(--sd-text); }
+.sd-pdd-progress { margin: 8px 0; font-size: 0.9rem; color: var(--sd-text-secondary); }
+.sd-pdd-question-block { margin: 16px 0; padding: 16px; border-radius: 12px; background: var(--sd-card); border: 1px solid var(--sd-border); }
+.sd-pdd-question-text { font-size: 1.05rem; line-height: 1.5; margin: 0 0 14px 0; font-weight: 500; }
+.sd-pdd-answers { display: flex; flex-direction: column; gap: 8px; }
+.sd-pdd-answer { display: block; width: 100%; text-align: left; padding: 12px 14px; border-radius: 10px; border: 2px solid var(--sd-border); background: #fff; cursor: pointer; font-size: 0.95rem; transition: border-color 0.2s, background 0.2s; }
+.sd-pdd-answer:hover { border-color: var(--sd-primary-light); background: #f5f9ff; }
+.sd-pdd-answer-selected { border-color: var(--sd-primary); background: #e3f2fd; }
+.sd-pdd-answer-correct { border-color: #4caf50 !important; background: #e8f5e9 !important; }
+.sd-pdd-answer-wrong { border-color: #f44336 !important; background: #ffebee !important; }
+.sd-pdd-answer:disabled { cursor: default; opacity: 0.95; }
+.sd-pdd-question-image { margin: 12px 0; }
+.sd-pdd-question-image img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--sd-border); }
+.sd-pdd-explanation { margin-top: 14px; padding: 12px 14px; border-radius: 10px; background: #e3f2fd; border: 1px solid rgba(25, 118, 210, 0.3); }
+.sd-pdd-correct-answer { margin: 0 0 8px 0; font-weight: 700; font-size: 0.95rem; color: var(--sd-primary-dark); }
+.sd-pdd-answer-tip { margin: 0; font-size: 0.9rem; color: var(--sd-text-secondary); line-height: 1.45; }
+.sd-pdd-next-row { margin-top: 16px; }
+.sd-pdd-next:disabled { opacity: 0.6; cursor: not-allowed; }
+.sd-pdd-result { padding: 20px; border-radius: 14px; text-align: center; margin: 16px 0; }
+.sd-pdd-result-pass { background: #e8f5e9; border: 2px solid #4caf50; }
+.sd-pdd-result-fail { background: #ffebee; border: 2px solid #f44336; }
+.sd-pdd-result-title { font-weight: 700; font-size: 1.1rem; margin: 0 0 8px 0; }
+.sd-pdd-result-score { margin: 0 0 4px 0; font-size: 1rem; }
+.sd-pdd-result-verdict { margin: 0; font-weight: 600; }
+.sd-pdd-sections { margin-top: 12px; }
+.sd-pdd-section { margin-bottom: 8px; border: 1px solid var(--sd-border); border-radius: 10px; overflow: hidden; }
+.sd-pdd-section-title { padding: 10px 14px; font-weight: 600; cursor: pointer; list-style: none; margin: 0; background: rgba(0,80,140,0.08); }
+.sd-pdd-section-title::-webkit-details-marker { display: none; }
+.sd-pdd-section-list { padding: 10px 14px; display: flex; flex-direction: column; gap: 12px; }
+.sd-pdd-sign-item, .sd-pdd-markup-item { display: flex; gap: 14px; align-items: flex-start; padding: 10px; border-radius: 8px; background: var(--sd-card); border: 1px solid var(--sd-border); }
+.sd-pdd-sign-img, .sd-pdd-markup-img { width: 80px; height: 80px; object-fit: contain; flex-shrink: 0; }
+.sd-pdd-sign-info, .sd-pdd-markup-info { flex: 1; min-width: 0; }
+.sd-pdd-sign-desc, .sd-pdd-markup-desc { font-size: 0.9rem; color: var(--sd-text-secondary); margin: 6px 0 0 0; line-height: 1.4; }
+.sd-pdd-penalty-item { padding: 12px 14px; margin-bottom: 10px; border-radius: 10px; background: var(--sd-card); border: 1px solid var(--sd-border); }
+.sd-pdd-penalty-art { font-weight: 700; color: var(--sd-primary); }
+.sd-pdd-penalty-text { margin: 6px 0 4px 0; font-size: 0.95rem; }
+.sd-pdd-penalty-penalty { margin: 0; font-size: 0.9rem; color: var(--sd-text-secondary); }
+.sd-pdd-topic-questions { padding: 10px 14px; }
+.sd-pdd-topic-q { margin: 0 0 8px 0; font-size: 0.95rem; }
+.sd-pdd-topic-more { margin: 8px 0 0 0; font-size: 0.9rem; color: var(--sd-text-secondary); }
+.sd-pdd-topic-questions .sd-pdd-topic-start { margin-top: 12px; }
+.sd-tickets-links { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 0; }
+.sd-tickets-links .sd-link { color: var(--sd-primary); text-decoration: none; }
+.sd-tickets-links .sd-link:hover { text-decoration: underline; }
 
 .sd-card a {
     color: var(--sd-primary);
@@ -2382,6 +2553,32 @@ a.sd-cadet-icon-btn:active {
 
 .sd-btn-inline:hover {
     background: rgba(255,255,255,0.35);
+}
+
+/* Всплывающее уведомление (toast) */
+.sd-toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: min(90vw, 420px);
+    padding: 14px 20px;
+    background: #1a1a2e;
+    color: #fff;
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    font-size: 0.95rem;
+    line-height: 1.4;
+    z-index: 10000;
+    cursor: pointer;
+    animation: sd-toast-in 0.25s ease-out;
+}
+.sd-toast:hover {
+    background: #252540;
+}
+@keyframes sd-toast-in {
+    from { opacity: 0; transform: translateX(-50%) translateY(12px); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
 /* Адаптив под мобильные */

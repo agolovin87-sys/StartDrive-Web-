@@ -214,6 +214,139 @@ fun deleteOpenWindow(windowId: String, callback: (String?) -> Unit) {
         .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
 }
 
+/** Получить сессию по id (для отмены и проверок). */
+fun getSession(sessionId: String, callback: (DrivingSession?) -> Unit) {
+    getFirestore().collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId).get()
+        .then { doc: dynamic ->
+            if (doc?.exists != true) {
+                callback(null)
+                return@then
+            }
+            val d: dynamic = (doc.unsafeCast<dynamic>()).data()
+            if (d == null) {
+                callback(null)
+                return@then
+            }
+            val dyn = d.unsafeCast<dynamic>()
+            callback(DrivingSession(
+                id = doc.id,
+                instructorId = (dyn["instructorId"] as? String) ?: "",
+                cadetId = (dyn["cadetId"] as? String) ?: "",
+                startTimeMillis = parseTimestamp(dyn["startTime"]),
+                status = (dyn["status"] as? String) ?: "",
+                instructorRating = (dyn["instructorRating"] as? Number)?.toInt() ?: 0,
+                cadetRating = (dyn["cadetRating"] as? Number)?.toInt() ?: 0,
+                openWindowId = (dyn["openWindowId"] as? String) ?: "",
+                instructorConfirmed = dyn["instructorConfirmed"] as? Boolean ?: false,
+            ))
+        }
+        .catch { _ -> callback(null) }
+}
+
+/** Создать сессию вождения (инструктор записывает курсанта на дату/время, без окна). */
+fun createSession(instructorId: String, cadetId: String, dateTimeMillis: Long, openWindowId: String? = null, callback: (String?, String?) -> Unit) {
+    val ts = getFirestoreTimestampFromMillis(dateTimeMillis)
+    val ref = getFirestore().collection(FirebasePaths.DRIVING_SESSIONS).doc()
+    ref.set(kotlin.js.json(
+        "instructorId" to instructorId,
+        "cadetId" to cadetId,
+        "startTime" to ts,
+        "status" to "scheduled",
+        "instructorRating" to 0,
+        "cadetRating" to 0,
+        "instructorConfirmed" to false,
+        "openWindowId" to (openWindowId ?: "")
+    ))
+        .then { callback(ref.id, null) }
+        .catch { e: Throwable -> callback(null, (e.asDynamic().message as? String) ?: "Ошибка") }
+}
+
+/** Подтвердить запись на вождение (инструктор подтвердил бронь курсанта). */
+fun confirmBookingByInstructor(sessionId: String, callback: (String?) -> Unit) {
+    getFirestore().collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId)
+        .update("instructorConfirmed", true)
+        .then { callback(null) }
+        .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
+}
+
+/** Запрос инструктора на начало вождения — курсант увидит кнопку «Подтвердить». */
+fun requestStartByInstructor(sessionId: String, callback: (String?) -> Unit) {
+    getFirestore().collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId)
+        .update(kotlin.js.json("startRequestedByInstructor" to true))
+        .then { callback(null) }
+        .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
+}
+
+/** Начать вождение (перевести в inProgress, создать объект session). */
+fun startSession(sessionId: String, callback: (String?) -> Unit) {
+    val now = getFirestoreTimestampNow()
+    val sessionObj = kotlin.js.json(
+        "startTime" to (js("Date.now()").unsafeCast<Double>().toLong()),
+        "pausedTime" to 0,
+        "isActive" to true,
+        "cadetConfirmed" to false
+    )
+    getFirestore().collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId)
+        .update(kotlin.js.json(
+            "status" to "inProgress",
+            "session" to sessionObj
+        ))
+        .then { callback(null) }
+        .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
+}
+
+/** Инструктор опаздывает: сдвиг времени на N минут. */
+fun setInstructorRunningLate(sessionId: String, delayMinutes: Int, callback: (String?) -> Unit) {
+    getSession(sessionId) { session ->
+        if (session == null) {
+            callback("Сессия не найдена")
+            return@getSession
+        }
+        val startMs = session.startTimeMillis ?: run { callback("Нет времени начала"); return@getSession }
+        val newMs = startMs + delayMinutes * 60L * 1000L
+        val newTs = getFirestoreTimestampFromMillis(newMs)
+        val firestore = getFirestore()
+        firestore.collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId)
+            .update(kotlin.js.json(
+                "startTime" to newTs,
+                "delayNotificationMinutes" to delayMinutes
+            ))
+            .then {
+                if (session.openWindowId.isNotBlank()) {
+                    firestore.collection(FirebasePaths.INSTRUCTOR_OPEN_WINDOWS).doc(session.openWindowId)
+                        .update(kotlin.js.json("dateTime" to newTs))
+                } else js("Promise.resolve()")
+            }
+            .then { callback(null) }
+            .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
+    }
+}
+
+/** Отменить вождение инструктором: освободить окно (если было) и поставить статус отмены. */
+fun cancelByInstructor(sessionId: String, callback: (String?) -> Unit) {
+    getSession(sessionId) { session ->
+        if (session == null) {
+            callback("Сессия не найдена")
+            return@getSession
+        }
+        val firestore = getFirestore()
+        val windowId = session.openWindowId
+        val freeWindowPromise = if (windowId.isNotBlank()) {
+            firestore.collection(FirebasePaths.INSTRUCTOR_OPEN_WINDOWS).doc(windowId)
+                .update(kotlin.js.json("status" to "free", "cadetId" to null))
+        } else {
+            js("Promise.resolve()")
+        }
+        freeWindowPromise.then {
+            firestore.collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId).update(kotlin.js.json(
+                "status" to "cancelledByInstructor",
+                "cancelledAt" to getFirestoreTimestampNow()
+            ))
+        }.then { callback(null) }
+         .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
+    }
+}
+
 fun getBalanceHistory(userId: String, callback: (List<BalanceHistoryEntry>) -> Unit) {
     getFirestore().collection(FirebasePaths.USERS).doc(userId)
         .collection(FirebasePaths.BALANCE_HISTORY)

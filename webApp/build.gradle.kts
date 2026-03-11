@@ -1,5 +1,12 @@
+import org.gradle.api.tasks.Copy
+
 plugins {
     kotlin("multiplatform")
+}
+
+val copyPddToWeb = tasks.register<Copy>("copyPddToWeb") {
+    from(project(":app").file("src/main/assets/pdd"))
+    into(layout.projectDirectory.dir("src/jsMain/resources/pdd"))
 }
 
 kotlin {
@@ -20,3 +27,5 @@ kotlin {
         }
     }
 }
+
+tasks.named("jsProcessResources").configure { dependsOn(copyPddToWeb) }

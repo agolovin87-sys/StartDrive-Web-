@@ -1255,8 +1255,13 @@ private fun renderTicketsTabContent(): String {
 
     if (catId == null) {
         val categoriesHtml = PDD_CATEGORIES.joinToString("") { (id, title) ->
+            val iconHtml = when (id) {
+                "A_B" -> """<span class="sd-ticket-category-badge">AB</span>"""
+                "C_D" -> """<span class="sd-ticket-category-badge">CD</span>"""
+                else  -> """<span class="sd-ticket-category-icon">$iconTicketSvg</span>"""
+            }
             """<div class="sd-ticket-category-card sd-ticket-category-clickable" data-pdd-category="${id.escapeHtml()}">
-                <span class="sd-ticket-category-icon">$iconTicketSvg</span>
+                $iconHtml
                 <span class="sd-ticket-category-title">${title.escapeHtml()}</span>
             </div>"""
         }
@@ -1498,12 +1503,17 @@ private fun renderTicketsTabContent(): String {
 
 private fun renderTicketsTabContentCategoriesOnly(): String {
     val categoriesHtml = PDD_CATEGORIES.joinToString("") { (id, title) ->
+        val iconHtml = when (id) {
+            "A_B" -> """<span class="sd-ticket-category-badge">AB</span>"""
+            "C_D" -> """<span class="sd-ticket-category-badge">CD</span>"""
+            else  -> """<span class="sd-ticket-category-icon">$iconTicketSvg</span>"""
+        }
         """<div class="sd-ticket-category-card" data-pdd-category="${id.escapeHtml()}">
-            <span class="sd-ticket-category-icon">$iconTicketSvg</span>
+            $iconHtml
             <span class="sd-ticket-category-title">${title.escapeHtml()}</span>
         </div>"""
     }
-    return """<h2>Билеты ПДД</h2><div class="sd-tickets-content"><p class="sd-tickets-intro">Выберите категорию.</p><div class="sd-ticket-categories">$categoriesHtml</div></div>"""
+    return """<h2>Билеты ПДД</h2><div class="sd-tickets-content"><div class="sd-ticket-categories">$categoriesHtml</div></div>"""
 }
 
 private fun renderSettingsTabContent(user: User): String =

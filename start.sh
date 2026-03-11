@@ -9,9 +9,10 @@ if [ ! -f "$WEBPACK_OUTPUT" ]; then
   echo "Build complete."
 fi
 
+pkill -f "node serve.js" 2>/dev/null || true
 fuser -k 5000/tcp 2>/dev/null || true
 fuser -k 31997/tcp 2>/dev/null || true
-sleep 1
+sleep 2
 
 echo "Starting web server..."
 node serve.js

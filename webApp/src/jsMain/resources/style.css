@@ -865,7 +865,7 @@ a.sd-cadet-icon-btn:active {
 .sd-ucard-row-icon {
     display: inline-flex;
     align-items: center;
-    color: rgba(255,255,255,0.35);
+    color: #ffffff;
     flex-shrink: 0;
 }
 .sd-ucard-row-icon svg { width: 14px; height: 14px; }

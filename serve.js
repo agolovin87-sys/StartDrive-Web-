@@ -2,7 +2,6 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const PORT = 5000;
 const HOST = '0.0.0.0';
 
 const RESOURCES_DIR = path.join(__dirname, 'webApp/build/processedResources/js/main');
@@ -19,7 +18,7 @@ const mimeTypes = {
   '.json': 'application/json',
 };
 
-const server = http.createServer((req, res) => {
+function requestHandler(req, res) {
   let urlPath = req.url.split('?')[0];
   if (urlPath === '/') urlPath = '/index.html';
 
@@ -48,8 +47,14 @@ const server = http.createServer((req, res) => {
     });
     res.end(data);
   });
+}
+
+const server5000 = http.createServer(requestHandler);
+server5000.listen(5000, HOST, () => {
+  console.log(`StartDrive web server running at http://${HOST}:5000`);
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`StartDrive web server running at http://${HOST}:${PORT}`);
+const server31997 = http.createServer(requestHandler);
+server31997.listen(31997, HOST, () => {
+  console.log(`StartDrive web server also running at http://${HOST}:31997 (external port 80)`);
 });

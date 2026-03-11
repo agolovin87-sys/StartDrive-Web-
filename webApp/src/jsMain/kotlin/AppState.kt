@@ -91,9 +91,16 @@ data class AppState(
     var pddFinished: Boolean = false,
     var pddLoading: Boolean = false,
     var pddSignsSections: List<PddSignsSection> = emptyList(),
+    var pddSelectedSign: PddSignItem? = null, // выбранный знак для просмотра по отдельности
+    var pddSelectedSignSectionIndex: Int = -1,
+    var pddSelectedSignItemIndex: Int = -1,
+    var pddScrollToSignDetail: Boolean = false, // после перехода «к следующему знаку» прокрутить к началу пояснения
     var pddMarkupSections: List<PddMarkupSection> = emptyList(),
     var pddPenalties: List<PddPenaltyItem> = emptyList(),
     var pddByTopicSections: List<PddTopicSection> = emptyList(),
+    var pddTicketsBundle: dynamic = null, // { A_B: { "1": [...], ... }, C_D: { "1": [...], ... } } — загружается один раз
+    var pddStatsVersion: Int = 0, // увеличиваем при обнулении статистики для перерисовки списка
+    var pddResetConfirmCategory: String? = null, // показывать модальное подтверждение обнуления (без localhost в тексте)
 )
 
 var appState = AppState()

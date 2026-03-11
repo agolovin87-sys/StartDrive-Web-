@@ -125,6 +125,12 @@ fun main() {
                     lastRenderedTabIndex = state.selectedTabIndex
                 }
                 sdCard.innerHTML = tabContent
+                if (state.pddScrollToSignDetail && state.pddCategoryId == "signs" && state.pddSelectedSign != null) {
+                    (sdCard.querySelector("#sd-pdd-sign-detail-scroll") as? org.w3c.dom.Element)?.let { el ->
+                        el.unsafeCast<dynamic>().scrollIntoView(js("({ block: 'start', behavior: 'smooth' })"))
+                    }
+                    updateState { pddScrollToSignDetail = false }
+                }
                 attachListeners(root)
                 return
             }
@@ -588,26 +594,128 @@ private val PDD_CATEGORIES = listOf(
     "penalties" to "Штрафы",
 )
 
-/** Парсит JSON билета (массив вопросов) в List<PddQuestion>. */
+/** Ключ в localStorage для статистики билета (как в Android: pdd_stats). */
+private fun pddTicketStorageKey(categoryId: String, ticketName: String): String = "pdd_${categoryId}_$ticketName"
+
+/** Читает из localStorage сохранённые ответы по билету. Формат: "0:t,1:f,..." (индекс:true/false). */
+private fun getPddTicketSavedResults(categoryId: String, ticketName: String): Map<Int, Boolean> {
+    val storage = js("typeof window !== 'undefined' && window.localStorage").unsafeCast<Boolean>()
+    if (!storage) return emptyMap()
+    val raw = js("window.localStorage.getItem").unsafeCast<(String) -> String?>().invoke(pddTicketStorageKey(categoryId, ticketName)) ?: return emptyMap()
+    val map = mutableMapOf<Int, Boolean>()
+    raw.split(",").forEach { part ->
+        val p = part.split(":")
+        if (p.size == 2) {
+            val idx = p[0].toIntOrNull()
+            if (idx != null) map[idx] = (p[1] == "t")
+        }
+    }
+    return map
+}
+
+/** Возвращает (правильно, с ошибкой, без ответа) и CSS-класс для карточки билета. */
+private fun getPddTicketStat(categoryId: String, ticketName: String, questionsPerTicket: Int = 20): Triple<Int, Int, Int> {
+    val results = getPddTicketSavedResults(categoryId, ticketName)
+    val correct = results.values.count { it }
+    val incorrect = results.values.count { !it }
+    val noAnswer = questionsPerTicket - results.size
+    return Triple(correct, incorrect, noAnswer)
+}
+
+/** Класс фона карточки билета: зелёный — все верно, красный — есть ошибки, серый — не решал. */
+private fun getPddTicketCardStatClass(categoryId: String, ticketName: String, questionsPerTicket: Int = 20): String {
+    val (correct, incorrect, noAnswer) = getPddTicketStat(categoryId, ticketName, questionsPerTicket)
+    return when {
+        noAnswer == questionsPerTicket -> "sd-pdd-ticket-stat-gray"
+        incorrect > 0 -> "sd-pdd-ticket-stat-red"
+        correct == questionsPerTicket -> "sd-pdd-ticket-stat-green"
+        else -> "sd-pdd-ticket-stat-gray"
+    }
+}
+
+/** Сохраняет результат ответа на вопрос билета в localStorage. */
+private fun savePddTicketResult(categoryId: String, ticketName: String, questionIndex: Int, isCorrect: Boolean) {
+    val key = pddTicketStorageKey(categoryId, ticketName)
+    val existing = getPddTicketSavedResults(categoryId, ticketName).toMutableMap()
+    existing[questionIndex] = isCorrect
+    val value = existing.entries.sortedBy { it.key }.joinToString(",") { "${it.key}:${if (it.value) "t" else "f"}" }
+    js("window.localStorage.setItem").unsafeCast<(String, String) -> Unit>().invoke(key, value)
+}
+
+/** Удаляет статистику билетов для категории (обнуление). */
+private fun clearPddTicketStatsForCategory(categoryId: String) {
+    val storage = js("typeof window !== 'undefined' && window.localStorage").unsafeCast<Boolean>()
+    if (!storage) return
+    for (n in 1..40) {
+        js("window.localStorage.removeItem").unsafeCast<(String) -> Unit>().invoke(pddTicketStorageKey(categoryId, "Билет $n"))
+    }
+}
+
+/** Кэш бандла, встроенного в приложение (генерируется из pdd-tickets-bundle.json). */
+private var embeddedPddBundleCache: dynamic = null
+
+/** Возвращает бандл билетов из встроенного JSON (постранично внедрён при сборке). */
+private fun getEmbeddedPddBundle(): dynamic? {
+    val log = js("console.log").unsafeCast<(Any?) -> Unit>()
+    if (embeddedPddBundleCache != null && embeddedPddBundleCache != js("undefined")) {
+        log("PDD: embedded bundle (from cache)")
+        return embeddedPddBundleCache
+    }
+    log("PDD: trying embedded bundle...")
+    return try {
+        val json = PddTicketsEmbedded.json
+        log("PDD: embedded json length = ${json.length}")
+        if (json.isBlank()) {
+            log("PDD: embedded json is blank")
+            null
+        } else {
+            val parsed = js("JSON.parse").unsafeCast<(String) -> dynamic>().invoke(json)
+            embeddedPddBundleCache = parsed
+            log("PDD: embedded bundle OK")
+            parsed
+        }
+    } catch (t: Throwable) {
+        log("PDD: embedded bundle error: " + (t.message ?: t.toString()))
+        null
+    }
+}
+
+/** Достаёт список вопросов из уже загруженного бандла билетов. */
+private fun getQuestionsFromBundle(bundle: dynamic, categoryId: String, num: Int): List<PddQuestion> {
+    val log = js("console.log").unsafeCast<(Any?) -> Unit>()
+    if (bundle == null || bundle == js("undefined")) {
+        log("PDD: getQuestionsFromBundle bundle is null/undefined")
+        return emptyList()
+    }
+    val arr = js("(function(b, cat, n){ var c = b[cat]; return c && c[String(n)]; })").unsafeCast<(dynamic, String, Int) -> dynamic>().invoke(bundle, categoryId, num)
+    if (arr == null || arr == js("undefined")) {
+        log("PDD: getQuestionsFromBundle no arr for categoryId=$categoryId num=$num (check bundle has A_B/C_D and key \"$num\")")
+        return emptyList()
+    }
+    val jsonText = js("JSON.stringify").unsafeCast<(dynamic) -> String>().invoke(arr)
+    return parseTicketJson(jsonText)
+}
+
+/** Парсит JSON билета (массив вопросов) в List<PddQuestion>. Результат JSON.parse — чистый JS-объект, без .asDynamic(). */
 private fun parseTicketJson(jsonText: String): List<PddQuestion> {
     return try {
-        val parsed = js("JSON.parse").unsafeCast<(String) -> dynamic>().invoke(jsonText)
-        val len = (parsed.asDynamic().length as Int)
+        val parsed: dynamic = js("JSON.parse").unsafeCast<(String) -> dynamic>().invoke(jsonText)
+        val len = (parsed.length as Int)
         val list = mutableListOf<PddQuestion>()
         for (i in 0 until len) {
-            val obj = parsed.asDynamic()[i]
-            val answersArr = obj.answers
-            val answersLen = (answersArr.asDynamic().length as Int)
+            val obj: dynamic = parsed[i]
+            val answersArr: dynamic = obj.answers
+            val answersLen = (answersArr.length as Int)
             val answers = (0 until answersLen).map { j ->
-                val a = answersArr.asDynamic()[j]
+                val a: dynamic = answersArr[j]
                 PddAnswer(
                     answerText = (a.answer_text as? String) ?: "",
                     isCorrect = (a.is_correct as? Boolean) ?: false,
                 )
             }
-            val topicArr = obj.topic
-            val topicLen = (topicArr.asDynamic().length as Int)
-            val topic = (0 until topicLen).map { (topicArr.asDynamic()[it] as? String) ?: "" }
+            val topicArr: dynamic = obj.topic
+            val topicLen = (topicArr.length as Int)
+            val topic = (0 until topicLen).map { (topicArr[it] as? String) ?: "" }
             val img = obj.image as? String
             val image = if (img.isNullOrBlank() || img.endsWith("no_image.jpg")) null else img
             list.add(PddQuestion(
@@ -624,15 +732,50 @@ private fun parseTicketJson(jsonText: String): List<PddQuestion> {
             ))
         }
         list
-    } catch (_: Throwable) {
+    } catch (t: Throwable) {
+        js("console.log").unsafeCast<(Any?) -> Unit>().invoke("PDD: parseTicketJson error: " + (t.message ?: t.toString()))
         emptyList()
+    }
+}
+
+/** Предзагрузка бандла билетов при открытии категории A_B/C_D, чтобы клик по билету сработал сразу. */
+private fun preloadPddBundleIfNeeded() {
+    var b = appState.pddTicketsBundle
+    if (b != null && b != js("undefined")) return
+    b = getEmbeddedPddBundle()
+    if (b != null && b != js("undefined")) {
+        updateState { pddTicketsBundle = b }
+        return
+    }
+    b = js("window.__PDD_TICKETS_BUNDLE__").unsafeCast<dynamic>()
+    if (b != null && b != js("undefined")) {
+        updateState { pddTicketsBundle = b }
+        return
+    }
+    window.fetch("pdd-tickets-bundle.json").then { r: dynamic ->
+        if ((r.status as Int) != 200) return@then
+        r.text().then { text: dynamic ->
+            val parsed = js("JSON.parse").unsafeCast<(String) -> dynamic>().invoke(text.unsafeCast<String>())
+            updateState { pddTicketsBundle = parsed }
+        }
+    }.catch { _: dynamic ->
+        val script = document.createElement("script")
+        script.asDynamic().src = "pdd-tickets-bundle.js"
+        script.asDynamic().onload = {
+            val w = js("window.__PDD_TICKETS_BUNDLE__").unsafeCast<dynamic>()
+            if (w != null && w != js("undefined")) updateState { pddTicketsBundle = w }
+        }
+        document.head?.appendChild(script)
     }
 }
 
 /** Обработка клика по категории ПДД: переход или загрузка данных. */
 private fun handlePddCategoryClick(catId: String) {
     when (catId) {
-        "A_B", "C_D" -> updateState { pddCategoryId = catId }
+        "A_B", "C_D" -> {
+            updateState { pddCategoryId = catId }
+            preloadPddBundleIfNeeded()
+        }
         "signs" -> {
             updateState { pddCategoryId = catId; pddLoading = true }
             window.fetch("pdd/signs/signs.json").then { r: dynamic ->
@@ -670,22 +813,26 @@ private fun handlePddCategoryClick(catId: String) {
 
 private fun parseSignsJson(jsonText: String): List<PddSignsSection> {
     return try {
-        val root = js("JSON.parse").unsafeCast<(String) -> dynamic>().invoke(jsonText)
-        val keys = js("Object.keys").unsafeCast<(dynamic) -> Array<dynamic>>().invoke(root)
+        val root: dynamic = js("JSON.parse").unsafeCast<(String) -> dynamic>().invoke(jsonText)
+        val keys: dynamic = js("Object.keys").unsafeCast<(dynamic) -> dynamic>().invoke(root)
         val list = mutableListOf<PddSignsSection>()
-        for (i in 0 until (keys.asDynamic().length as Int)) {
-            val sectionName = keys[i].unsafeCast<String>()
-            val sectionObj = root.asDynamic()[sectionName]
-            val itemKeys = js("Object.keys").unsafeCast<(dynamic) -> Array<dynamic>>().invoke(sectionObj)
+        val keysLen = (keys.length as Int)
+        for (i in 0 until keysLen) {
+            val sectionName = (keys[i] as? String) ?: continue
+            val sectionObj: dynamic = root[sectionName]
+            if (sectionObj == null || sectionObj == js("undefined")) continue
+            val itemKeys: dynamic = js("Object.keys").unsafeCast<(dynamic) -> dynamic>().invoke(sectionObj)
             val items = mutableListOf<PddSignItem>()
-            for (j in 0 until (itemKeys.asDynamic().length as Int)) {
-                val num = itemKeys[j].unsafeCast<String>()
-                val obj = sectionObj.asDynamic()[num]
+            val itemKeysLen = (itemKeys.length as Int)
+            for (j in 0 until itemKeysLen) {
+                val num = (itemKeys[j] as? String) ?: continue
+                val obj: dynamic = sectionObj[num]
+                if (obj == null || obj == js("undefined")) continue
                 val img = (obj.image as? String)?.trim() ?: ""
                 val imagePath = when {
                     img.isEmpty() -> ""
-                    img.startsWith("./") -> "pdd/images" + img.removePrefix("./images").replace("\\", "/")
-                    else -> "pdd/images/$img"
+                    img.startsWith("./") -> "/pdd/" + img.drop(2).replace("\\", "/")
+                    else -> "/pdd/images/$img"
                 }
                 items.add(PddSignItem(
                     number = (obj.number as? String) ?: num,
@@ -702,22 +849,26 @@ private fun parseSignsJson(jsonText: String): List<PddSignsSection> {
 
 private fun parseMarkupJson(jsonText: String): List<PddMarkupSection> {
     return try {
-        val root = js("JSON.parse").unsafeCast<(String) -> dynamic>().invoke(jsonText)
-        val keys = js("Object.keys").unsafeCast<(dynamic) -> Array<dynamic>>().invoke(root)
+        val root: dynamic = js("JSON.parse").unsafeCast<(String) -> dynamic>().invoke(jsonText)
+        val keys: dynamic = js("Object.keys").unsafeCast<(dynamic) -> dynamic>().invoke(root)
         val list = mutableListOf<PddMarkupSection>()
-        for (i in 0 until (keys.asDynamic().length as Int)) {
-            val sectionName = keys[i].unsafeCast<String>()
-            val sectionObj = root.asDynamic()[sectionName]
-            val itemKeys = js("Object.keys").unsafeCast<(dynamic) -> Array<dynamic>>().invoke(sectionObj)
+        val keysLen = (keys.length as Int)
+        for (i in 0 until keysLen) {
+            val sectionName = (keys[i] as? String) ?: continue
+            val sectionObj: dynamic = root[sectionName]
+            if (sectionObj == null || sectionObj == js("undefined")) continue
+            val itemKeys: dynamic = js("Object.keys").unsafeCast<(dynamic) -> dynamic>().invoke(sectionObj)
             val items = mutableListOf<PddMarkupItem>()
-            for (j in 0 until (itemKeys.asDynamic().length as Int)) {
-                val num = itemKeys[j].unsafeCast<String>()
-                val obj = sectionObj.asDynamic()[num]
+            val itemKeysLen = (itemKeys.length as Int)
+            for (j in 0 until itemKeysLen) {
+                val num = (itemKeys[j] as? String) ?: continue
+                val obj: dynamic = sectionObj[num]
+                if (obj == null || obj == js("undefined")) continue
                 val img = (obj.image as? String)?.trim() ?: ""
                 val imagePath = when {
                     img.isEmpty() -> ""
-                    img.startsWith("./") -> "pdd/images" + img.removePrefix("./images").replace("\\", "/")
-                    else -> "pdd/images/$img"
+                    img.startsWith("./") -> "/pdd/" + img.drop(2).replace("\\", "/")
+                    else -> "/pdd/images/$img"
                 }
                 items.add(PddMarkupItem(
                     number = (obj.number as? String) ?: num,
@@ -747,17 +898,14 @@ private fun parsePenaltiesJson(jsonText: String): List<PddPenaltyItem> {
 }
 
 private fun loadAllTicketsByTopic() {
-    val tickets = (1..40).map { "Билет $it" }
-    val promises = tickets.map { name ->
-        val fileName = js("encodeURIComponent").unsafeCast<(String) -> String>().invoke("$name.json")
-        window.fetch("pdd/tickets/$fileName").then { r: dynamic -> r.text() }
-    }
-    js("(function(arr){ return Promise.all(arr); })").unsafeCast<(Array<dynamic>) -> dynamic>().invoke(promises.toTypedArray()).then { results: dynamic ->
+    fun buildSectionsFromBundle(bundle: dynamic) {
+        updateState { pddTicketsBundle = bundle }
         val allQuestions = mutableListOf<PddQuestion>()
-        val len = (results.asDynamic().length as Int)
-        for (i in 0 until len) {
-            val text = results.asDynamic()[i].unsafeCast<String>()
-            allQuestions.addAll(parseTicketJson(text))
+        val ab: dynamic = if (bundle != null && bundle != js("undefined")) bundle["A_B"] else null
+        if (ab != null && ab != js("undefined")) {
+            for (n in 1..40) {
+                allQuestions.addAll(getQuestionsFromBundle(bundle, "A_B", n))
+            }
         }
         val order = mutableListOf<String>()
         val byTopic = mutableMapOf<String, MutableList<PddQuestion>>()
@@ -768,7 +916,46 @@ private fun loadAllTicketsByTopic() {
         }
         val sections = order.map { name -> PddTopicSection(name = name, questions = byTopic[name] ?: emptyList()) }
         updateState { pddByTopicSections = sections; pddLoading = false }
-    }.catch { _: dynamic -> updateState { pddLoading = false; pddByTopicSections = emptyList() } }
+    }
+    var bundle = appState.pddTicketsBundle
+    if (bundle == null || bundle == js("undefined")) bundle = getEmbeddedPddBundle()
+    if (bundle == null || bundle == js("undefined")) {
+        bundle = js("window.__PDD_TICKETS_BUNDLE__").unsafeCast<dynamic>()
+    }
+    if (bundle != null && bundle != js("undefined")) {
+        buildSectionsFromBundle(bundle)
+    } else {
+        loadPddBundleFromNetwork { b: dynamic? ->
+            if (b != null && b != js("undefined")) buildSectionsFromBundle(b)
+            else updateState { pddLoading = false; pddByTopicSections = emptyList() }
+        }
+    }
+}
+
+/** Пробует загрузить бандл билетов: сначала fetch JSON, при ошибке — подгрузка pdd-tickets-bundle.js. */
+private fun loadPddBundleFromNetwork(callback: (dynamic?) -> Unit) {
+    val log = js("console.log").unsafeCast<(Any?) -> Unit>()
+    log("PDD: fetch pdd-tickets-bundle.json")
+    window.fetch("pdd-tickets-bundle.json").then { r: dynamic ->
+        log("PDD: fetch status = " + (r.status as Int))
+        if ((r.status as Int) != 200) throw js("new Error('Not found')")
+        r.text().then { text: dynamic ->
+            val parsed = js("JSON.parse").unsafeCast<(String) -> dynamic>().invoke(text.unsafeCast<String>())
+            log("PDD: fetch OK, parsed bundle")
+            callback(parsed)
+        }
+    }.catch { err: dynamic ->
+        log("PDD: fetch failed, loading pdd-tickets-bundle.js script")
+        val script = document.createElement("script")
+        script.asDynamic().src = "pdd-tickets-bundle.js"
+        script.asDynamic().onload = {
+            val b = js("window.__PDD_TICKETS_BUNDLE__").unsafeCast<dynamic>()
+            log("PDD: script onload, bundle=" + (if (b != null && b != js("undefined")) "OK" else "null"))
+            callback(b)
+        }
+        script.asDynamic().onerror = { log("PDD: script onerror"); callback(null) }
+        document.head?.appendChild(script)
+    }
 }
 
 /** Текущие дата и время в формате для min атрибута datetime-local (нельзя выбрать прошлое). */
@@ -1268,26 +1455,42 @@ private fun renderTicketsTabContent(): String {
         return """<h2>Билеты ПДД</h2>
         <div class="sd-tickets-content">
             <div class="sd-ticket-categories">$categoriesHtml</div>
-
         </div>"""
     }
 
     if (catId == "A_B" || catId == "C_D") {
         if (ticketName == null) {
             val categoryTitle = PDD_CATEGORIES.find { it.first == catId }?.second ?: catId
-            val tickets = (1..40).map { it to "Билет $it" }
-            val ticketsHtml = tickets.joinToString("") { (num, name) ->
-                """<div class="sd-ticket-category-card sd-ticket-category-clickable sd-pdd-ticket" data-pdd-ticket="${name.escapeHtml()}" data-pdd-category="${catId.escapeHtml()}">
-                    <span class="sd-ticket-num">$num</span>
-                    <span class="sd-ticket-category-title">Билет</span>
+            val tickets = (1..40).map { "Билет $it" }
+            val ticketsHtml = tickets.joinToString("") { name ->
+                val statClass = getPddTicketCardStatClass(catId, name)
+                val (correct, incorrect, noAnswer) = getPddTicketStat(catId, name)
+                """<div class="sd-ticket-category-card sd-ticket-category-clickable sd-pdd-ticket $statClass" data-pdd-ticket="${name.escapeHtml()}" data-pdd-category="${catId.escapeHtml()}">
+                    <span class="sd-ticket-category-icon">$iconTicketSvg</span>
+                    <span class="sd-ticket-category-title">${name.escapeHtml()}</span>
+                    <span class="sd-pdd-ticket-stats"><span class="sd-pdd-stat sd-pdd-stat-ok">$correct</span><span class="sd-pdd-stat sd-pdd-stat-err">$incorrect</span><span class="sd-pdd-stat sd-pdd-stat-na">$noAnswer</span></span>
                 </div>"""
             }
             return """<h2>Билеты ПДД</h2>
             <div class="sd-tickets-content">
                 <button type="button" class="sd-btn sd-btn-secondary sd-pdd-back-categories">← К категориям</button>
-                <h3 class="sd-pdd-subtitle">$categoryTitle</h3>
-                <p class="sd-tickets-intro">Выберите билет (1–40).</p>
-                <div class="sd-ticket-categories sd-tickets-grid">$ticketsHtml</div>
+                <div class="sd-pdd-tickets-header">
+                    <h3 class="sd-pdd-subtitle">$categoryTitle</h3>
+                    <button type="button" class="sd-btn sd-btn-secondary sd-pdd-reset-stats" data-pdd-reset-category="${catId.escapeHtml()}">Обнулить статистику</button>
+                </div>
+                <p class="sd-tickets-intro">Выберите билет (1–40). Зелёный — решено без ошибок, красный — с ошибками, серый — не решал.</p>
+                <div class="sd-ticket-categories">$ticketsHtml</div>
+                ${if (appState.pddResetConfirmCategory == catId) """
+                <div class="sd-pdd-reset-modal-overlay" id="sd-pdd-reset-modal">
+                    <div class="sd-pdd-reset-modal">
+                        <p class="sd-pdd-reset-modal-text">Подтвердите действие: Вы уверены, что хотите обнулить статистику решений экзаменационных билетов?</p>
+                        <div class="sd-pdd-reset-modal-buttons">
+                            <button type="button" class="sd-btn sd-btn-primary sd-pdd-reset-confirm-yes" data-pdd-reset-category="${catId.escapeHtml()}">Да</button>
+                            <button type="button" class="sd-btn sd-btn-secondary sd-pdd-reset-confirm-no">Нет</button>
+                        </div>
+                    </div>
+                </div>
+                """ else ""}
             </div>"""
         }
 
@@ -1366,21 +1569,59 @@ private fun renderTicketsTabContent(): String {
     if (catId == "signs") {
         val categoryTitle = PDD_CATEGORIES.find { it.first == catId }?.second ?: catId
         if (loading) return """<h2>Билеты ПДД</h2><div class="sd-tickets-content"><p class="sd-loading-text">Загрузка…</p></div>"""
-        val sections = appState.pddSignsSections
-        val sectionsHtml = sections.joinToString("") { sec ->
-            val itemsHtml = sec.items.joinToString("") { item ->
-                val imgSrc = if (item.imagePath.isNotBlank()) """<img src="${item.imagePath.escapeHtml()}" alt="" class="sd-pdd-sign-img" loading="lazy" />""" else ""
-                """<div class="sd-pdd-sign-item">
-                    $imgSrc
-                    <div class="sd-pdd-sign-info"><strong>${item.number.escapeHtml()} ${item.title.escapeHtml()}</strong><p class="sd-pdd-sign-desc">${item.description.escapeHtml()}</p></div>
-                </div>"""
+        val selected = appState.pddSelectedSign
+        if (selected != null) {
+            val sections = appState.pddSignsSections
+            val secIdx = appState.pddSelectedSignSectionIndex
+            val itemIdx = appState.pddSelectedSignItemIndex
+            val nextSign: PddSignItem? = when {
+                secIdx < 0 || itemIdx < 0 || sections.isEmpty() -> null
+                itemIdx + 1 < sections.getOrNull(secIdx)?.items?.size ?: 0 -> sections[secIdx].items[itemIdx + 1]
+                secIdx + 1 < sections.size && sections[secIdx + 1].items.isNotEmpty() -> sections[secIdx + 1].items[0]
+                else -> null
             }
-            """<details class="sd-pdd-section"><summary class="sd-pdd-section-title">${sec.name.escapeHtml()} (${sec.items.size})</summary><div class="sd-pdd-section-list">$itemsHtml</div></details>"""
+            val nextButtonHtml = if (nextSign != null) {
+                val nextSecIdx = if (itemIdx + 1 < sections.getOrNull(secIdx)?.items?.size ?: 0) secIdx else secIdx + 1
+                val nextItemIdx = if (itemIdx + 1 < sections.getOrNull(secIdx)?.items?.size ?: 0) itemIdx + 1 else 0
+                """<div class="sd-pdd-sign-detail-next">
+                    <button type="button" class="sd-btn sd-btn-primary sd-pdd-sign-next" data-next-section-index="$nextSecIdx" data-next-item-index="$nextItemIdx">
+                        К следующему знаку: ${nextSign.number.escapeHtml()} ${nextSign.title.escapeHtml()}
+                    </button>
+                </div>"""
+            } else ""
+            val sectionName = sections.getOrNull(secIdx)?.name ?: categoryTitle
+            val groupTitle = if (secIdx >= 0) "${secIdx + 1}) ${sectionName}" else categoryTitle
+            val imgSrc = if (selected.imagePath.isNotBlank()) """<img src="${selected.imagePath.escapeHtml()}" alt="" class="sd-pdd-sign-detail-img" />""" else ""
+            return """<h2>Билеты ПДД</h2>
+        <div class="sd-tickets-content sd-pdd-sign-detail">
+            <button type="button" class="sd-btn sd-btn-secondary sd-pdd-back-signs">← К списку знаков</button>
+            <h3 class="sd-pdd-subtitle">${groupTitle.escapeHtml()}</h3>
+            <div class="sd-pdd-sign-detail-card" id="sd-pdd-sign-detail-scroll">
+                $imgSrc
+                <div class="sd-pdd-sign-detail-body">
+                    <p class="sd-pdd-sign-detail-title"><strong>${selected.number.escapeHtml()} ${selected.title.escapeHtml()}</strong></p>
+                    <div class="sd-pdd-sign-detail-desc">${selected.description.escapeHtml()}</div>
+                    $nextButtonHtml
+                </div>
+            </div>
+        </div>"""
         }
+        val sections = appState.pddSignsSections
+        val sectionsHtml = sections.mapIndexed { secIdx, sec ->
+            val itemsHtml = sec.items.mapIndexed { itemIdx, item ->
+                val imgSrc = if (item.imagePath.isNotBlank()) """<img src="${item.imagePath.escapeHtml()}" alt="" class="sd-pdd-sign-img" loading="lazy" />""" else ""
+                """<button type="button" class="sd-pdd-sign-card" data-sign-number="${item.number.escapeHtml()}" data-section-index="$secIdx" data-item-index="$itemIdx">
+                    $imgSrc
+                    <span class="sd-pdd-sign-card-title">${item.number.escapeHtml()} ${item.title.escapeHtml()}</span>
+                </button>"""
+            }.joinToString("")
+            """<details class="sd-pdd-section" open><summary class="sd-pdd-section-title">${secIdx + 1}) ${sec.name.escapeHtml()} (${sec.items.size})</summary><div class="sd-pdd-section-list">$itemsHtml</div></details>"""
+        }.joinToString("")
         return """<h2>Билеты ПДД</h2>
         <div class="sd-tickets-content">
             <button type="button" class="sd-btn sd-btn-secondary sd-pdd-back-categories">← К категориям</button>
             <h3 class="sd-pdd-subtitle">$categoryTitle</h3>
+            <p class="sd-pdd-signs-intro">Нажмите на знак, чтобы открыть пояснение.</p>
             <div class="sd-pdd-sections">$sectionsHtml</div>
         </div>"""
     }
@@ -1692,22 +1933,12 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             } catch (_: Throwable) { null }
         }
         if (appState.user?.role == "instructor" || appState.user?.role == "cadet") {
-            val pddCategoryCard = closest(".sd-ticket-category-card")
-            if (pddCategoryCard != null) {
-                val catId = pddCategoryCard.getAttribute("data-pdd-category")
-                if (catId != null && catId.isNotBlank()) {
-                    handlePddCategoryClick(catId)
-                    (e as? org.w3c.dom.events.Event)?.preventDefault()
-                    (e as? org.w3c.dom.events.Event)?.stopPropagation()
-                    return@addEventListener
-                }
-            }
             val pddBackCat = closest(".sd-pdd-back-categories")
             if (pddBackCat != null) {
                 updateState {
                     pddCategoryId = null; pddTicketName = null; pddQuestions = emptyList()
                     pddCurrentIndex = 0; pddUserSelections = emptyMap(); pddFinished = false
-                    pddSignsSections = emptyList(); pddMarkupSections = emptyList(); pddPenalties = emptyList(); pddByTopicSections = emptyList()
+                    pddSignsSections = emptyList(); pddSelectedSign = null; pddSelectedSignSectionIndex = -1; pddSelectedSignItemIndex = -1; pddResetConfirmCategory = null; pddMarkupSections = emptyList(); pddPenalties = emptyList(); pddByTopicSections = emptyList()
                 }
                 (e as? org.w3c.dom.events.Event)?.preventDefault()
                 return@addEventListener
@@ -1717,28 +1948,100 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                 val ticketName = pddTicket.getAttribute("data-pdd-ticket") ?: return@addEventListener
                 val categoryId = pddTicket.getAttribute("data-pdd-category") ?: return@addEventListener
                 updateState { pddTicketName = ticketName; pddLoading = true }
-                val fileName = js("encodeURIComponent").unsafeCast<(String) -> String>().invoke("$ticketName.json")
-                val path = if (categoryId == "A_B") "pdd/tickets/$fileName" else "pdd/tickets/$categoryId/$fileName"
-                window.fetch(path).then { r: dynamic ->
-                    r.text().then { text: dynamic ->
-                        val jsonText = text.unsafeCast<String>()
-                        val questions = parseTicketJson(jsonText)
-                        updateState {
-                            pddQuestions = questions; pddCurrentIndex = 0; pddUserSelections = emptyMap()
-                            pddFinished = false; pddLoading = false
+                val num = ticketName.removePrefix("Билет ").toIntOrNull() ?: 1
+                val log = js("console.log").unsafeCast<(Any?) -> Unit>()
+                log("PDD: click ticket categoryId=$categoryId num=$num")
+                fun applyTicket(b: dynamic) {
+                    val questions = getQuestionsFromBundle(b, categoryId, num)
+                    log("PDD: applyTicket questions.size=${questions.size}")
+                    updateState {
+                        pddTicketsBundle = b
+                        pddQuestions = questions; pddCurrentIndex = 0; pddUserSelections = emptyMap()
+                        pddFinished = false; pddLoading = false
+                    }
+                }
+                var bundle = appState.pddTicketsBundle
+                if (bundle == null || bundle == js("undefined")) {
+                    log("PDD: no bundle in state, trying embedded")
+                    bundle = getEmbeddedPddBundle()
+                } else log("PDD: bundle from state")
+                if (bundle == null || bundle == js("undefined")) {
+                    log("PDD: trying window.__PDD_TICKETS_BUNDLE__")
+                    bundle = js("window.__PDD_TICKETS_BUNDLE__").unsafeCast<dynamic>()
+                }
+                if (bundle != null && bundle != js("undefined")) {
+                    log("PDD: using bundle, applying")
+                    applyTicket(bundle)
+                } else {
+                    log("PDD: no bundle, loading from network")
+                    loadPddBundleFromNetwork { b: dynamic? ->
+                        if (b != null && b != js("undefined")) {
+                            log("PDD: network load OK, applying")
+                            applyTicket(b)
+                        } else {
+                            log("PDD: network load failed")
+                            updateState { pddLoading = false; pddQuestions = emptyList() }
                         }
                     }
-                }.catch { _: dynamic ->
-                    updateState { pddLoading = false; pddQuestions = emptyList() }
                 }
                 (e as? org.w3c.dom.events.Event)?.preventDefault()
                 return@addEventListener
+            }
+            val pddCategoryCard = closest(".sd-ticket-category-clickable[data-pdd-category]:not(.sd-pdd-ticket)")
+            if (pddCategoryCard != null) {
+                val catId = pddCategoryCard.getAttribute("data-pdd-category")
+                if (catId != null && catId.isNotBlank()) {
+                    handlePddCategoryClick(catId)
+                    (e as? org.w3c.dom.events.Event)?.preventDefault()
+                    (e as? org.w3c.dom.events.Event)?.stopPropagation()
+                    return@addEventListener
+                }
             }
             val pddBackTickets = closest(".sd-pdd-back-tickets")
             if (pddBackTickets != null) {
                 updateState {
                     pddTicketName = null; pddQuestions = emptyList(); pddCurrentIndex = 0
                     pddUserSelections = emptyMap(); pddFinished = false
+                }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
+            val pddBackSigns = closest(".sd-pdd-back-signs")
+            if (pddBackSigns != null) {
+                updateState { pddSelectedSign = null }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
+            val signCard = closest(".sd-pdd-sign-card")
+            if (signCard != null) {
+                val num = signCard.getAttribute("data-sign-number") ?: return@addEventListener
+                val secIdx = signCard.getAttribute("data-section-index")?.toIntOrNull() ?: -1
+                val itemIdx = signCard.getAttribute("data-item-index")?.toIntOrNull() ?: -1
+                val sections = appState.pddSignsSections
+                val item = if (secIdx in sections.indices && itemIdx in sections[secIdx].items.indices) sections[secIdx].items[itemIdx] else sections.flatMap { it.items }.firstOrNull { it.number == num }
+                if (item != null) {
+                    updateState {
+                        pddSelectedSign = item
+                        pddSelectedSignSectionIndex = if (secIdx in sections.indices) secIdx else -1
+                        pddSelectedSignItemIndex = if (secIdx in sections.indices && itemIdx in sections[secIdx].items.indices) itemIdx else -1
+                    }
+                }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
+            val signNextBtn = closest(".sd-pdd-sign-next")
+            if (signNextBtn != null) {
+                val nextSecIdx = signNextBtn.getAttribute("data-next-section-index")?.toIntOrNull() ?: -1
+                val nextItemIdx = signNextBtn.getAttribute("data-next-item-index")?.toIntOrNull() ?: -1
+                val sections = appState.pddSignsSections
+                if (nextSecIdx in sections.indices && nextItemIdx in sections[nextSecIdx].items.indices) {
+                    val nextItem = sections[nextSecIdx].items[nextItemIdx]
+                    updateState {
+                        pddSelectedSign = nextItem
+                        pddSelectedSignSectionIndex = nextSecIdx
+                        pddSelectedSignItemIndex = nextItemIdx
+                        pddScrollToSignDetail = true
+                    }
                 }
                 (e as? org.w3c.dom.events.Event)?.preventDefault()
                 return@addEventListener
@@ -1761,10 +2064,38 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                 val idx = appState.pddCurrentIndex
                 val total = appState.pddQuestions.size
                 val sel = appState.pddUserSelections[idx]
+                val catId = appState.pddCategoryId
+                val tName = appState.pddTicketName
+                if (sel != null && catId != null && tName != null && (catId == "A_B" || catId == "C_D")) {
+                    val q = appState.pddQuestions.getOrNull(idx)
+                    val isCorrect = q?.answers?.getOrNull(sel)?.isCorrect == true
+                    savePddTicketResult(catId, tName, idx, isCorrect)
+                }
                 if (sel != null) {
                     if (idx >= total - 1) updateState { pddFinished = true }
                     else updateState { pddCurrentIndex = idx + 1 }
                 }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
+            val pddResetStats = closest(".sd-pdd-reset-stats")
+            if (pddResetStats != null) {
+                val resetCat = pddResetStats.getAttribute("data-pdd-reset-category") ?: return@addEventListener
+                updateState { pddResetConfirmCategory = resetCat }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
+            val pddResetConfirmYes = closest(".sd-pdd-reset-confirm-yes")
+            if (pddResetConfirmYes != null) {
+                val resetCat = pddResetConfirmYes.getAttribute("data-pdd-reset-category") ?: return@addEventListener
+                clearPddTicketStatsForCategory(resetCat)
+                updateState { pddStatsVersion = pddStatsVersion + 1; pddResetConfirmCategory = null }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
+            val pddResetConfirmNo = closest(".sd-pdd-reset-confirm-no")
+            if (pddResetConfirmNo != null) {
+                updateState { pddResetConfirmCategory = null }
                 (e as? org.w3c.dom.events.Event)?.preventDefault()
                 return@addEventListener
             }
@@ -2738,6 +3069,7 @@ private fun toggleVoicePlay(audioEl: dynamic, msgId: String, voiceUrl: String, d
         globalAudio.pause()
         if (voicePlayInterval != 0) { window.clearInterval(voicePlayInterval); voicePlayInterval = 0 }
     }
+    if (voiceUrl.isBlank() || (!voiceUrl.startsWith("http") && !voiceUrl.startsWith("data:"))) return
     globalAudio.src = voiceUrl
     globalAudio.currentTime = 0.0
     val playPromise = globalAudio.play()
@@ -2777,6 +3109,7 @@ private fun seekToVoicePosition(msgId: String, voiceUrl: String, durationSec: In
         appState.chatPlayingVoiceCurrentMs = currentMs
         patchVoicePlayerDOM()
     } else {
+        if (voiceUrl.isBlank() || (!voiceUrl.startsWith("http") && !voiceUrl.startsWith("data:"))) return
         globalAudio.src = voiceUrl
         globalAudio.currentTime = r * durationSec
         appState.chatPlayingVoiceId = msgId

@@ -1274,11 +1274,11 @@ private fun renderTicketsTabContent(): String {
     if (catId == "A_B" || catId == "C_D") {
         if (ticketName == null) {
             val categoryTitle = PDD_CATEGORIES.find { it.first == catId }?.second ?: catId
-            val tickets = (1..40).map { "Билет $it" }
-            val ticketsHtml = tickets.joinToString("") { name ->
+            val tickets = (1..40).map { it to "Билет $it" }
+            val ticketsHtml = tickets.joinToString("") { (num, name) ->
                 """<div class="sd-ticket-category-card sd-ticket-category-clickable sd-pdd-ticket" data-pdd-ticket="${name.escapeHtml()}" data-pdd-category="${catId.escapeHtml()}">
-                    <span class="sd-ticket-category-icon">$iconTicketSvg</span>
-                    <span class="sd-ticket-category-title">${name.escapeHtml()}</span>
+                    <span class="sd-ticket-num">$num</span>
+                    <span class="sd-ticket-category-title">Билет</span>
                 </div>"""
             }
             return """<h2>Билеты ПДД</h2>
@@ -1286,7 +1286,7 @@ private fun renderTicketsTabContent(): String {
                 <button type="button" class="sd-btn sd-btn-secondary sd-pdd-back-categories">← К категориям</button>
                 <h3 class="sd-pdd-subtitle">$categoryTitle</h3>
                 <p class="sd-tickets-intro">Выберите билет (1–40).</p>
-                <div class="sd-ticket-categories">$ticketsHtml</div>
+                <div class="sd-ticket-categories sd-tickets-grid">$ticketsHtml</div>
             </div>"""
         }
 

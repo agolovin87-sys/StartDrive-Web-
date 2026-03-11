@@ -1663,73 +1663,305 @@ a.sd-cadet-icon-btn:active {
 .sd-running-late-options { display: flex; flex-direction: column; gap: 10px; margin: 14px 0; }
 .sd-radio { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 1rem; }
 
-/* Билеты ПДД — категории как в Android */
-.sd-tickets-content { padding: 0 2px; }
-.sd-tickets-intro { margin: 0 0 16px 0; color: var(--sd-text-secondary); font-size: 0.95rem; }
-.sd-ticket-categories { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
-.sd-ticket-category-card {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 14px 18px;
-    border-radius: 12px;
-    background: var(--sd-card);
-    border: 1px solid var(--sd-border);
-    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-    cursor: default;
-    transition: background 0.2s, border-color 0.2s;
+/* ═══════════════════════════════════════════════
+   БИЛЕТЫ ПДД — Стильный редизайн
+   ═══════════════════════════════════════════════ */
+
+/* Фон секции билетов */
+.sd-tickets-content {
+    padding: 6px 0;
+    background: linear-gradient(160deg, #0a1628 0%, #0d2247 45%, #122b5e 100%);
+    border-radius: 18px;
+    padding: 20px 16px;
+    margin: -4px;
 }
-.sd-ticket-category-card:hover { background: #f0f7ff; border-color: rgba(25, 118, 210, 0.3); }
-.sd-ticket-category-icon { display: inline-flex; flex-shrink: 0; color: var(--sd-primary); }
-.sd-ticket-category-icon svg { width: 24px; height: 24px; }
-.sd-ticket-category-title { font-weight: 600; font-size: 1rem; color: var(--sd-text); }
-.sd-ticket-category-hint { font-size: 0.85rem; color: var(--sd-text-secondary); margin-left: auto; }
+
+.sd-tickets-intro {
+    margin: 0 0 16px;
+    color: rgba(255,255,255,0.65);
+    font-size: 0.88rem;
+}
+
+/* Сетка категорий — 2 колонки */
+.sd-ticket-categories {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+/* Компактная сетка для 40 билетов */
+.sd-tickets-grid {
+    grid-template-columns: repeat(auto-fill, minmax(74px, 1fr));
+    gap: 10px;
+}
+
+/* ─── Базовая карточка ─── */
+.sd-ticket-category-card {
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 8px;
+    padding: 20px 12px 16px;
+    border-radius: 18px;
+    border: none;
+    cursor: default;
+    background: linear-gradient(145deg, #0d47a1 0%, #2196f3 100%);
+    box-shadow:
+        0 8px 24px rgba(0,0,0,0.30),
+        0 2px 6px rgba(0,0,0,0.20),
+        inset 0 1px 0 rgba(255,255,255,0.28);
+    transition: transform 0.22s cubic-bezier(.34,1.56,.64,1), box-shadow 0.22s ease;
+}
+
+/* Глянцевый блик сверху */
+.sd-ticket-category-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 54%;
+    background: linear-gradient(180deg,
+        rgba(255,255,255,0.38) 0%,
+        rgba(255,255,255,0.08) 60%,
+        rgba(255,255,255,0) 100%);
+    border-radius: 18px 18px 60% 60% / 18px 18px 30px 30px;
+    pointer-events: none;
+    z-index: 2;
+}
+
+/* Декоративный круг внизу-справа */
+.sd-ticket-category-card::after {
+    content: '';
+    position: absolute;
+    bottom: -22px; right: -22px;
+    width: 78px; height: 78px;
+    background: rgba(255,255,255,0.10);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+/* ─── Палитра цветов — 6 вариантов ─── */
+.sd-ticket-category-card:nth-child(6n+1) {
+    background: linear-gradient(145deg, #0d47a1 0%, #42a5f5 100%);
+    box-shadow: 0 8px 24px rgba(13,71,161,0.45), 0 2px 6px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.28);
+}
+.sd-ticket-category-card:nth-child(6n+2) {
+    background: linear-gradient(145deg, #4a148c 0%, #ce93d8 100%);
+    box-shadow: 0 8px 24px rgba(74,20,140,0.45), 0 2px 6px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.28);
+}
+.sd-ticket-category-card:nth-child(6n+3) {
+    background: linear-gradient(145deg, #004d40 0%, #4db6ac 100%);
+    box-shadow: 0 8px 24px rgba(0,77,64,0.45), 0 2px 6px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.28);
+}
+.sd-ticket-category-card:nth-child(6n+4) {
+    background: linear-gradient(145deg, #bf360c 0%, #ff8a65 100%);
+    box-shadow: 0 8px 24px rgba(191,54,12,0.45), 0 2px 6px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.28);
+}
+.sd-ticket-category-card:nth-child(6n+5) {
+    background: linear-gradient(145deg, #880e4f 0%, #f48fb1 100%);
+    box-shadow: 0 8px 24px rgba(136,14,79,0.45), 0 2px 6px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.28);
+}
+.sd-ticket-category-card:nth-child(6n+0) {
+    background: linear-gradient(145deg, #1b5e20 0%, #81c784 100%);
+    box-shadow: 0 8px 24px rgba(27,94,32,0.45), 0 2px 6px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.28);
+}
+
+/* ─── Интерактивные карточки ─── */
 .sd-ticket-category-clickable { cursor: pointer; }
-.sd-ticket-category-clickable:hover { background: #e3f2fd !important; }
-.sd-pdd-subtitle { margin: 12px 0 8px 0; font-size: 1.1rem; color: var(--sd-text); }
-.sd-pdd-progress { margin: 8px 0; font-size: 0.9rem; color: var(--sd-text-secondary); }
-.sd-pdd-question-block { margin: 16px 0; padding: 16px; border-radius: 12px; background: var(--sd-card); border: 1px solid var(--sd-border); }
-.sd-pdd-question-text { font-size: 1.05rem; line-height: 1.5; margin: 0 0 14px 0; font-weight: 500; }
+.sd-ticket-category-clickable:hover {
+    transform: translateY(-4px) scale(1.04);
+    box-shadow:
+        0 14px 32px rgba(0,0,0,0.35),
+        0 4px 10px rgba(0,0,0,0.20),
+        inset 0 1px 0 rgba(255,255,255,0.35) !important;
+}
+.sd-ticket-category-clickable:active {
+    transform: translateY(-1px) scale(0.97);
+    transition-duration: 0.08s;
+}
+
+/* ─── Содержимое карточки ─── */
+.sd-ticket-category-icon {
+    display: inline-flex;
+    flex-shrink: 0;
+    color: rgba(255,255,255,0.92);
+    z-index: 3;
+    position: relative;
+    filter: drop-shadow(0 1px 3px rgba(0,0,0,0.3));
+}
+.sd-ticket-category-icon svg { width: 28px; height: 28px; }
+
+.sd-ticket-category-title {
+    font-weight: 700;
+    font-size: 0.88rem;
+    color: #fff;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.4);
+    z-index: 3;
+    position: relative;
+    line-height: 1.25;
+}
+
+.sd-ticket-category-hint {
+    font-size: 0.75rem;
+    color: rgba(255,255,255,0.70);
+    z-index: 3;
+    position: relative;
+}
+
+/* Большой номер на карточке билета */
+.sd-ticket-num {
+    font-size: 1.8rem;
+    font-weight: 900;
+    color: #fff;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.35);
+    line-height: 1;
+    z-index: 3;
+    position: relative;
+    letter-spacing: -0.5px;
+}
+.sd-tickets-grid .sd-ticket-category-title {
+    font-size: 0.68rem;
+    opacity: 0.80;
+    font-weight: 600;
+}
+.sd-tickets-grid .sd-ticket-category-card {
+    padding: 16px 6px 12px;
+    border-radius: 14px;
+}
+
+/* ─── Заголовок и подзаголовок секции ─── */
+.sd-tickets-content h2 {
+    color: #fff !important;
+    text-shadow: 0 1px 6px rgba(0,0,0,0.4);
+    margin-bottom: 14px;
+}
+.sd-pdd-subtitle {
+    margin: 12px 0 8px;
+    font-size: 1.05rem;
+    color: rgba(255,255,255,0.85);
+    font-weight: 700;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+
+/* ─── Прогресс и вопросы ─── */
+.sd-pdd-progress { margin: 8px 0; font-size: 0.9rem; color: rgba(255,255,255,0.65); }
+.sd-pdd-question-block {
+    margin: 14px 0;
+    padding: 18px;
+    border-radius: 16px;
+    background: rgba(255,255,255,0.95);
+    border: none;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+}
+.sd-pdd-question-text { font-size: 1.05rem; line-height: 1.5; margin: 0 0 14px; font-weight: 600; color: #0d1f3c; }
 .sd-pdd-answers { display: flex; flex-direction: column; gap: 8px; }
-.sd-pdd-answer { display: block; width: 100%; text-align: left; padding: 12px 14px; border-radius: 10px; border: 2px solid var(--sd-border); background: #fff; cursor: pointer; font-size: 0.95rem; transition: border-color 0.2s, background 0.2s; }
-.sd-pdd-answer:hover { border-color: var(--sd-primary-light); background: #f5f9ff; }
-.sd-pdd-answer-selected { border-color: var(--sd-primary); background: #e3f2fd; }
-.sd-pdd-answer-correct { border-color: #4caf50 !important; background: #e8f5e9 !important; }
-.sd-pdd-answer-wrong { border-color: #f44336 !important; background: #ffebee !important; }
-.sd-pdd-answer:disabled { cursor: default; opacity: 0.95; }
+.sd-pdd-answer {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 12px 16px;
+    border-radius: 12px;
+    border: 2px solid #e3eaf5;
+    background: #f7faff;
+    cursor: pointer;
+    font-size: 0.95rem;
+    transition: border-color 0.18s, background 0.18s, transform 0.15s;
+    color: #1a2a4a;
+    font-weight: 500;
+}
+.sd-pdd-answer:hover { border-color: #90caf9; background: #e8f4ff; transform: translateX(3px); }
+.sd-pdd-answer-selected { border-color: #1976d2; background: #deeeff; }
+.sd-pdd-answer-correct { border-color: #2e7d32 !important; background: #e8f5e9 !important; }
+.sd-pdd-answer-wrong { border-color: #c62828 !important; background: #ffebee !important; }
+.sd-pdd-answer:disabled { cursor: default; transform: none !important; opacity: 0.95; }
 .sd-pdd-question-image { margin: 12px 0; }
-.sd-pdd-question-image img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--sd-border); }
-.sd-pdd-explanation { margin-top: 14px; padding: 12px 14px; border-radius: 10px; background: #e3f2fd; border: 1px solid rgba(25, 118, 210, 0.3); }
-.sd-pdd-correct-answer { margin: 0 0 8px 0; font-weight: 700; font-size: 0.95rem; color: var(--sd-primary-dark); }
-.sd-pdd-answer-tip { margin: 0; font-size: 0.9rem; color: var(--sd-text-secondary); line-height: 1.45; }
+.sd-pdd-question-image img { max-width: 100%; height: auto; border-radius: 10px; border: 1px solid #dde5f0; }
+.sd-pdd-explanation {
+    margin-top: 14px;
+    padding: 13px 15px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #e3f0ff 0%, #ede7f6 100%);
+    border: 1px solid rgba(100,140,220,0.3);
+}
+.sd-pdd-correct-answer { margin: 0 0 6px; font-weight: 700; font-size: 0.95rem; color: #1565c0; }
+.sd-pdd-answer-tip { margin: 0; font-size: 0.88rem; color: #445; line-height: 1.45; }
 .sd-pdd-next-row { margin-top: 16px; }
-.sd-pdd-next:disabled { opacity: 0.6; cursor: not-allowed; }
-.sd-pdd-result { padding: 20px; border-radius: 14px; text-align: center; margin: 16px 0; }
-.sd-pdd-result-pass { background: #e8f5e9; border: 2px solid #4caf50; }
-.sd-pdd-result-fail { background: #ffebee; border: 2px solid #f44336; }
-.sd-pdd-result-title { font-weight: 700; font-size: 1.1rem; margin: 0 0 8px 0; }
-.sd-pdd-result-score { margin: 0 0 4px 0; font-size: 1rem; }
-.sd-pdd-result-verdict { margin: 0; font-weight: 600; }
+.sd-pdd-next:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ─── Результат теста ─── */
+.sd-pdd-result {
+    padding: 24px;
+    border-radius: 18px;
+    text-align: center;
+    margin: 16px 0;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+}
+.sd-pdd-result-pass {
+    background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
+    border: 2px solid #43a047;
+}
+.sd-pdd-result-fail {
+    background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
+    border: 2px solid #e53935;
+}
+.sd-pdd-result-title { font-weight: 800; font-size: 1.15rem; margin: 0 0 8px; color: #1a2a4a; }
+.sd-pdd-result-score { margin: 0 0 4px; font-size: 1rem; color: #2a3a5a; }
+.sd-pdd-result-verdict { margin: 0; font-weight: 700; font-size: 1rem; }
+
+/* ─── Секции знаков/разметки/тем ─── */
 .sd-pdd-sections { margin-top: 12px; }
-.sd-pdd-section { margin-bottom: 8px; border: 1px solid var(--sd-border); border-radius: 10px; overflow: hidden; }
-.sd-pdd-section-title { padding: 10px 14px; font-weight: 600; cursor: pointer; list-style: none; margin: 0; background: rgba(0,80,140,0.08); }
+.sd-pdd-section {
+    margin-bottom: 10px;
+    border: none;
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 3px 12px rgba(0,0,0,0.15);
+}
+.sd-pdd-section-title {
+    padding: 12px 16px;
+    font-weight: 700;
+    cursor: pointer;
+    list-style: none;
+    margin: 0;
+    background: linear-gradient(135deg, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0.06) 100%);
+    color: #fff;
+    font-size: 0.95rem;
+    backdrop-filter: blur(4px);
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+}
 .sd-pdd-section-title::-webkit-details-marker { display: none; }
-.sd-pdd-section-list { padding: 10px 14px; display: flex; flex-direction: column; gap: 12px; }
-.sd-pdd-sign-item, .sd-pdd-markup-item { display: flex; gap: 14px; align-items: flex-start; padding: 10px; border-radius: 8px; background: var(--sd-card); border: 1px solid var(--sd-border); }
+.sd-pdd-section-list { padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; background: rgba(255,255,255,0.97); }
+.sd-pdd-sign-item, .sd-pdd-markup-item {
+    display: flex; gap: 14px; align-items: flex-start; padding: 10px;
+    border-radius: 10px;
+    background: #f4f8ff;
+    border: 1px solid #dce8f8;
+}
 .sd-pdd-sign-img, .sd-pdd-markup-img { width: 80px; height: 80px; object-fit: contain; flex-shrink: 0; }
 .sd-pdd-sign-info, .sd-pdd-markup-info { flex: 1; min-width: 0; }
-.sd-pdd-sign-desc, .sd-pdd-markup-desc { font-size: 0.9rem; color: var(--sd-text-secondary); margin: 6px 0 0 0; line-height: 1.4; }
-.sd-pdd-penalty-item { padding: 12px 14px; margin-bottom: 10px; border-radius: 10px; background: var(--sd-card); border: 1px solid var(--sd-border); }
-.sd-pdd-penalty-art { font-weight: 700; color: var(--sd-primary); }
-.sd-pdd-penalty-text { margin: 6px 0 4px 0; font-size: 0.95rem; }
-.sd-pdd-penalty-penalty { margin: 0; font-size: 0.9rem; color: var(--sd-text-secondary); }
-.sd-pdd-topic-questions { padding: 10px 14px; }
-.sd-pdd-topic-q { margin: 0 0 8px 0; font-size: 0.95rem; }
-.sd-pdd-topic-more { margin: 8px 0 0 0; font-size: 0.9rem; color: var(--sd-text-secondary); }
+.sd-pdd-sign-desc, .sd-pdd-markup-desc { font-size: 0.88rem; color: #556; margin: 5px 0 0; line-height: 1.4; }
+.sd-pdd-penalty-item {
+    padding: 13px 15px;
+    margin-bottom: 10px;
+    border-radius: 12px;
+    background: rgba(255,255,255,0.95);
+    border: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+}
+.sd-pdd-penalty-art { font-weight: 800; color: #1565c0; font-size: 0.9rem; }
+.sd-pdd-penalty-text { margin: 6px 0 4px; font-size: 0.93rem; color: #1a2a4a; }
+.sd-pdd-penalty-penalty { margin: 0; font-size: 0.88rem; color: #c62828; font-weight: 600; }
+.sd-pdd-topic-questions { padding: 12px 14px; background: rgba(255,255,255,0.97); }
+.sd-pdd-topic-q { margin: 0 0 8px; font-size: 0.93rem; color: #1a2a4a; }
+.sd-pdd-topic-more { margin: 8px 0 0; font-size: 0.88rem; color: #667; }
 .sd-pdd-topic-questions .sd-pdd-topic-start { margin-top: 12px; }
 .sd-tickets-links { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 0; }
-.sd-tickets-links .sd-link { color: var(--sd-primary); text-decoration: none; }
-.sd-tickets-links .sd-link:hover { text-decoration: underline; }
+.sd-tickets-links .sd-link { color: rgba(255,255,255,0.8); text-decoration: none; font-size: 0.9rem; }
+.sd-tickets-links .sd-link:hover { color: #fff; text-decoration: underline; }
 
 .sd-card a {
     color: var(--sd-primary);

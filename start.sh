@@ -9,5 +9,8 @@ if [ ! -f "$WEBPACK_OUTPUT" ]; then
   echo "Build complete."
 fi
 
+fuser -k 5000/tcp 2>/dev/null || true
+sleep 1
+
 echo "Starting web server on port 5000..."
 node serve.js

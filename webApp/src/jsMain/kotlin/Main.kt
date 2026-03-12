@@ -752,7 +752,7 @@ private fun loadAllTicketsByTopic() {
         val fileName = js("encodeURIComponent").unsafeCast<(String) -> String>().invoke("$name.json")
         window.fetch("pdd/tickets/$fileName").then { r: dynamic -> r.text() }
     }
-    js("Promise.all").unsafeCast<(Array<dynamic>) -> dynamic>().invoke(promises.toTypedArray()).then { results: dynamic ->
+    js("(function(arr){ return Promise.all(arr); })").unsafeCast<(Array<dynamic>) -> dynamic>().invoke(promises.toTypedArray()).then { results: dynamic ->
         val allQuestions = mutableListOf<PddQuestion>()
         val len = (results.asDynamic().length as Int)
         for (i in 0 until len) {

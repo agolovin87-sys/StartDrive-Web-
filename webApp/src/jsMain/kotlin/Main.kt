@@ -124,7 +124,8 @@ fun main() {
                     (root.unsafeCast<dynamic>().querySelector("nav.sd-tabs") as? org.w3c.dom.Element)?.innerHTML = tabButtons
                     lastRenderedTabIndex = state.selectedTabIndex
                 }
-                sdCard.innerHTML = tabContent
+                val cardContent = if (state.pddExamMode && state.pddQuestions.isNotEmpty()) renderTicketsTabContent() else tabContent
+                sdCard.innerHTML = cardContent
                 if (state.pddScrollToSignDetail && state.pddCategoryId == "signs" && state.pddSelectedSign != null) {
                     (sdCard.querySelector("#sd-pdd-sign-detail-scroll") as? org.w3c.dom.Element)?.let { el ->
                         el.unsafeCast<dynamic>().scrollIntoView(js("({ block: 'start', behavior: 'smooth' })"))
@@ -597,21 +598,29 @@ private val PDD_CATEGORIES = listOf(
 /** Ключ в localStorage для статистики билета (как в Android: pdd_stats). */
 private fun pddTicketStorageKey(categoryId: String, ticketName: String): String = "pdd_${categoryId}_$ticketName"
 
-/** Читает из localStorage сохранённые ответы по билету. Формат: "0:t,1:f,..." (индекс:true/false). */
-private fun getPddTicketSavedResults(categoryId: String, ticketName: String): Map<Int, Boolean> {
+/** Парсит значение из localStorage. Формат новый: "0:2:t,1:0:f" (вопрос:индекс_ответа:верно); старый: "0:t,1:f". */
+private fun getPddTicketSavedParsed(categoryId: String, ticketName: String): Map<Int, Pair<Int, Boolean>> {
     val storage = js("typeof window !== 'undefined' && window.localStorage").unsafeCast<Boolean>()
     if (!storage) return emptyMap()
     val raw = js("window.localStorage.getItem").unsafeCast<(String) -> String?>().invoke(pddTicketStorageKey(categoryId, ticketName)) ?: return emptyMap()
-    val map = mutableMapOf<Int, Boolean>()
+    val map = mutableMapOf<Int, Pair<Int, Boolean>>()
     raw.split(",").forEach { part ->
         val p = part.split(":")
-        if (p.size == 2) {
-            val idx = p[0].toIntOrNull()
-            if (idx != null) map[idx] = (p[1] == "t")
+        when (p.size) {
+            2 -> { /* старый формат: 0:t */ val idx = p[0].toIntOrNull(); if (idx != null) map[idx] = Pair(0, p[1] == "t") }
+            3 -> { /* новый: 0:2:t */ val idx = p[0].toIntOrNull(); val ansIdx = p[1].toIntOrNull(); if (idx != null && ansIdx != null) map[idx] = Pair(ansIdx, p[2] == "t") }
         }
     }
     return map
 }
+
+/** Читает из localStorage только правильность ответов (для счётчиков и цветов карточек). */
+private fun getPddTicketSavedResults(categoryId: String, ticketName: String): Map<Int, Boolean> =
+    getPddTicketSavedParsed(categoryId, ticketName).mapValues { it.value.second }
+
+/** Читает из localStorage сохранённые выбранные варианты (вопрос -> индекс ответа) для восстановления при повторном открытии билета. */
+private fun getPddTicketSavedSelections(categoryId: String, ticketName: String): Map<Int, Int> =
+    getPddTicketSavedParsed(categoryId, ticketName).mapValues { it.value.first }
 
 /** Возвращает (правильно, с ошибкой, без ответа) и CSS-класс для карточки билета. */
 private fun getPddTicketStat(categoryId: String, ticketName: String, questionsPerTicket: Int = 20): Triple<Int, Int, Int> {
@@ -633,12 +642,12 @@ private fun getPddTicketCardStatClass(categoryId: String, ticketName: String, qu
     }
 }
 
-/** Сохраняет результат ответа на вопрос билета в localStorage. */
-private fun savePddTicketResult(categoryId: String, ticketName: String, questionIndex: Int, isCorrect: Boolean) {
+/** Сохраняет результат ответа на вопрос билета в localStorage (формат: вопрос:индекс_ответа:верно). */
+private fun savePddTicketResult(categoryId: String, ticketName: String, questionIndex: Int, answerIndex: Int, isCorrect: Boolean) {
     val key = pddTicketStorageKey(categoryId, ticketName)
-    val existing = getPddTicketSavedResults(categoryId, ticketName).toMutableMap()
-    existing[questionIndex] = isCorrect
-    val value = existing.entries.sortedBy { it.key }.joinToString(",") { "${it.key}:${if (it.value) "t" else "f"}" }
+    val existing = getPddTicketSavedParsed(categoryId, ticketName).toMutableMap()
+    existing[questionIndex] = Pair(answerIndex, isCorrect)
+    val value = existing.entries.sortedBy { it.key }.joinToString(",") { "${it.key}:${it.value.first}:${if (it.value.second) "t" else "f"}" }
     js("window.localStorage.setItem").unsafeCast<(String, String) -> Unit>().invoke(key, value)
 }
 
@@ -736,6 +745,69 @@ private fun parseTicketJson(jsonText: String): List<PddQuestion> {
         js("console.log").unsafeCast<(Any?) -> Unit>().invoke("PDD: parseTicketJson error: " + (t.message ?: t.toString()))
         emptyList()
     }
+}
+
+/** Собирает все вопросы по категории из бандла (все 40 билетов). */
+private fun getAllQuestionsFromBundle(bundle: dynamic, categoryId: String): List<PddQuestion> {
+    val list = mutableListOf<PddQuestion>()
+    for (n in 1..40) {
+        list.addAll(getQuestionsFromBundle(bundle, categoryId, n))
+    }
+    return list
+}
+
+/** Возвращает 5 случайных вопросов по теме (первый topic из вопроса), исключая указанные id. */
+private fun getAdditionalQuestionsByTopic(allQuestions: List<PddQuestion>, topicName: String, excludeIds: Set<String>): List<PddQuestion> {
+    val byTopic = allQuestions.filter { q -> q.topic.firstOrNull()?.takeIf { it.isNotBlank() } == topicName && q.id !in excludeIds }
+    return byTopic.shuffled().take(5)
+}
+
+/** Генерирует экзаменационный билет: 4 блока по 5 вопросов из 4 случайных билетов. Блок 0: вопросы 0–4, блок 1: 5–9, блок 2: 10–14, блок 3: 15–19. */
+private fun generateExamTicket(bundle: dynamic, categoryId: String): Pair<List<PddQuestion>, List<Int>> {
+    val ticketNumbers = (1..40).toList().shuffled().take(4)
+    val questions = mutableListOf<PddQuestion>()
+    val blockIndices = mutableListOf<Int>()
+    for (block in 0..3) {
+        val ticketNum = ticketNumbers[block]
+        val ticketQuestions = getQuestionsFromBundle(bundle, categoryId, ticketNum)
+        val startIdx = block * 5
+        val endIdx = (block + 1) * 5
+        for (i in startIdx until endIdx.coerceAtMost(ticketQuestions.size)) {
+            questions.add(ticketQuestions[i])
+            blockIndices.add(block)
+        }
+    }
+    return Pair(questions, blockIndices)
+}
+
+private var examTimerIntervalId: Int? = null
+
+private fun clearExamTimer() {
+    examTimerIntervalId?.let { id -> js("clearInterval").unsafeCast<(Int) -> Unit>().invoke(id) }
+    examTimerIntervalId = null
+}
+
+/** Запускает таймер обновления раз в секунду для отображения обратного отсчёта экзамена (основная и дополнительная части). */
+private fun startExamTimer() {
+    clearExamTimer()
+    examTimerIntervalId = js("setInterval").unsafeCast<(Any?, Int) -> Int>().invoke({
+        if (!appState.pddExamMode) return@invoke
+        when (appState.pddExamPhase) {
+            "main" -> updateState { }
+            "additional" -> {
+                val start = appState.pddExamAdditionalStartTimeMs ?: 0.0
+                val dur = appState.pddExamAdditionalDurationSec
+                val now = js("Date.now").unsafeCast<() -> Double>().invoke()
+                if ((now - start) / 1000.0 >= dur) {
+                    clearExamTimer()
+                    updateState { pddExamResultPass = false; pddExamPhase = "result" }
+                } else {
+                    updateState { }
+                }
+            }
+            else -> { }
+        }
+    }, 1000)
 }
 
 /** Предзагрузка бандла билетов при открытии категории A_B/C_D, чтобы клик по билету сработал сразу. */
@@ -1458,6 +1530,38 @@ private fun renderTicketsTabContent(): String {
         </div>"""
     }
 
+    if (catId == "exam") {
+        updateState {
+            pddCategoryId = null
+            pddExamMode = false
+            pddExamCategoryForBundle = null
+            pddExamStartTimeMs = null
+            pddExamBlockIndices = emptyList()
+            pddExamPhase = "main"
+            pddExamAdditionalQuestions = emptyList()
+            pddExamAdditionalBlockIndices = emptyList()
+            pddExamAdditionalCurrentIndex = 0
+            pddExamAdditionalUserSelections = emptyMap()
+            pddExamAdditionalStartTimeMs = null
+            pddExamResultPass = null
+        }
+        val categoriesHtml = PDD_CATEGORIES.joinToString("") { (id, title) ->
+            val iconHtml = when (id) {
+                "A_B" -> """<span class="sd-ticket-category-badge">AB</span>"""
+                "C_D" -> """<span class="sd-ticket-category-badge">CD</span>"""
+                else  -> """<span class="sd-ticket-category-icon">$iconTicketSvg</span>"""
+            }
+            """<div class="sd-ticket-category-card sd-ticket-category-clickable" data-pdd-category="${id.escapeHtml()}">
+                $iconHtml
+                <span class="sd-ticket-category-title">${title.escapeHtml()}</span>
+            </div>"""
+        }
+        return """<h2>Билеты ПДД</h2>
+        <div class="sd-tickets-content">
+            <div class="sd-ticket-categories">$categoriesHtml</div>
+        </div>"""
+    }
+
     if (catId == "A_B" || catId == "C_D") {
         if (ticketName == null) {
             val categoryTitle = PDD_CATEGORIES.find { it.first == catId }?.second ?: catId
@@ -1516,7 +1620,10 @@ private fun renderTicketsTabContent(): String {
                     <p class="sd-pdd-result-score">Правильно: $correctCount из $total ($pct%)</p>
                     <p class="sd-pdd-result-verdict">${if (pass) "Сдано" else "Не сдано (нужно не менее 80%)"}</p>
                 </div>
-                <button type="button" class="sd-btn sd-btn-primary sd-pdd-back-tickets">← К списку билетов</button>
+                <div class="sd-pdd-result-actions">
+                    <button type="button" class="sd-btn sd-btn-secondary sd-pdd-back-to-questions">К вопросам</button>
+                    <button type="button" class="sd-btn sd-btn-primary sd-pdd-back-tickets">← К списку билетов</button>
+                </div>
             </div>"""
         }
 
@@ -1534,9 +1641,32 @@ private fun renderTicketsTabContent(): String {
                 if (showCorrect) append(" sd-pdd-answer-correct")
                 if (isSelectedWrong) append(" sd-pdd-answer-wrong")
             }
+            /* Один выбор на вопрос. При повторном открытии ошибочные не подгружаются в userSelections — даём один повторный выбор. */
             val disabledAttr = if (answered) " disabled" else ""
             """<button type="button" class="$cls" data-pdd-answer-index="$idx" data-pdd-question-index="$currentIdx"$disabledAttr>${(idx + 1).toString().escapeHtml()}. ${a.answerText.escapeHtml()}</button>"""
         }.joinToString("")
+        val savedResults = if (catId != null && ticketName != null) getPddTicketSavedResults(catId, ticketName) else emptyMap()
+        val questionNavHtml = questions.indices.joinToString("") { idx ->
+            val selIdx = userSelections[idx]
+            val savedCorrect = savedResults[idx]
+            val answeredHere = selIdx != null || savedCorrect != null
+            val isCorrectHere = when {
+                savedCorrect == true -> true
+                savedCorrect == false -> false
+                selIdx != null -> questions.getOrNull(idx)?.answers?.getOrNull(selIdx)?.isCorrect == true
+                else -> null
+            }
+            val isCurrent = idx == currentIdx
+            val navCls = buildString {
+                append("sd-pdd-question-nav-item")
+                if (isCurrent) append(" sd-pdd-question-nav-current")
+                if (answeredHere && isCorrectHere != null) {
+                    if (isCorrectHere) append(" sd-pdd-question-nav-correct")
+                    else append(" sd-pdd-question-nav-wrong")
+                }
+            }
+            """<button type="button" class="$navCls" data-pdd-go-question="$idx" title="Вопрос ${idx + 1}">${idx + 1}</button>"""
+        }
         val imageSrc = q.image?.let { img ->
             if (img.startsWith("./")) "pdd/${img.drop(2)}" else "pdd/images/$img"
         }
@@ -1556,6 +1686,7 @@ private fun renderTicketsTabContent(): String {
         <div class="sd-tickets-content">
             <button type="button" class="sd-btn sd-btn-secondary sd-pdd-back-tickets">$backLabel</button>
             <p class="sd-pdd-progress">$progress</p>
+            <div class="sd-pdd-question-nav" aria-label="Выбор вопроса">$questionNavHtml</div>
             <div class="sd-pdd-question-block">
                 <p class="sd-pdd-question-text">${q.question.escapeHtml()}</p>
                 $imageHtml
@@ -1684,7 +1815,10 @@ private fun renderTicketsTabContent(): String {
                     <p class="sd-pdd-result-score">Правильно: $correctCount из $total ($pct%)</p>
                     <p class="sd-pdd-result-verdict">${if (pass) "Сдано" else "Не сдано (нужно не менее 80%)"}</p>
                 </div>
-                <button type="button" class="sd-btn sd-btn-primary sd-pdd-back-tickets">← К разделам</button>
+                <div class="sd-pdd-result-actions">
+                    <button type="button" class="sd-btn sd-btn-secondary sd-pdd-back-to-questions">К вопросам</button>
+                    <button type="button" class="sd-btn sd-btn-primary sd-pdd-back-tickets">← К разделам</button>
+                </div>
             </div>"""
         }
         if (questions.isNotEmpty() && !finished) {
@@ -1698,9 +1832,32 @@ private fun renderTicketsTabContent(): String {
                     if (answered && a.isCorrect) append(" sd-pdd-answer-correct")
                     if (answered && selectedAns == idx && !a.isCorrect) append(" sd-pdd-answer-wrong")
                 }
-            val disabledAttr = if (answered) " disabled" else ""
+                /* Один выбор на вопрос; ошибочные при повторном открытии не в userSelections — один повторный выбор. */
+                val disabledAttr = if (answered) " disabled" else ""
                 """<button type="button" class="$cls" data-pdd-answer-index="$idx" data-pdd-question-index="$currentIdx"$disabledAttr>${(idx + 1).toString().escapeHtml()}. ${a.answerText.escapeHtml()}</button>"""
             }.joinToString("")
+            val savedResultsTopic = getPddTicketSavedResults("by_topic", appState.pddTicketName ?: "")
+            val questionNavHtml = questions.indices.joinToString("") { idx ->
+                val selIdx = userSelections[idx]
+                val savedCorrectTopic = savedResultsTopic[idx]
+                val answeredHere = selIdx != null || savedCorrectTopic != null
+                val isCorrectHere = when {
+                    savedCorrectTopic == true -> true
+                    savedCorrectTopic == false -> false
+                    selIdx != null -> questions.getOrNull(idx)?.answers?.getOrNull(selIdx)?.isCorrect == true
+                    else -> null
+                }
+                val isCurrent = idx == currentIdx
+                val navCls = buildString {
+                    append("sd-pdd-question-nav-item")
+                    if (isCurrent) append(" sd-pdd-question-nav-current")
+                    if (answeredHere && isCorrectHere != null) {
+                        if (isCorrectHere) append(" sd-pdd-question-nav-correct")
+                        else append(" sd-pdd-question-nav-wrong")
+                    }
+                }
+                """<button type="button" class="$navCls" data-pdd-go-question="$idx" title="Вопрос ${idx + 1}">${idx + 1}</button>"""
+            }
             val imageSrc = q.image?.let { img -> if (img.startsWith("./")) "pdd/${img.drop(2)}" else "pdd/images/$img" }
             val imageHtml = if (imageSrc != null) """<div class="sd-pdd-question-image"><img src="${imageSrc.escapeHtml()}" alt="" loading="lazy" /></div>""" else ""
             val explanationHtml = if (answered && q.correctAnswer.isNotBlank()) {
@@ -1713,6 +1870,7 @@ private fun renderTicketsTabContent(): String {
         <div class="sd-tickets-content">
             <button type="button" class="sd-btn sd-btn-secondary sd-pdd-back-tickets">← К разделам</button>
             <p class="sd-pdd-progress">Вопрос ${currentIdx + 1} из ${questions.size}</p>
+            <div class="sd-pdd-question-nav" aria-label="Выбор вопроса">$questionNavHtml</div>
             <div class="sd-pdd-question-block">
                 <p class="sd-pdd-question-text">${q.question.escapeHtml()}</p>
                 $imageHtml
@@ -1725,16 +1883,19 @@ private fun renderTicketsTabContent(): String {
         val sections = appState.pddByTopicSections
         val sectionsHtml = sections.mapIndexed { secIdx, sec ->
             val count = sec.questions.size
-            val questionsPreview = sec.questions.take(2).joinToString("") { q ->
-                """<p class="sd-pdd-topic-q">${q.question.escapeHtml()}</p>"""
-            }
-            """<details class="sd-pdd-section"><summary class="sd-pdd-section-title">${sec.name.escapeHtml()} ($count вопросов)</summary><div class="sd-pdd-topic-questions">$questionsPreview${if (sec.questions.size > 2) """<p class="sd-pdd-topic-more">… и ещё ${sec.questions.size - 2}</p>""" else ""}<button type="button" class="sd-btn sd-btn-primary sd-pdd-topic-start" data-pdd-topic-index="$secIdx">Пройти тест</button></div></details>"""
+            val topicTicketName = "По разделу: ${sec.name}"
+            val statClass = getPddTicketCardStatClass("by_topic", topicTicketName, count)
+            val (correct, incorrect, noAnswer) = getPddTicketStat("by_topic", topicTicketName, count)
+            """<button type="button" class="sd-pdd-section sd-pdd-section-clickable $statClass" data-pdd-topic-index="$secIdx">
+                <span class="sd-pdd-section-title">${sec.name.escapeHtml()} ($count вопросов)</span>
+                <span class="sd-pdd-ticket-stats"><span class="sd-pdd-stat sd-pdd-stat-ok">$correct</span><span class="sd-pdd-stat sd-pdd-stat-err">$incorrect</span><span class="sd-pdd-stat sd-pdd-stat-na">$noAnswer</span></span>
+            </button>"""
         }.joinToString("")
         return """<h2>Билеты ПДД</h2>
         <div class="sd-tickets-content">
             <button type="button" class="sd-btn sd-btn-secondary sd-pdd-back-categories">← К категориям</button>
             <h3 class="sd-pdd-subtitle">$categoryTitle</h3>
-            <p class="sd-tickets-intro">Вопросы по разделам из билетов категории AB. Выберите раздел и пройдите тест.</p>
+            <p class="sd-tickets-intro">Вопросы по разделам из билетов категории AB. Нажмите на раздел, чтобы открыть тест.</p>
             <div class="sd-pdd-sections">$sectionsHtml</div>
         </div>"""
     }
@@ -1922,6 +2083,128 @@ private fun renderPanel(user: User, roleTitle: String, tabs: List<String>): Stri
     """.trimIndent()
 }
 
+/** Принудительно обновляет контент #sd-card по текущему appState (для панели инструктора/курсанта). */
+private fun refreshPanelCardContent(root: org.w3c.dom.Element) {
+    val user = appState.user ?: return
+    val tabs = when (appState.screen) {
+        AppScreen.Admin -> listOf("Главная", "Баланс", "Чат", "История")
+        AppScreen.Instructor -> listOf("Главная", "Запись", "Чат", "Билеты", "История", "Настройки")
+        else -> listOf("Главная", "Запись", "Чат", "Билеты", "История", "Настройки")
+    }
+    val (_, tabContent) = getPanelTabButtonsAndContent(user, tabs)
+    (root.querySelector("#sd-card") as? org.w3c.dom.Element)?.innerHTML = tabContent
+    attachListeners(root)
+}
+
+/** Обновляет только контент вкладки «Билеты» в #sd-card (экзамен/билеты). */
+private fun refreshTicketsCardContent(root: org.w3c.dom.Element) {
+    val content = renderTicketsTabContent()
+    (root.querySelector("#sd-card") as? org.w3c.dom.Element)?.innerHTML = content
+    attachListeners(root)
+}
+
+/** Запускает экзамен ПДД по категории (A_B или C_D). Вызывается из клика по [data-pdd-exam-category] или по «Категория AB/CD» с главного экрана. */
+private fun runPddExam(examCat: String, root: org.w3c.dom.Element) {
+    val log = js("console.log").unsafeCast<(Any?) -> Unit>()
+    log("PDD: runPddExam cat=$examCat")
+    fun applyExam(b: dynamic, r: org.w3c.dom.Element) {
+        try {
+            val (examQuestions, blockIndices) = generateExamTicket(b, examCat)
+            log("PDD: exam ticket generated questions=${examQuestions.size}")
+            val now = js("Date.now").unsafeCast<() -> Double>().invoke()
+            val tabsList = when (appState.screen) {
+                AppScreen.Instructor -> listOf("Главная", "Запись", "Чат", "Билеты", "История", "Настройки")
+                else -> listOf("Главная", "Запись", "Чат", "Билеты", "История", "Настройки")
+            }
+            val ticketsTabIndex = tabsList.indexOf("Билеты").coerceAtLeast(0)
+            updateState {
+                selectedTabIndex = ticketsTabIndex
+                pddCategoryId = "exam"
+                pddTicketsBundle = b
+                pddExamMode = true; pddExamCategoryForBundle = examCat
+                pddExamStartTimeMs = now; pddExamBlockIndices = blockIndices
+                pddExamPhase = "main"
+                pddQuestions = examQuestions; pddCurrentIndex = 0; pddUserSelections = emptyMap()
+                pddFinished = false; pddLoading = false
+                pddTicketName = "Экзамен (${if (examCat == "A_B") "AB" else "CD"})"
+            }
+            startExamTimer()
+            forceFullPanelRender(r, useExamContent = true)
+            log("PDD: forceFullPanelRender done")
+        } catch (t: Throwable) {
+            js("console.error").unsafeCast<(Any?) -> Unit>().invoke("PDD exam start error: " + (t.message ?: t.toString()))
+            updateState { pddExamCategoryForBundle = null }
+        }
+    }
+    var bundle: dynamic = getEmbeddedPddBundle()
+    if (bundle == null || bundle == js("undefined")) bundle = appState.pddTicketsBundle
+    if (bundle == null || bundle == js("undefined")) bundle = js("window.__PDD_TICKETS_BUNDLE__").unsafeCast<dynamic>()
+    val hasBundle = js("(function(b, cat){ return b != null && b !== undefined && b[cat]; })").unsafeCast<(dynamic, String) -> Boolean>().invoke(bundle, examCat)
+    if (hasBundle) {
+        applyExam(bundle, root)
+    } else {
+        updateState { pddCategoryId = "exam"; pddExamCategoryForBundle = examCat; pddLoading = true }
+        loadPddBundleFromNetwork { b: dynamic? ->
+            val ok = js("(function(x){ return x != null && x !== undefined; })").unsafeCast<(dynamic) -> Boolean>().invoke(b)
+            if (ok && b != null) (document.getElementById("root") as? org.w3c.dom.Element)?.let { r -> applyExam(b, r) }
+            else updateState { pddLoading = false; pddExamCategoryForBundle = null }
+        }
+    }
+}
+
+/** Полная перерисовка панели. useExamContent = true — принудительно подставить экран экзамена в карточку. */
+private fun forceFullPanelRender(root: org.w3c.dom.Element, useExamContent: Boolean = false) {
+    val user = appState.user ?: return
+    val networkBanner = appState.networkError?.let { msg ->
+        """<div class="sd-network-error" id="sd-network-error"><span>$msg</span> <button type="button" id="sd-dismiss-network-error" class="sd-btn-inline">Закрыть</button></div>"""
+    } ?: ""
+    val loadingOverlay = if (appState.loading) """<div class="sd-loading-overlay" id="sd-loading-overlay"><div class="sd-spinner"></div><p>Загрузка…</p></div>""" else ""
+    val roleTitle = when (appState.screen) {
+        AppScreen.Admin -> "Администратор"
+        AppScreen.Instructor -> "Инструктор"
+        AppScreen.Cadet -> "Курсант"
+        else -> ""
+    }
+    val tabs = when (appState.screen) {
+        AppScreen.Admin -> listOf("Главная", "Баланс", "Чат", "История")
+        AppScreen.Instructor -> listOf("Главная", "Запись", "Чат", "Билеты", "История", "Настройки")
+        else -> listOf("Главная", "Запись", "Чат", "Билеты", "История", "Настройки")
+    }
+    val (tabButtons, tabContentFromTabs) = getPanelTabButtonsAndContent(user, tabs)
+    val tabContent = if (useExamContent) renderTicketsTabContent() else tabContentFromTabs
+    val panelHtml = """
+        <header class="sd-header sd-panel-header">
+            <div class="sd-header-text">
+                <h1>StartDrive · $roleTitle</h1>
+                <p>${formatShortName(user.fullName)} · ${user.email}</p>
+            </div>
+            <button type="button" id="sd-btn-signout" class="sd-btn sd-btn-signout" title="Выйти">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                    <polyline points="16 17 21 12 16 7"/>
+                    <line x1="21" y1="12" x2="9" y2="12"/>
+                </svg>
+                <span class="sd-signout-label">Выйти</span>
+            </button>
+        </header>
+        <main class="sd-content">
+            <div class="sd-card" id="sd-card">
+                $tabContent
+            </div>
+        </main>
+        <nav class="sd-tabs">$tabButtons</nav>
+    """.trimIndent()
+    root.innerHTML = networkBanner + loadingOverlay + panelHtml
+    if (useExamContent) {
+        val card = root.querySelector("#sd-card") as? org.w3c.dom.Element
+        if (card != null) {
+            card.innerHTML = renderTicketsTabContent()
+        }
+    }
+    attachListeners(root)
+    root.querySelector("#sd-card")?.unsafeCast<dynamic>()?.scrollIntoView(js("({ block: 'start', behavior: 'auto' })"))
+}
+
 private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
     root.addEventListener("click", { e: dynamic ->
         if (appState.screen != AppScreen.Admin && appState.screen != AppScreen.Instructor && appState.screen != AppScreen.Cadet) return@addEventListener
@@ -1933,11 +2216,44 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             } catch (_: Throwable) { null }
         }
         if (appState.user?.role == "instructor" || appState.user?.role == "cadet") {
+            val pddExamBack = closest(".sd-pdd-exam-back")
+            if (pddExamBack != null) {
+                val examStartMs = appState.pddExamStartTimeMs ?: 0.0
+                val nowMs = js("Date.now").unsafeCast<() -> Double>().invoke()
+                if (examStartMs > 0.0 && (nowMs - examStartMs) < 500.0) return@addEventListener
+                clearExamTimer()
+                updateState {
+                    pddExamMode = false; pddExamCategoryForBundle = null; pddExamStartTimeMs = null
+                    pddExamBlockIndices = emptyList(); pddExamPhase = "main"
+                    pddExamAdditionalQuestions = emptyList(); pddExamAdditionalBlockIndices = emptyList()
+                    pddExamAdditionalCurrentIndex = 0; pddExamAdditionalUserSelections = emptyMap()
+                    pddExamAdditionalStartTimeMs = null; pddExamAdditionalDurationSec = 300
+                    pddExamResultPass = null
+                    pddCategoryId = null
+                    pddTicketName = null; pddQuestions = emptyList(); pddCurrentIndex = 0
+                    pddUserSelections = emptyMap(); pddFinished = false
+                }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
+            val pddExamCategory = closest("[data-pdd-exam-category]")
+            if (pddExamCategory != null) {
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                (e as? org.w3c.dom.events.Event)?.stopPropagation()
+                val examCat = pddExamCategory.getAttribute("data-pdd-exam-category") ?: return@addEventListener
+                runPddExam(examCat, root)
+                return@addEventListener
+            }
             val pddBackCat = closest(".sd-pdd-back-categories")
-            if (pddBackCat != null) {
+            val clickedBackButton = pddBackCat != null && (target == pddBackCat || js("(function(a,b){ return a===b || (a&&b&&a.contains&&a.contains(b)); })").unsafeCast<(Any?, Any?) -> Boolean>().invoke(pddBackCat, target))
+            if (clickedBackButton) {
                 updateState {
                     pddCategoryId = null; pddTicketName = null; pddQuestions = emptyList()
                     pddCurrentIndex = 0; pddUserSelections = emptyMap(); pddFinished = false
+                    pddExamMode = false; pddExamCategoryForBundle = null; pddExamStartTimeMs = null
+                    pddExamBlockIndices = emptyList(); pddExamPhase = "main"
+                    pddExamAdditionalQuestions = emptyList(); pddExamAdditionalBlockIndices = emptyList()
+                    pddExamAdditionalCurrentIndex = 0; pddExamAdditionalUserSelections = emptyMap(); pddExamResultPass = null
                     pddSignsSections = emptyList(); pddSelectedSign = null; pddSelectedSignSectionIndex = -1; pddSelectedSignItemIndex = -1; pddResetConfirmCategory = null; pddMarkupSections = emptyList(); pddPenalties = emptyList(); pddByTopicSections = emptyList()
                 }
                 (e as? org.w3c.dom.events.Event)?.preventDefault()
@@ -1954,9 +2270,11 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                 fun applyTicket(b: dynamic) {
                     val questions = getQuestionsFromBundle(b, categoryId, num)
                     log("PDD: applyTicket questions.size=${questions.size}")
+                    val parsed = getPddTicketSavedParsed(categoryId, ticketName)
+                    val savedSelections = parsed.filter { it.value.second }.mapValues { it.value.first } /* только правильные — чтобы ошибочные можно было решить один раз заново */
                     updateState {
                         pddTicketsBundle = b
-                        pddQuestions = questions; pddCurrentIndex = 0; pddUserSelections = emptyMap()
+                        pddQuestions = questions; pddCurrentIndex = 0; pddUserSelections = savedSelections
                         pddFinished = false; pddLoading = false
                     }
                 }
@@ -2046,11 +2364,35 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                 (e as? org.w3c.dom.events.Event)?.preventDefault()
                 return@addEventListener
             }
-            val pddAnswer = closest(".sd-pdd-answer")
-            if (pddAnswer != null) {
-                if (pddAnswer.getAttribute("disabled") != null) return@addEventListener
-                val answerIndex = pddAnswer.getAttribute("data-pdd-answer-index")?.toIntOrNull() ?: return@addEventListener
-                val questionIndex = pddAnswer.getAttribute("data-pdd-question-index")?.toIntOrNull() ?: return@addEventListener
+            val pddGoQuestion = closest(".sd-pdd-question-nav-item")
+            if (pddGoQuestion != null) {
+                val idx = pddGoQuestion.getAttribute("data-pdd-go-question")?.toIntOrNull() ?: return@addEventListener
+                updateState { pddCurrentIndex = idx }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
+            val pddBackToQuestions = closest(".sd-pdd-back-to-questions")
+            if (pddBackToQuestions != null) {
+                updateState { pddFinished = false; pddCurrentIndex = 0 }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
+            val pddExamAdditionalAnswer = closest(".sd-pdd-answer[data-pdd-exam-additional]")
+            if (pddExamAdditionalAnswer != null && pddExamAdditionalAnswer.getAttribute("disabled") == null) {
+                val answerIndex = pddExamAdditionalAnswer.getAttribute("data-pdd-answer-index")?.toIntOrNull() ?: return@addEventListener
+                val questionIndex = pddExamAdditionalAnswer.getAttribute("data-pdd-question-index")?.toIntOrNull() ?: return@addEventListener
+                updateState {
+                    val m = pddExamAdditionalUserSelections.toMutableMap()
+                    m[questionIndex] = answerIndex
+                    pddExamAdditionalUserSelections = m
+                }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
+            val pddExamMainAnswer = closest(".sd-pdd-answer[data-pdd-exam-main]")
+            if (pddExamMainAnswer != null && pddExamMainAnswer.getAttribute("disabled") == null) {
+                val answerIndex = pddExamMainAnswer.getAttribute("data-pdd-answer-index")?.toIntOrNull() ?: return@addEventListener
+                val questionIndex = pddExamMainAnswer.getAttribute("data-pdd-question-index")?.toIntOrNull() ?: return@addEventListener
                 updateState {
                     val m = pddUserSelections.toMutableMap()
                     m[questionIndex] = answerIndex
@@ -2059,8 +2401,134 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                 (e as? org.w3c.dom.events.Event)?.preventDefault()
                 return@addEventListener
             }
+            val pddAnswer = closest(".sd-pdd-answer")
+            if (pddAnswer != null) {
+                if (pddAnswer.getAttribute("disabled") != null) return@addEventListener /* ответ уже выбран, менять нельзя */
+                val answerIndex = pddAnswer.getAttribute("data-pdd-answer-index")?.toIntOrNull() ?: return@addEventListener
+                val questionIndex = pddAnswer.getAttribute("data-pdd-question-index")?.toIntOrNull() ?: return@addEventListener
+                updateState {
+                    val m = pddUserSelections.toMutableMap()
+                    m[questionIndex] = answerIndex
+                    pddUserSelections = m
+                }
+                /* Сохраняем статистику билета при каждом выборе/смене ответа (A_B/C_D) */
+                val catId = appState.pddCategoryId
+                val tName = appState.pddTicketName
+                if (catId != null && tName != null && (catId == "A_B" || catId == "C_D" || catId == "by_topic")) {
+                    val q = appState.pddQuestions.getOrNull(questionIndex)
+                    val isCorrect = q?.answers?.getOrNull(answerIndex)?.isCorrect == true
+                    savePddTicketResult(catId, tName, questionIndex, answerIndex, isCorrect)
+                }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
             val pddNext = closest(".sd-pdd-next")
             if (pddNext != null && pddNext.getAttribute("disabled") == null) {
+            val isExamAdditional = pddNext.getAttribute("data-pdd-exam-additional") != null
+            val isExamMain = pddNext.getAttribute("data-pdd-exam-main") != null
+            if (isExamAdditional) {
+                val addStartMs = appState.pddExamAdditionalStartTimeMs ?: 0.0
+                val addDurationSec = appState.pddExamAdditionalDurationSec
+                val addNow = js("Date.now").unsafeCast<() -> Double>().invoke()
+                val addTimeOver = ((addNow - addStartMs) / 1000.0).toInt() >= addDurationSec
+                if (addTimeOver) {
+                    clearExamTimer()
+                    updateState { pddExamResultPass = false; pddExamPhase = "result" }
+                    (e as? org.w3c.dom.events.Event)?.preventDefault()
+                    return@addEventListener
+                }
+                val addIdx = appState.pddExamAdditionalCurrentIndex
+                val addTotal = appState.pddExamAdditionalQuestions.size
+                val addSel = appState.pddExamAdditionalUserSelections[addIdx]
+                if (addSel != null) {
+                    if (addIdx >= addTotal - 1) {
+                        val addQuestions = appState.pddExamAdditionalQuestions
+                        val allCorrect = addQuestions.indices.all { qIdx ->
+                            val s = appState.pddExamAdditionalUserSelections[qIdx] ?: return@all false
+                            addQuestions.getOrNull(qIdx)?.answers?.getOrNull(s)?.isCorrect == true
+                        }
+                        clearExamTimer()
+                        updateState { pddExamResultPass = allCorrect; pddExamPhase = "result" }
+                    } else {
+                        updateState { pddExamAdditionalCurrentIndex = addIdx + 1 }
+                    }
+                }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
+                if (isExamMain && appState.pddExamMode) {
+                    val startTime = appState.pddExamStartTimeMs ?: 0.0
+                    val now = js("Date.now").unsafeCast<() -> Double>().invoke()
+                    val elapsedSec = ((now - startTime) / 1000.0).toInt()
+                    val timeOver = elapsedSec >= 20 * 60
+                    if (timeOver) {
+                        updateState { pddExamResultPass = false; pddExamPhase = "result" }
+                        (e as? org.w3c.dom.events.Event)?.preventDefault()
+                        return@addEventListener
+                    }
+                    val idx = appState.pddCurrentIndex
+                    val total = appState.pddQuestions.size
+                    val sel = appState.pddUserSelections[idx]
+                    if (sel != null) {
+                        if (idx < total - 1) {
+                            updateState { pddCurrentIndex = idx + 1 }
+                        } else {
+                            val blockIndices = appState.pddExamBlockIndices
+                            val questions = appState.pddQuestions
+                            val userSelections = appState.pddUserSelections
+                            val errorsPerBlock = IntArray(4)
+                            for (i in 0 until 20) {
+                                val bi = blockIndices.getOrNull(i) ?: 0
+                                val s = userSelections[i] ?: continue
+                                val correct = questions.getOrNull(i)?.answers?.getOrNull(s)?.isCorrect == true
+                                if (!correct) errorsPerBlock[bi]++
+                            }
+                            val totalErrors = errorsPerBlock.sum()
+                            val twoOrMoreInBlock = errorsPerBlock.any { it >= 2 }
+                            when {
+                                timeOver || totalErrors >= 3 || twoOrMoreInBlock -> {
+                                    clearExamTimer()
+                                    updateState { pddExamResultPass = false; pddExamPhase = "result" }
+                                }
+                                totalErrors == 0 -> {
+                                    clearExamTimer()
+                                    updateState { pddExamResultPass = true; pddExamPhase = "result" }
+                                }
+                                else -> {
+                                    val blocksWithOneError = errorsPerBlock.mapIndexed { b, c -> b to c }.filter { it.second == 1 }.map { it.first }
+                                    val bundle = appState.pddTicketsBundle
+                                    val catForBundle = appState.pddExamCategoryForBundle ?: "A_B"
+                                    val allQ = if (bundle != null && bundle != js("undefined")) getAllQuestionsFromBundle(bundle, catForBundle) else emptyList()
+                                    val mainIds = questions.map { it.id }.toSet()
+                                    var excludeIds = mainIds
+                                    val additionalList = mutableListOf<PddQuestion>()
+                                    val additionalBlockList = mutableListOf<Int>()
+                                    for (blockIdx in blocksWithOneError) {
+                                        val wrongQ = questions.withIndex().firstOrNull { blockIndices.getOrNull(it.index) == blockIdx && userSelections[it.index] != null && questions[it.index].answers.getOrNull(userSelections[it.index]!!)?.isCorrect != true }
+                                        val topicName = wrongQ?.let { (_, q) -> q.topic.firstOrNull()?.takeIf { it.isNotBlank() } ?: "Прочее" } ?: "Прочее"
+                                        val five = getAdditionalQuestionsByTopic(allQ, topicName, excludeIds)
+                                        additionalList.addAll(five)
+                                        repeat(five.size) { additionalBlockList.add(blockIdx) }
+                                        excludeIds = excludeIds + five.map { it.id }
+                                    }
+                                    val addDurationSec = if (additionalList.size <= 5) 5 * 60 else 10 * 60
+                                    val addStartMs = js("Date.now").unsafeCast<() -> Double>().invoke()
+                                    updateState {
+                                        pddExamAdditionalQuestions = additionalList
+                                        pddExamAdditionalBlockIndices = additionalBlockList
+                                        pddExamAdditionalCurrentIndex = 0
+                                        pddExamAdditionalUserSelections = emptyMap()
+                                        pddExamAdditionalStartTimeMs = addStartMs
+                                        pddExamAdditionalDurationSec = addDurationSec
+                                        pddExamPhase = "additional"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    (e as? org.w3c.dom.events.Event)?.preventDefault()
+                    return@addEventListener
+                }
                 val idx = appState.pddCurrentIndex
                 val total = appState.pddQuestions.size
                 val sel = appState.pddUserSelections[idx]
@@ -2069,7 +2537,7 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                 if (sel != null && catId != null && tName != null && (catId == "A_B" || catId == "C_D")) {
                     val q = appState.pddQuestions.getOrNull(idx)
                     val isCorrect = q?.answers?.getOrNull(sel)?.isCorrect == true
-                    savePddTicketResult(catId, tName, idx, isCorrect)
+                    savePddTicketResult(catId, tName, idx, sel, isCorrect)
                 }
                 if (sel != null) {
                     if (idx >= total - 1) updateState { pddFinished = true }
@@ -2099,17 +2567,20 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                 (e as? org.w3c.dom.events.Event)?.preventDefault()
                 return@addEventListener
             }
-            val pddTopicStart = closest(".sd-pdd-topic-start")
-            if (pddTopicStart != null) {
-                val idxStr = pddTopicStart.getAttribute("data-pdd-topic-index") ?: return@addEventListener
+            val pddTopicSection = closest(".sd-pdd-section-clickable[data-pdd-topic-index]")
+            if (pddTopicSection != null) {
+                val idxStr = pddTopicSection.getAttribute("data-pdd-topic-index") ?: return@addEventListener
                 val secIdx = idxStr.toIntOrNull() ?: return@addEventListener
                 val sections = appState.pddByTopicSections
                 val sec = sections.getOrNull(secIdx) ?: return@addEventListener
+                val ticketNameTopic = "По разделу: ${sec.name}"
+                val parsedTopic = getPddTicketSavedParsed("by_topic", ticketNameTopic)
+                val savedSelectionsTopic = parsedTopic.filter { it.value.second }.mapValues { it.value.first }
                 updateState {
                     pddQuestions = sec.questions
-                    pddTicketName = "По разделу: ${sec.name}"
+                    pddTicketName = ticketNameTopic
                     pddCurrentIndex = 0
-                    pddUserSelections = emptyMap()
+                    pddUserSelections = savedSelectionsTopic
                     pddFinished = false
                 }
                 (e as? org.w3c.dom.events.Event)?.preventDefault()

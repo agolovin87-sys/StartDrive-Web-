@@ -101,6 +101,19 @@ data class AppState(
     var pddTicketsBundle: dynamic = null, // { A_B: { "1": [...], ... }, C_D: { "1": [...], ... } } — загружается один раз
     var pddStatsVersion: Int = 0, // увеличиваем при обнулении статистики для перерисовки списка
     var pddResetConfirmCategory: String? = null, // показывать модальное подтверждение обнуления (без localhost в тексте)
+    // Экзамен как в ГИБДД
+    var pddExamMode: Boolean = false,
+    var pddExamCategoryForBundle: String? = null, // A_B или C_D для бандла
+    var pddExamStartTimeMs: Double? = null,
+    var pddExamBlockIndices: List<Int> = emptyList(), // блок 0..3 для каждого из 20 вопросов
+    var pddExamPhase: String = "main", // main | additional | result
+    var pddExamAdditionalQuestions: List<PddQuestion> = emptyList(),
+    var pddExamAdditionalBlockIndices: List<Int> = emptyList(),
+    var pddExamAdditionalCurrentIndex: Int = 0,
+    var pddExamAdditionalUserSelections: Map<Int, Int> = emptyMap(),
+    var pddExamAdditionalStartTimeMs: Double? = null,
+    var pddExamAdditionalDurationSec: Int = 300, // 5 мин на 5 вопросов, 10 мин на 10
+    var pddExamResultPass: Boolean? = null,
 )
 
 var appState = AppState()

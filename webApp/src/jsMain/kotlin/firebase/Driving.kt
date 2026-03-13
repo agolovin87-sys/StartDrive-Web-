@@ -7,18 +7,12 @@ data class DrivingSession(
     val instructorId: String = "",
     val cadetId: String = "",
     val startTimeMillis: Long? = null,
+    val actualStartMs: Long? = null,
     val status: String = "",
     val instructorRating: Int = 0,
     val cadetRating: Int = 0,
     val openWindowId: String = "",
     val instructorConfirmed: Boolean = false,
-    val startRequestedByInstructor: Boolean = false,
-    /** Фактическое время начала вождения (из session.startTime), для таймера при status == "inProgress". */
-    val sessionStartTimeMillis: Long = 0L,
-    /** Суммарное время паузы в мс (из session.pausedTime). */
-    val sessionPausedTimeMillis: Long = 0L,
-    /** Идёт ли вождение (session.isActive). */
-    val sessionIsActive: Boolean = true,
 )
 
 data class InstructorOpenWindow(
@@ -47,20 +41,6 @@ private fun parseTimestamp(ts: dynamic): Long? {
         ?: (ts as? Number)?.toLong()
 }
 
-private fun parseSessionFields(d: dynamic): Triple<Long, Long, Boolean> {
-    val sess = d?.session
-    if (sess == null || sess == undefined) return Triple(0L, 0L, true)
-    val st = sess.startTime
-    val startMs = when {
-        st == null || st == undefined -> 0L
-        st is Number -> st.toLong()
-        else -> (st.unsafeCast<dynamic>().seconds as? Number)?.toLong()?.let { it * 1000 } ?: 0L
-    }
-    val paused = (sess.pausedTime as? Number)?.toLong() ?: 0L
-    val active = sess.isActive as? Boolean ?: true
-    return Triple(startMs, paused, active)
-}
-
 fun getSessionsForInstructor(instructorId: String, callback: (List<DrivingSession>) -> Unit) {
     getFirestore().collection(FirebasePaths.DRIVING_SESSIONS)
         .where("instructorId", "==", instructorId)
@@ -74,21 +54,19 @@ fun getSessionsForInstructor(instructorId: String, callback: (List<DrivingSessio
                     val doc = docs[i]
                     val d = (doc.unsafeCast<dynamic>()).data()
                     val startTime = d?.startTime
-                    val (sessStart, sessPaused, sessActive) = parseSessionFields(d)
+                    val sessionObj = d?.session
+                    val sessionStartMs = (sessionObj?.startTime as? Number)?.toLong()
                     DrivingSession(
                         id = doc.id,
                         instructorId = (d?.instructorId as? String) ?: "",
                         cadetId = (d?.cadetId as? String) ?: "",
                         startTimeMillis = parseTimestamp(startTime),
+                        actualStartMs = sessionStartMs,
                         status = (d?.status as? String) ?: "",
                         instructorRating = (d?.instructorRating as? Number)?.toInt() ?: 0,
                         cadetRating = (d?.cadetRating as? Number)?.toInt() ?: 0,
                         openWindowId = (d?.openWindowId as? String) ?: "",
                         instructorConfirmed = d?.instructorConfirmed as? Boolean ?: false,
-                        startRequestedByInstructor = d?.startRequestedByInstructor as? Boolean ?: false,
-                        sessionStartTimeMillis = sessStart,
-                        sessionPausedTimeMillis = sessPaused,
-                        sessionIsActive = sessActive,
                     )
                 })
             } catch (e: Throwable) {
@@ -111,21 +89,19 @@ fun getSessionsForCadet(cadetId: String, callback: (List<DrivingSession>) -> Uni
                     val doc = docs[i]
                     val d = (doc.unsafeCast<dynamic>()).data()
                     val startTime = d?.startTime
-                    val (sessStart, sessPaused, sessActive) = parseSessionFields(d)
+                    val sessionObj = d?.session
+                    val sessionStartMs = (sessionObj?.startTime as? Number)?.toLong()
                     DrivingSession(
                         id = doc.id,
                         instructorId = (d?.instructorId as? String) ?: "",
                         cadetId = (d?.cadetId as? String) ?: "",
                         startTimeMillis = parseTimestamp(startTime),
+                        actualStartMs = sessionStartMs,
                         status = (d?.status as? String) ?: "",
                         instructorRating = (d?.instructorRating as? Number)?.toInt() ?: 0,
                         cadetRating = (d?.cadetRating as? Number)?.toInt() ?: 0,
                         openWindowId = (d?.openWindowId as? String) ?: "",
                         instructorConfirmed = d?.instructorConfirmed as? Boolean ?: false,
-                        startRequestedByInstructor = d?.startRequestedByInstructor as? Boolean ?: false,
-                        sessionStartTimeMillis = sessStart,
-                        sessionPausedTimeMillis = sessPaused,
-                        sessionIsActive = sessActive,
                     )
                 })
             } catch (e: Throwable) {
@@ -259,7 +235,6 @@ fun getSession(sessionId: String, callback: (DrivingSession?) -> Unit) {
                 return@then
             }
             val dyn = d.unsafeCast<dynamic>()
-            val (sessStart, sessPaused, sessActive) = parseSessionFields(dyn)
             callback(DrivingSession(
                 id = doc.id,
                 instructorId = (dyn["instructorId"] as? String) ?: "",
@@ -270,10 +245,6 @@ fun getSession(sessionId: String, callback: (DrivingSession?) -> Unit) {
                 cadetRating = (dyn["cadetRating"] as? Number)?.toInt() ?: 0,
                 openWindowId = (dyn["openWindowId"] as? String) ?: "",
                 instructorConfirmed = dyn["instructorConfirmed"] as? Boolean ?: false,
-                startRequestedByInstructor = dyn["startRequestedByInstructor"] as? Boolean ?: false,
-                sessionStartTimeMillis = sessStart,
-                sessionPausedTimeMillis = sessPaused,
-                sessionIsActive = sessActive,
             ))
         }
         .catch { _ -> callback(null) }
@@ -305,43 +276,6 @@ fun confirmBookingByInstructor(sessionId: String, callback: (String?) -> Unit) {
         .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
 }
 
-/** Подтверждение записи курсантом (после назначения вождения инструктором). */
-fun confirmBookingByCadet(sessionId: String, callback: (String?) -> Unit) {
-    getFirestore().collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId)
-        .update("instructorConfirmed", true)
-        .then { callback(null) }
-        .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
-}
-
-/** Курсант подтвердил начало вождения (обновить session.cadetConfirmed). */
-fun confirmSessionByCadet(sessionId: String, callback: (String?) -> Unit) {
-    val firestore = getFirestore()
-    js("(function(db, id){ var ref = db.collection('driving_sessions').doc(id); var s = { cadetConfirmed: true, startTime: Date.now(), isActive: true, pausedTime: 0 }; return ref.update({ session: s }); })").unsafeCast<(dynamic, String) -> dynamic>().invoke(firestore, sessionId)
-        .then { _: dynamic -> callback(null) }
-        .catch { e: dynamic -> callback((e?.message as? String) ?: "Ошибка") }
-}
-
-/** Отменить вождение курсантом. */
-fun cancelByCadet(sessionId: String, callback: (String?) -> Unit) {
-    getSession(sessionId) { session ->
-        if (session == null) {
-            callback("Сессия не найдена")
-            return@getSession
-        }
-        val firestore = getFirestore()
-        val windowId = session.openWindowId
-        val freePromise = if (windowId.isNotBlank()) {
-            firestore.collection(FirebasePaths.INSTRUCTOR_OPEN_WINDOWS).doc(windowId)
-                .update(kotlin.js.json("status" to "free", "cadetId" to null))
-        } else js("Promise.resolve()")
-        freePromise.then {
-            firestore.collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId)
-                .update(kotlin.js.json("status" to "cancelledByCadet", "cancelledAt" to getFirestoreTimestampNow()))
-        }.then { callback(null) }
-         .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
-    }
-}
-
 /** Запрос инструктора на начало вождения — курсант увидит кнопку «Подтвердить». */
 fun requestStartByInstructor(sessionId: String, callback: (String?) -> Unit) {
     getFirestore().collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId)
@@ -352,88 +286,20 @@ fun requestStartByInstructor(sessionId: String, callback: (String?) -> Unit) {
 
 /** Начать вождение (перевести в inProgress, создать объект session). */
 fun startSession(sessionId: String, callback: (String?) -> Unit) {
-    val firestore = getFirestore()
-    js("(function(db, id){ var ref = db.collection('driving_sessions').doc(id); return ref.update({ status: 'inProgress', session: { startTime: Date.now(), pausedTime: 0, isActive: true, cadetConfirmed: false } }); })").unsafeCast<(dynamic, String) -> dynamic>().invoke(firestore, sessionId)
-        .then { _: dynamic -> callback(null) }
-        .catch { e: dynamic -> callback((e?.message as? String) ?: "Ошибка") }
-}
-
-/** Обновить таймер сессии (пауза/продолжить): session.pausedTime (мс), session.isActive. */
-fun updateSessionTimer(sessionId: String, pausedTimeMs: Long, isActive: Boolean, callback: (String?) -> Unit) {
-    val firestore = getFirestore()
-    val pausedNum = pausedTimeMs.toDouble()
-    js("(function(db, id, pausedMs, active){ var ref = db.collection('driving_sessions').doc(id); return db.runTransaction(function(tx){ return tx.get(ref).then(function(snap){ var d = snap.data() || {}; var s = d.session || {}; s.pausedTime = pausedMs; s.isActive = active; return tx.update(ref, { session: s }); }); }); })").unsafeCast<(dynamic, String, Double, Boolean) -> dynamic>().invoke(firestore, sessionId, pausedNum, isActive)
-        .then { _: dynamic -> callback(null) }
-        .catch { e: dynamic -> callback((e?.message as? String) ?: "Ошибка") }
-}
-
-/** Завершить вождение досрочно: статус completed, списание/начисление талонов, рейтинги. */
-fun completeSession(sessionId: String, instructorRating: Int, cadetRating: Int, performedByInstructorId: String, completedTimerRemaining: String?, callback: (String?) -> Unit) {
-    val db = getFirestore()
-    val sessRef = db.collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId)
-    val ts = getFirestoreTimestampNow()
-    db.runTransaction { tx: dynamic ->
-        tx.get(sessRef).then { snap: dynamic ->
-            val dataFn = snap?.data
-            val d = if (dataFn != null) (dataFn.unsafeCast<dynamic>().call(snap)) else null
-            val cadetIdRaw = d?.cadetId
-            val cadetId = (cadetIdRaw as? String) ?: (cadetIdRaw?.toString()?.takeIf { it.isNotBlank() })
-            if (cadetId.isNullOrBlank()) {
-                js("Promise.reject(new Error('Session not found'))")
-            } else {
-                val cadetRef = db.collection(FirebasePaths.USERS).doc(cadetId)
-                val instRef = db.collection(FirebasePaths.USERS).doc(performedByInstructorId)
-                tx.get(cadetRef).then { cSnap: dynamic ->
-                    tx.get(instRef).then { iSnap: dynamic ->
-                        val cDataFn = cSnap?.data
-                        val iDataFn = iSnap?.data
-                        val cData = if (cDataFn != null) (cDataFn.unsafeCast<dynamic>().call(cSnap)) else null
-                        val iData = if (iDataFn != null) (iDataFn.unsafeCast<dynamic>().call(iSnap)) else null
-                        val cadetBal = (cData?.balance as? Number)?.toInt() ?: 0
-                        val instBal = (iData?.balance as? Number)?.toInt() ?: 0
-                        val sessionUpd = if (!completedTimerRemaining.isNullOrBlank()) {
-                            kotlin.js.json(
-                                "status" to "completed",
-                                "completedAt" to ts,
-                                "instructorRating" to instructorRating,
-                                "cadetRating" to cadetRating,
-                                "session" to null,
-                                "completedTimerRemaining" to completedTimerRemaining
-                            )
-                        } else {
-                            kotlin.js.json(
-                                "status" to "completed",
-                                "completedAt" to ts,
-                                "instructorRating" to instructorRating,
-                                "cadetRating" to cadetRating,
-                                "session" to null
-                            )
-                        }
-                        tx.update(sessRef, sessionUpd)
-                        tx.update(cadetRef, kotlin.js.json("balance" to (cadetBal - 1).coerceAtLeast(0)))
-                        tx.update(instRef, kotlin.js.json("balance" to (instBal + 1)))
-                        val cadetHistRef = cadetRef.collection(FirebasePaths.BALANCE_HISTORY).doc()
-                        tx.set(cadetHistRef, kotlin.js.json(
-                            "userId" to cadetId,
-                            "amount" to 1,
-                            "type" to "debit",
-                            "performedBy" to performedByInstructorId,
-                            "timestamp" to ts
-                        ))
-                        val instHistRef = instRef.collection(FirebasePaths.BALANCE_HISTORY).doc()
-                        tx.set(instHistRef, kotlin.js.json(
-                            "userId" to performedByInstructorId,
-                            "amount" to 1,
-                            "type" to "credit",
-                            "performedBy" to cadetId,
-                            "timestamp" to ts
-                        ))
-                    }
-                }
-            }
-        }
-    }.then { _: dynamic -> callback(null) }
-     .catch { e: dynamic -> callback((e?.message as? String) ?: "Ошибка") }
+    val now = getFirestoreTimestampNow()
+    val sessionObj = kotlin.js.json(
+        "startTime" to (js("Date.now()").unsafeCast<Double>().toLong()),
+        "pausedTime" to 0,
+        "isActive" to true,
+        "cadetConfirmed" to false
+    )
+    getFirestore().collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId)
+        .update(kotlin.js.json(
+            "status" to "inProgress",
+            "session" to sessionObj
+        ))
+        .then { callback(null) }
+        .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
 }
 
 /** Инструктор опаздывает: сдвиг времени на N минут. */

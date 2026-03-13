@@ -1113,9 +1113,13 @@ a.sd-cadet-icon-btn:active {
     max-height: 85vh;
     overflow: auto;
 }
+.sd-modal .sd-modal-title {
+    text-align: center;
+}
 .sd-admin-cadets-modal .sd-modal-title {
     margin: 0 0 0.75rem 0;
     font-size: 1rem;
+    text-align: left;
 }
 .sd-admin-cadets-modal .sd-instructor-cadets-list {
     margin: 0 0 1rem 0;
@@ -1124,6 +1128,40 @@ a.sd-cadet-icon-btn:active {
 .sd-modal-actions {
     margin: 0;
     text-align: center;
+}
+.sd-rate-cadet-name {
+    font-weight: 600;
+    margin: 0.5rem 0 0.75rem;
+    font-size: 1rem;
+    text-align: center;
+}
+.sd-rate-options-instructor {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    margin: 0.75rem 0;
+    flex-wrap: wrap;
+}
+.sd-rate-options-instructor .sd-radio {
+    cursor: pointer;
+}
+.sd-rate-stars {
+    display: flex;
+    justify-content: center;
+    gap: 4px;
+    margin: 1rem 0;
+    font-size: 2rem;
+    line-height: 1;
+}
+.sd-rate-stars .sd-star {
+    cursor: pointer;
+    color: #cbd5e1;
+    user-select: none;
+    transition: color 0.15s ease;
+}
+.sd-rate-stars .sd-star:hover,
+.sd-rate-stars .sd-star.sd-star-filled {
+    color: #eab308;
 }
 .sd-admin-card-row-instructor {
     display: flex;
@@ -1808,6 +1846,14 @@ a.sd-cadet-icon-btn:active {
     font-family: inherit; position: relative; z-index: 1;
     transition: box-shadow 0.18s;
 }
+.sd-rec-picker-select.sd-has-cadet { color: #000; }
+.sd-rec-picker-select option[value=""] {
+    display: none;
+}
+.sd-rec-picker-select option:not([value=""]) {
+    color: #000;
+    background: #fff;
+}
 .sd-rec-picker-select:focus {
     box-shadow: 0 0 0 4px rgba(25,118,210,0.22), 0 3px 14px rgba(25,118,210,0.42);
 }
@@ -1963,6 +2009,8 @@ a.sd-cadet-icon-btn:active {
 .sd-sch-pill svg { flex-shrink: 0; }
 
 /* Status badges */
+.sd-sch-status-line { font-size: 0.76rem; font-weight: 700; }
+.sd-sch-status-label { color: #1565C0; }
 .sd-sch-status {
     display: inline-flex; align-items: center;
     font-size: 0.76rem; font-weight: 700;
@@ -1999,13 +2047,26 @@ a.sd-cadet-icon-btn:active {
 .sd-sch-late-btn:hover { box-shadow: 0 4px 14px rgba(230,81,0,0.45),inset 0 1px 0 rgba(255,255,255,0.25); }
 .sd-sch-cancel-btn { background: linear-gradient(180deg,#ef9a9a 0%,#e53935 55%,#c62828 100%); box-shadow: 0 2px 8px rgba(198,40,40,0.35),inset 0 1px 0 rgba(255,255,255,0.25); }
 .sd-sch-cancel-btn:hover { box-shadow: 0 4px 14px rgba(198,40,40,0.45),inset 0 1px 0 rgba(255,255,255,0.25); }
+.sd-sch-rate-btn {
+    background: linear-gradient(180deg, #81c784 0%, #43a047 55%, #2e7d32 100%);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(46,125,50,0.35), inset 0 1px 0 rgba(255,255,255,0.35);
+}
+.sd-sch-rate-btn:hover {
+    box-shadow: 0 4px 14px rgba(46,125,50,0.45), inset 0 1px 0 rgba(255,255,255,0.4);
+}
 
-/* Mobile */
+/* Mobile — карточка вождения и таймер */
 @media (max-width: 540px) {
     .sd-schedule-card { flex-wrap: wrap; }
     .sd-sch-body { min-width: 0; width: calc(100% - 56px); }
     .sd-sch-actions { flex-direction: row; flex-wrap: wrap; min-width: unset; align-self: auto; width: 100%; }
     .sd-sch-btn { flex: 1; min-width: calc(50% - 4px); }
+    /* Таймер: на всю ширину, кнопки по центру, кружки не растягивать, в ряд по горизонтали */
+    .sd-sch-timer-block { width: 100%; box-sizing: border-box; }
+    .sd-sch-timer-actions { justify-content: center; flex-direction: row; }
+    .sd-sch-timer-btn { width: 38px; height: 38px; flex: none; }
+    .sd-sch-timer-btn .sd-sch-timer-icon { width: 38px; height: 38px; }
 }
 
 .sd-btn-late { background: #f57c00; color: #fff; border: none; }
@@ -2016,8 +2077,8 @@ a.sd-cadet-icon-btn:active {
 /* ── Таймер вождения ── */
 .sd-sch-timer-block {
     margin-top: 10px;
-    background: linear-gradient(135deg, rgba(21,101,192,0.08) 0%, rgba(25,118,210,0.05) 100%);
-    border: 1px solid rgba(25,118,210,0.18);
+    background: linear-gradient(135deg, rgba(103,58,183,0.18) 0%, rgba(94,53,177,0.12) 100%);
+    border: 1px solid rgba(103,58,183,0.35);
     border-radius: 10px; padding: 8px 12px;
 }
 .sd-sch-timer-header {
@@ -2031,14 +2092,75 @@ a.sd-cadet-icon-btn:active {
     font-variant-numeric: tabular-nums; letter-spacing: 0.05em;
 }
 .sd-sch-timer-bar-wrap {
-    height: 6px; border-radius: 3px;
-    background: rgba(25,118,210,0.12); overflow: hidden;
+    position: relative;
+    height: 18px; border-radius: 9px;
+    background: rgba(25,118,210,0.12);
 }
 .sd-sch-timer-bar-fill {
-    height: 100%; border-radius: 3px;
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%; border-radius: 9px;
     background: linear-gradient(90deg, #42A5F5, #1565C0);
     width: 100%; transition: width 0.9s linear;
 }
+/* Значок машинки на дорожке — позиция задаётся из JS */
+.sd-sch-timer-bar-thumb {
+    position: absolute;
+    left: 0%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid #1565C0;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+    z-index: 2;
+    pointer-events: none;
+    color: #0d47a1;
+}
+.sd-sch-timer-bar-thumb .sd-sch-timer-thumb-icon {
+    display: block;
+    width: 16px;
+    height: 16px;
+}
+.sd-sch-timer-actions {
+    display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px;
+    justify-content: center;
+    flex-direction: row;
+}
+.sd-sch-timer-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; padding: 0; flex-shrink: 0;
+    border: none; border-radius: 50%; cursor: pointer;
+    font-family: inherit; transition: transform 0.12s, box-shadow 0.12s;
+}
+.sd-sch-timer-btn .material-symbols-outlined {
+    font-size: 24px;
+}
+.sd-sch-timer-btn .sd-sch-timer-icon {
+    width: 44px; height: 44px; display: block; object-fit: contain;
+}
+.sd-sch-timer-actions .sd-sch-pause {
+    background: #fff;
+    color: #e65100; box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+}
+.sd-sch-timer-actions .sd-sch-play {
+    background: #fff;
+    color: #2e7d32; box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+}
+.sd-sch-timer-actions .sd-sch-stop {
+    background: #fff;
+    color: #c62828; box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+    position: relative;
+}
+.sd-sch-stop .sd-stop-icon-pressed { display: none; position: absolute; inset: 0; margin: auto; }
+.sd-sch-stop:active .sd-stop-icon-default { display: none; }
+.sd-sch-stop:active .sd-stop-icon-pressed { display: block; }
 
 /* ── Карточки «Моё вождение» курсанта ── */
 .sd-record-list { display: flex; flex-direction: column; gap: 10px; }
@@ -2056,6 +2178,9 @@ a.sd-cadet-icon-btn:active {
 }
 .sd-record-status-sched { background: rgba(25,118,210,0.1); color: #1565C0; }
 .sd-record-status-active { background: rgba(46,125,50,0.1); color: #2E7D32; }
+.sd-record-status-waiting { background: rgba(230,81,0,0.12); color: #bf360c; }
+.sd-record-card-actions { margin-top: 10px; }
+.sd-record-card-actions .sd-sch-btn { margin-top: 4px; }
 .sd-record-empty { color: #aaa; font-size: 0.9rem; padding: 14px 0; text-align: center; }
 
 /* ═══════════════════════════════════════════════
@@ -4275,6 +4400,120 @@ a.sd-cadet-icon-btn:active {
     margin: 0;
 }
 
+/* ═══ История: карточки с иконками (инструктор/курсант) ═══ */
+.sd-history-card { margin-bottom: 12px; }
+.sd-history-summary,
+.sd-history-sub-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.sd-history-section-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    color: #2563eb;
+}
+.sd-history-section-icon.sd-history-icon-credit { color: #16a34a; }
+.sd-history-section-icon.sd-history-icon-debit { color: #dc2626; }
+.sd-history-section-icon.sd-history-icon-check { color: #2563eb; }
+.sd-history-section-icon.sd-history-icon-close { color: #dc2626; }
+.sd-history-section-icon.sd-history-icon-other { color: #64748b; }
+.sd-history-section-icon svg { width: 100%; height: 100%; }
+
+.sd-history-sub { margin-top: 6px; }
+.sd-history-sub summary { cursor: pointer; list-style: none; }
+.sd-history-sub summary::-webkit-details-marker { display: none; }
+.sd-history-sub-list,
+.sd-history-session-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 10px;
+    padding-left: 4px;
+}
+.sd-history-others { margin-top: 12px; }
+.sd-history-others .sd-history-sub-list { margin-top: 6px; }
+
+.sd-history-balance-card,
+.sd-history-session-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px;
+    background: #f1f5f9;
+    border-radius: 12px;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+.sd-history-balance-card.sd-history-credit-card { background: #f0fdf4; border-color: #bbf7d0; }
+.sd-history-balance-card.sd-history-debit-card { background: #fef2f2; border-color: #fecaca; }
+.sd-history-session-card.sd-history-completed-card { background: #f0fdf4; border-color: #bbf7d0; }
+.sd-history-session-card.sd-history-cancelled-card { background: #fef2f2; border-color: #fecaca; }
+
+.sd-history-card-icon {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.sd-history-card-icon svg { width: 24px; height: 24px; }
+.sd-history-icon-credit .sd-history-card-icon svg,
+.sd-history-icon-credit svg { color: #16a34a; }
+.sd-history-icon-debit .sd-history-card-icon svg,
+.sd-history-icon-debit svg { color: #dc2626; }
+.sd-history-icon-check svg { color: #2563eb; }
+.sd-history-icon-close svg { color: #dc2626; }
+.sd-history-icon-other svg { color: #64748b; }
+.sd-history-credit-card .sd-history-card-icon svg { color: #16a34a; }
+.sd-history-debit-card .sd-history-card-icon svg { color: #dc2626; }
+.sd-history-completed-card .sd-history-card-icon svg { color: #2563eb; }
+.sd-history-cancelled-card .sd-history-card-icon svg { color: #dc2626; }
+
+.sd-history-card-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.sd-history-balance-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.sd-history-balance-type {
+    font-weight: 700;
+    font-size: 0.95rem;
+}
+.sd-history-credit-card .sd-history-balance-type { color: #16a34a; }
+.sd-history-debit-card .sd-history-balance-type { color: #dc2626; }
+.sd-history-balance-badge {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: #fff;
+    background: #16a34a;
+    padding: 4px 12px;
+    border-radius: 999px;
+}
+.sd-history-balance-badge.sd-history-debit-badge { background: #dc2626; }
+.sd-history-other-card .sd-history-balance-badge { background: #64748b; }
+.sd-history-balance-row,
+.sd-history-session-row {
+    font-size: 0.88rem;
+    color: #334155;
+    line-height: 1.4;
+}
+.sd-history-session-row strong { color: #1e293b; margin-right: 4px; }
+
 .sd-btn-small {
     padding: 4px 12px;
     font-size: 0.85rem;
@@ -4388,6 +4627,29 @@ a.sd-cadet-icon-btn:active {
     .sd-history-day-header {
         font-size: 0.7rem;
     }
+    .sd-history-balance-card,
+    .sd-history-session-card {
+        padding: 10px 12px;
+        gap: 10px;
+        border-radius: 10px;
+    }
+    .sd-history-card-icon {
+        width: 28px;
+        height: 28px;
+    }
+    .sd-history-card-icon svg {
+        width: 20px;
+        height: 20px;
+    }
+    .sd-history-balance-type { font-size: 0.88rem; }
+    .sd-history-balance-badge { font-size: 0.82rem; padding: 3px 10px; }
+    .sd-history-balance-row,
+    .sd-history-session-row { font-size: 0.82rem; }
+    .sd-history-summary,
+    .sd-history-sub-title { gap: 8px; font-size: 0.9rem; }
+    .sd-history-section-icon { width: 22px; height: 22px; }
+    .sd-history-sub-list,
+    .sd-history-session-list { gap: 8px; margin-top: 8px; }
     .sd-header {
         padding: 8px 10px 8px 14px;
         padding-left: max(14px, env(safe-area-inset-left));

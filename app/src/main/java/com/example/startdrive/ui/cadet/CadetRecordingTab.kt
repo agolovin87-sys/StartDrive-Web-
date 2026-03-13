@@ -242,10 +242,10 @@ fun CadetRecordingTab(cadet: User) {
     if (showZeroBalanceMessage) {
         AlertDialog(
             onDismissRequest = { showZeroBalanceMessage = false },
-            title = { Text("Недостаточно талонов") },
+            title = { Text("Запись невозможна") },
             text = {
                 Text(
-                    "Ваш баланс: 0 талонов, обратитесь к Администратору за начислением талонов",
+                    "На Вашем балансе: 0 талонов, запись невозможна! Для бронирования вождения необходимо приобрести талон на вождение, обратитесь к Администратору.",
                     color = MaterialTheme.colorScheme.error,
                 )
             },

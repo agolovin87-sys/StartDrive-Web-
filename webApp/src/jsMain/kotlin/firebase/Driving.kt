@@ -13,6 +13,12 @@ data class DrivingSession(
     val cadetRating: Int = 0,
     val openWindowId: String = "",
     val instructorConfirmed: Boolean = false,
+    val startRequestedByInstructor: Boolean = false,
+    val sessionIsActive: Boolean = true,
+    val sessionPausedAt: Long? = null,
+    val completedAtMillis: Long? = null,
+    val cancelledAtMillis: Long? = null,
+    val cancelReason: String = "",
 )
 
 data class InstructorOpenWindow(
@@ -56,6 +62,8 @@ fun getSessionsForInstructor(instructorId: String, callback: (List<DrivingSessio
                     val startTime = d?.startTime
                     val sessionObj = d?.session
                     val sessionStartMs = (sessionObj?.startTime as? Number)?.toLong()
+                    val sessActive = sessionObj?.isActive
+                    val sessPausedAt = sessionObj?.pausedAt
                     DrivingSession(
                         id = doc.id,
                         instructorId = (d?.instructorId as? String) ?: "",
@@ -67,6 +75,12 @@ fun getSessionsForInstructor(instructorId: String, callback: (List<DrivingSessio
                         cadetRating = (d?.cadetRating as? Number)?.toInt() ?: 0,
                         openWindowId = (d?.openWindowId as? String) ?: "",
                         instructorConfirmed = d?.instructorConfirmed as? Boolean ?: false,
+                        startRequestedByInstructor = d?.startRequestedByInstructor as? Boolean ?: false,
+                        sessionIsActive = if (sessActive == null) true else (sessActive as? Boolean) ?: true,
+                        sessionPausedAt = (sessPausedAt as? Number)?.toLong(),
+                        completedAtMillis = parseTimestamp(d?.completedAt),
+                        cancelledAtMillis = parseTimestamp(d?.cancelledAt),
+                        cancelReason = (d?.cancelReason as? String) ?: "",
                     )
                 })
             } catch (e: Throwable) {
@@ -91,6 +105,8 @@ fun getSessionsForCadet(cadetId: String, callback: (List<DrivingSession>) -> Uni
                     val startTime = d?.startTime
                     val sessionObj = d?.session
                     val sessionStartMs = (sessionObj?.startTime as? Number)?.toLong()
+                    val sessActive = sessionObj?.isActive
+                    val sessPausedAt = sessionObj?.pausedAt
                     DrivingSession(
                         id = doc.id,
                         instructorId = (d?.instructorId as? String) ?: "",
@@ -102,6 +118,12 @@ fun getSessionsForCadet(cadetId: String, callback: (List<DrivingSession>) -> Uni
                         cadetRating = (d?.cadetRating as? Number)?.toInt() ?: 0,
                         openWindowId = (d?.openWindowId as? String) ?: "",
                         instructorConfirmed = d?.instructorConfirmed as? Boolean ?: false,
+                        startRequestedByInstructor = d?.startRequestedByInstructor as? Boolean ?: false,
+                        sessionIsActive = if (sessActive == null) true else (sessActive as? Boolean) ?: true,
+                        sessionPausedAt = (sessPausedAt as? Number)?.toLong(),
+                        completedAtMillis = parseTimestamp(d?.completedAt),
+                        cancelledAtMillis = parseTimestamp(d?.cancelledAt),
+                        cancelReason = (d?.cancelReason as? String) ?: "",
                     )
                 })
             } catch (e: Throwable) {
@@ -235,16 +257,27 @@ fun getSession(sessionId: String, callback: (DrivingSession?) -> Unit) {
                 return@then
             }
             val dyn = d.unsafeCast<dynamic>()
+            val sessionObj = dyn["session"]
+            val sessionStartMs = (sessionObj?.startTime as? Number)?.toLong()
+            val sessActive = sessionObj?.isActive
+            val sessPausedAt = sessionObj?.pausedAt
             callback(DrivingSession(
                 id = doc.id,
                 instructorId = (dyn["instructorId"] as? String) ?: "",
                 cadetId = (dyn["cadetId"] as? String) ?: "",
                 startTimeMillis = parseTimestamp(dyn["startTime"]),
+                actualStartMs = sessionStartMs,
                 status = (dyn["status"] as? String) ?: "",
                 instructorRating = (dyn["instructorRating"] as? Number)?.toInt() ?: 0,
                 cadetRating = (dyn["cadetRating"] as? Number)?.toInt() ?: 0,
                 openWindowId = (dyn["openWindowId"] as? String) ?: "",
                 instructorConfirmed = dyn["instructorConfirmed"] as? Boolean ?: false,
+                startRequestedByInstructor = dyn["startRequestedByInstructor"] as? Boolean ?: false,
+                sessionIsActive = if (sessActive == null) true else (sessActive as? Boolean) ?: true,
+                sessionPausedAt = (sessPausedAt as? Number)?.toLong(),
+                completedAtMillis = parseTimestamp(dyn["completedAt"]),
+                cancelledAtMillis = parseTimestamp(dyn["cancelledAt"]),
+                cancelReason = (dyn["cancelReason"] as? String) ?: "",
             ))
         }
         .catch { _ -> callback(null) }
@@ -286,9 +319,8 @@ fun requestStartByInstructor(sessionId: String, callback: (String?) -> Unit) {
 
 /** Начать вождение (перевести в inProgress, создать объект session). */
 fun startSession(sessionId: String, callback: (String?) -> Unit) {
-    val now = getFirestoreTimestampNow()
     val sessionObj = kotlin.js.json(
-        "startTime" to (js("Date.now()").unsafeCast<Double>().toLong()),
+        "startTime" to js("Date.now()"),
         "pausedTime" to 0,
         "isActive" to true,
         "cadetConfirmed" to false
@@ -300,6 +332,109 @@ fun startSession(sessionId: String, callback: (String?) -> Unit) {
         ))
         .then { callback(null) }
         .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
+}
+
+/** Поставить вождение на паузу (session.isActive = false). */
+fun pauseDrivingSession(sessionId: String, callback: (String?) -> Unit) {
+    getFirestore().collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId)
+        .update(kotlin.js.json(
+            "session.isActive" to false,
+            "session.pausedAt" to js("Date.now()")
+        ))
+        .then { callback(null) }
+        .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
+}
+
+/** Продолжить вождение (session.isActive = true). */
+fun resumeDrivingSession(sessionId: String, callback: (String?) -> Unit) {
+    getFirestore().collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId)
+        .update(kotlin.js.json("session.isActive" to true))
+        .then { callback(null) }
+        .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
+}
+
+/** Завершить вождение (статус completed). */
+fun completeDrivingSession(sessionId: String, callback: (String?) -> Unit) {
+    getSession(sessionId) { session ->
+        if (session == null) {
+            callback("Сессия не найдена")
+            return@getSession
+        }
+        val firestore = getFirestore()
+        val windowId = session.openWindowId
+        val freeWindowPromise = if (windowId.isNotBlank()) {
+            firestore.collection(FirebasePaths.INSTRUCTOR_OPEN_WINDOWS).doc(windowId)
+                .update(kotlin.js.json("status" to "free", "cadetId" to null))
+        } else js("Promise.resolve()")
+        freeWindowPromise.then {
+            firestore.collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId)
+                .update(kotlin.js.json(
+                    "status" to "completed",
+                    "completedAt" to getFirestoreTimestampNow()
+                ))
+        }.then { callback(null) }
+        .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
+    }
+}
+
+/** Поставить оценку курсанту (3, 4 или 5); списывает 1 талон с курсанта и зачисляет 1 инструктору. */
+fun setInstructorRating(sessionId: String, rating: Int, callback: (String?) -> Unit) {
+    if (rating !in 3..5) {
+        callback("Оценка должна быть 3, 4 или 5")
+        return
+    }
+    getSession(sessionId) { session ->
+        if (session == null) {
+            callback("Сессия не найдена")
+            return@getSession
+        }
+        if (session.status != "completed") {
+            callback("Сессия не завершена")
+            return@getSession
+        }
+        val cadetId = session.cadetId
+        val instructorId = session.instructorId
+        if (cadetId.isBlank() || instructorId.isBlank()) {
+            callback("Нет данных сессии")
+            return@getSession
+        }
+        getFirestore().collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId)
+            .update(kotlin.js.json("instructorRating" to rating))
+            .then {
+                updateBalance(cadetId, "debit", 1, instructorId) { err1 ->
+                    if (err1 != null) {
+                        callback(err1)
+                        return@updateBalance
+                    }
+                    updateBalance(instructorId, "credit", 1, cadetId) { err2 ->
+                        callback(err2)
+                    }
+                }
+            }
+            .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
+    }
+}
+
+/** Поставить оценку инструктору (1–5 звёзд). */
+fun setCadetRating(sessionId: String, rating: Int, callback: (String?) -> Unit) {
+    if (rating !in 1..5) {
+        callback("Оценка должна быть от 1 до 5")
+        return
+    }
+    getSession(sessionId) { session ->
+        if (session == null) {
+            callback("Сессия не найдена")
+            return@getSession
+        }
+        if (session.status != "completed" || session.instructorRating == 0) {
+            callback("Сначала инструктор должен поставить оценку")
+            return@getSession
+        }
+        getFirestore().collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId)
+            .update(kotlin.js.json("cadetRating" to rating))
+            .then { callback(null) }
+            .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
+    }
 }
 
 /** Инструктор опаздывает: сдвиг времени на N минут. */
@@ -329,8 +464,8 @@ fun setInstructorRunningLate(sessionId: String, delayMinutes: Int, callback: (St
     }
 }
 
-/** Отменить вождение инструктором: освободить окно (если было) и поставить статус отмены. */
-fun cancelByInstructor(sessionId: String, callback: (String?) -> Unit) {
+/** Отменить вождение инструктором: освободить окно (если было), поставить статус отмены и причину. */
+fun cancelByInstructor(sessionId: String, reason: String, callback: (String?) -> Unit) {
     getSession(sessionId) { session ->
         if (session == null) {
             callback("Сессия не найдена")
@@ -344,10 +479,12 @@ fun cancelByInstructor(sessionId: String, callback: (String?) -> Unit) {
         } else {
             js("Promise.resolve()")
         }
+        val reasonText = reason.takeIf { it.isNotBlank() } ?: "—"
         freeWindowPromise.then {
             firestore.collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId).update(kotlin.js.json(
                 "status" to "cancelledByInstructor",
-                "cancelledAt" to getFirestoreTimestampNow()
+                "cancelledAt" to getFirestoreTimestampNow(),
+                "cancelReason" to reasonText
             ))
         }.then { callback(null) }
          .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }

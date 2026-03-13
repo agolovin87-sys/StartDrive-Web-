@@ -517,12 +517,14 @@ fun InstructorRecordingTab(instructor: User) {
         )
     }
     if (showCadetZeroBalanceMessage) {
+        val selectedCadet = selectedCadetId?.let { id -> cadets.find { it.id == id } }
+        val cadetShortName = selectedCadet?.fullName?.takeIf { it.isNotBlank() }?.let { formatSurnameWithInitials(safeDisplayName(it, it)) } ?: "Курсант"
         AlertDialog(
             onDismissRequest = { showCadetZeroBalanceMessage = false },
-            title = { Text("Недостаточно талонов") },
+            title = { Text("Запись невозможна") },
             text = {
                 Text(
-                    "Баланс курсанта: 0 талонов, запись невозможна!",
+                    "На балансе у курсанта: $cadetShortName — 0 талонов, запись невозможна!",
                     color = MaterialTheme.colorScheme.error,
                 )
             },

@@ -1112,15 +1112,57 @@ private fun DrivingTimerBlock(
                 remainingMs <= 15 * 60 * 1000 -> Color.Red
                 else -> timerProgressBlue
             }
-            LinearProgressIndicator(
-                progress = { (remainingMs.toFloat() / totalMs).coerceIn(0f, 1f) },
+            val progressFraction = (remainingMs.toFloat() / totalMs).coerceIn(0f, 1f)
+            val elapsedFraction = 1f - progressFraction
+            BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(8.dp)
-                    .clip(RoundedCornerShape(4.dp)),
-                color = progressBarColor,
-                trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-            )
+                    .height(32.dp),
+            ) {
+                val trackHeight = 8.dp
+                val carSize = 24.dp
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.Center)
+                        .height(trackHeight)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.Center)
+                        .height(trackHeight)
+                        .clip(RoundedCornerShape(4.dp)),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(elapsedFraction)
+                            .fillMaxHeight()
+                            .background(progressBarColor),
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .offset(x = (maxWidth - carSize) * elapsedFraction)
+                        .size(carSize)
+                        .background(
+                            color = progressBarColor,
+                            shape = CircleShape,
+                        )
+                        .padding(4.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.DirectionsCar,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = Color.White,
+                    )
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center,

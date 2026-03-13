@@ -16,6 +16,7 @@ private var voiceRecorder: dynamic = null
 private var voiceRecorderMimeType: String = "audio/webm"
 private var voiceRecordInterval: Int = 0
 private var voicePlayInterval: Int = 0
+private var drivingTimerInterval: Int = 0
 private val chatScrollByContactId = mutableMapOf<String, Int>()
 
 private fun saveChatScrollForCurrentContact() {
@@ -584,6 +585,8 @@ private val LESSON_DURATION_MS = LESSON_DURATION_MINUTES * 60 * 1000
 
 /** За сколько минут до вождения активируется кнопка «Начать вождение». */
 private const val START_ALLOWED_MINUTES_BEFORE = 15L
+/** Длительность занятия вождения в минутах (1,5 часа), для таймера у инструктора. */
+private const val DRIVING_DURATION_MINUTES = 90L
 
 /** Категории билетов ПДД — как в Android (PddRepository.getCategories). */
 private val PDD_CATEGORIES = listOf(
@@ -1326,6 +1329,27 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
         }.joinToString("")
     }
     val runningLateModalHtml = """<div class="sd-modal-overlay sd-hidden" id="sd-running-late-modal"><div class="sd-modal"><h3 class="sd-modal-title">Опаздываю</h3><p>Выберите задержку:</p><div class="sd-running-late-options"><label class="sd-radio"><input type="radio" name="sd-late-mins" value="5" /> 5 мин.</label><label class="sd-radio"><input type="radio" name="sd-late-mins" value="10" /> 10 мин.</label><label class="sd-radio"><input type="radio" name="sd-late-mins" value="15" /> 15 мин.</label></div><p class="sd-modal-actions"><button type="button" id="sd-running-late-confirm" class="sd-btn sd-btn-primary">Подтвердить</button><button type="button" id="sd-running-late-cancel" class="sd-btn sd-btn-secondary">Отмена</button></p></div></div>"""
+    val inProgressSession = sessions.find { it.status == "inProgress" }
+    val totalTimerMs = DRIVING_DURATION_MINUTES * 60 * 1000
+    val timerBlockHtml = if (inProgressSession != null) {
+        val cadetName = cadets.find { it.id == inProgressSession.cadetId }?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "Курсант (${inProgressSession.cadetId.take(8)})"
+        val startMs = inProgressSession.sessionStartTimeMillis
+        val pausedMs = inProgressSession.sessionPausedTimeMillis
+        val isActive = inProgressSession.sessionIsActive
+        """<div class="sd-driving-timer-block" id="sd-driving-timer-block" data-session-id="${inProgressSession.id.escapeHtml()}" data-session-start-ms="$startMs" data-session-paused-ms="$pausedMs" data-total-ms="$totalTimerMs" data-session-is-active="$isActive">
+            <div class="sd-driving-timer-inner">
+                <p class="sd-driving-timer-title" id="sd-driving-timer-title">${if (isActive) "Вождение: в процессе" else "Вождение: на паузе"}</p>
+                <p class="sd-driving-timer-cadet"><strong>Курсант:</strong> ${cadetName.escapeHtml()}</p>
+                <p class="sd-driving-timer-remaining-label">Осталось: <span id="sd-driving-timer-remaining" class="sd-driving-timer-remaining">—</span></p>
+                <div class="sd-driving-timer-progress-track"><div class="sd-driving-timer-progress-fill" id="sd-driving-timer-progress-fill"></div></div>
+                <div class="sd-driving-timer-actions">
+                    <button type="button" class="sd-timer-btn sd-timer-btn-pause" id="sd-driving-timer-pause" title="Пауза" aria-label="Пауза">⏸</button>
+                    <button type="button" class="sd-timer-btn sd-timer-btn-play" id="sd-driving-timer-play" title="Продолжить" aria-label="Продолжить">▶</button>
+                    <button type="button" class="sd-timer-btn sd-timer-btn-stop" id="sd-driving-timer-stop" title="Остановить" aria-label="Остановить">⏹</button>
+                </div>
+            </div>
+        </div>"""
+    } else ""
     val instrInitials = user.fullName.split(" ").filter { it.isNotBlank() }.take(2).joinToString("") { it.first().uppercase() }.ifBlank { "?" }
     val instrAvatarHue = (user.fullName.hashCode() and 0x7FFFFFFF) % 360
     val instrAvatarBg = "hsl($instrAvatarHue,50%,32%)"
@@ -1353,26 +1377,118 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
         $profileCard
         <div class="sd-block"><h3 class="sd-block-title">Мои курсанты (${cadets.size})</h3><div class="sd-cadet-cards">$cadetsListHtml</div></div>
         $loadingLine
+        $timerBlockHtml
         <div class="sd-block sd-block-schedule"><h3 class="sd-block-title">Мой график</h3><div class="sd-schedule-days">$scheduleSectionsHtml</div>$runningLateModalHtml</div>
         <p class="sd-version">Версия: $version</p>"""
 }
 
 private fun renderCadetHomeContent(user: User, version: String): String {
     val inst = appState.cadetInstructor
-    val instText = when {
-        inst != null -> inst.fullName.escapeHtml()
-        user.assignedInstructorId != null -> "загрузка…"
-        else -> "не назначен"
-    }
     val loading = appState.recordingLoading
-    val sessions = appState.recordingSessions.filter { it.status == "scheduled" }.take(20)
+    val sessions = appState.recordingSessions.filter { it.status == "scheduled" || it.status == "inProgress" }.sortedBy { it.startTimeMillis ?: 0L }.take(50)
     val loadingLine = if (loading) """<p class="sd-loading-text">Загрузка…</p>""" else ""
-    val sessList = sessions.joinToString("") { """<div class="sd-record-row">${formatDateTime(it.startTimeMillis)} — запланировано</div>""" }
+    val instName = inst?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "—"
+    val sessionsByWeekday = sessions.groupBy { getWeekdayIndex(it.startTimeMillis) }
+    val cadetScheduleSectionsHtml = if (sessions.isEmpty()) {
+        """<p class="sd-muted">Нет запланированных занятий</p>"""
+    } else {
+        WEEKDAY_NAMES.mapIndexed { index, dayName ->
+            val daySessions = (sessionsByWeekday[index] ?: emptyList()).sortedBy { it.startTimeMillis ?: 0L }
+            val count = daySessions.size
+            val cardsHtml = daySessions.joinToString("") { s ->
+                val dateStr = formatDateOnly(s.startTimeMillis)
+                val timeStr = formatTimeOnly(s.startTimeMillis)
+                val startMs = s.startTimeMillis ?: 0L
+                val statusText = when {
+                    s.status == "inProgress" -> "в процессе"
+                    s.startRequestedByInstructor -> "Инструктор ожидает подтверждения начала вождения"
+                    s.status == "scheduled" && s.instructorConfirmed -> "подтверждён"
+                    s.openWindowId.isNotBlank() && !s.instructorConfirmed -> "Ожидает подтверждения инструктором"
+                    else -> "Ожидает вашего подтверждения"
+                }
+                val showConfirmBooking = !s.instructorConfirmed && s.openWindowId.isEmpty()
+                val showStart = s.status == "scheduled" && s.instructorConfirmed
+                val confirmBtn = if (showConfirmBooking) """<button type="button" class="sd-btn sd-btn-small sd-btn-primary sd-cadet-schedule-confirm" data-session-id="${s.id.escapeHtml()}" title="Подтвердить запись">$iconSelectSvg Подтвердить запись</button>""" else ""
+                val startBtn = if (showStart) """<button type="button" class="sd-btn sd-btn-small sd-btn-primary sd-cadet-schedule-start" data-session-id="${s.id.escapeHtml()}" data-start-ms="$startMs" title="Начать вождение (доступно за 15 мин)">$iconPlaySvg Начать</button>""" else ""
+                """<div class="sd-schedule-card sd-cadet-schedule-card" data-session-id="${s.id.escapeHtml()}" data-start-ms="$startMs">
+                <div class="sd-schedule-card-body">
+                    <div class="sd-schedule-card-row">$iconCalendarSvg <span class="sd-schedule-card-label">Дата:</span> $dateStr</div>
+                    <div class="sd-schedule-card-row">$iconClockSvg <span class="sd-schedule-card-label">Время:</span> $timeStr</div>
+                    <div class="sd-schedule-card-row">$iconUserSvg <span class="sd-schedule-card-label">Инструктор:</span> ${instName.escapeHtml()}</div>
+                    <div class="sd-schedule-card-status">$statusText</div>
+                </div>
+                <div class="sd-schedule-card-actions">$confirmBtn $startBtn <button type="button" class="sd-btn sd-btn-small sd-btn-delete sd-cadet-schedule-cancel" data-session-id="${s.id.escapeHtml()}">$iconTrashSvg Отменить</button></div>
+            </div>"""
+            }
+            """<details class="sd-schedule-day" ${if (count > 0) "open" else ""}><summary class="sd-schedule-day-title">$dayName ($count)</summary><div class="sd-schedule-list">$cardsHtml</div></details>"""
+        }.joinToString("")
+    }
+    // Профиль курсанта — как у инструктора (аватар, ФИО, бейдж, email, телефон, талоны)
+    val cadetInitials = user.fullName.split(" ").filter { it.isNotBlank() }.take(2).joinToString("") { it.first().uppercase() }.ifBlank { "?" }
+    val cadetAvatarHue = (user.fullName.hashCode() and 0x7FFFFFFF) % 360
+    val cadetAvatarBg = "hsl($cadetAvatarHue,50%,32%)"
+    val svgEmail = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>"""
+    val svgPhoneP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>"""
+    val svgTicketP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M22 10V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2s.9-2 2-2zm-2-1.46c-1.19.69-2 1.99-2 3.46s.81 2.77 2 3.46V18H4v-2.54c1.19-.69 2-1.99 2-3.46 0-1.48-.8-2.77-1.99-3.46L4 6h16v2.54z"/></svg>"""
+    val cadetProfileCard = """
+        <div class="sd-profile-card">
+            <div class="sd-profile-accent-bar"></div>
+            <div class="sd-profile-card-shimmer" aria-hidden="true"></div>
+            <div class="sd-profile-hero">
+                <div class="sd-profile-avatar" style="background:$cadetAvatarBg">$cadetInitials</div>
+                <div class="sd-profile-hero-info">
+                    <p class="sd-profile-fullname">${(user.fullName.ifBlank { "—" }).escapeHtml()}</p>
+                    <span class="sd-profile-role-badge">Курсант</span>
+                </div>
+            </div>
+            <div class="sd-profile-info-rows">
+                <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgEmail</span><span class="sd-profile-info-label">Email</span><span class="sd-profile-info-value">${(user.email.ifBlank { "—" }).escapeHtml()}</span></div>
+                <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgPhoneP</span><span class="sd-profile-info-label">Телефон</span><span class="sd-profile-info-value">${(user.phone.ifBlank { "—" }).escapeHtml()}</span></div>
+                <div class="sd-profile-info-row sd-profile-info-row-balance"><span class="sd-profile-info-icon">$svgTicketP</span><span class="sd-profile-info-label">Талоны</span><span class="sd-balance-badge">${user.balance}</span></div>
+            </div>
+        </div>"""
+    // Карточка «Мой инструктор» — как в Android: блок с заголовком, карточка инструктора (аватар, ФИО, телефон, Чат/Позвонить)
+    val instructorBlockHtml = when {
+        inst != null -> {
+            val initials = inst.fullName.split(" ").filter { it.isNotBlank() }.take(2).joinToString("") { it.first().uppercase() }.ifBlank { "?" }
+            val avatarHue = (inst.fullName.hashCode() and 0x7FFFFFFF) % 360
+            val avatarBg = "hsl($avatarHue,50%,32%)"
+            val phoneDisplay = (inst.phone.ifBlank { "—" }).escapeHtml()
+            val phoneHref = if (inst.phone.isNotBlank()) "tel:${inst.phone.escapeHtml()}" else "#"
+            val phoneDisabled = if (inst.phone.isBlank()) " sd-cadet-icon-btn-disabled" else ""
+            val svgChat = """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>"""
+            val svgPhone = """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.6 1.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.77a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.02z"/></svg>"""
+            val svgPhoneRow = """<svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" style="opacity:0.6;flex-shrink:0"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.6 1.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.77a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.02z"/></svg>"""
+            """<div class="sd-block"><h3 class="sd-block-title">Мой инструктор</h3>
+                <div class="sd-instructor-card-wrap">
+                    <div class="sd-instructor-card">
+                        <div class="sd-instructor-card-label">Карточка инструктора:</div>
+                        <div class="sd-cadet-top">
+                            <div class="sd-instructor-avatar" style="background:$avatarBg">$initials</div>
+                            <div class="sd-cadet-head">
+                                <p class="sd-cadet-name">${(inst.fullName.ifBlank { "—" }).escapeHtml()}</p>
+                                <span class="sd-instructor-badge">Инструктор</span>
+                            </div>
+                            <div class="sd-cadet-quick">
+                                <button type="button" class="sd-cadet-icon-btn sd-cadet-chat-btn" data-contact-id="${inst.id.escapeHtml()}" title="Чат">$svgChat</button>
+                                <a href="$phoneHref" class="sd-cadet-icon-btn$phoneDisabled" title="Позвонить">$svgPhone</a>
+                            </div>
+                        </div>
+                        <div class="sd-cadet-rows">
+                            <div class="sd-cadet-row">$svgPhoneRow $phoneDisplay</div>
+                        </div>
+                    </div>
+                </div>
+            </div>"""
+        }
+        user.assignedInstructorId != null -> """<div class="sd-block"><h3 class="sd-block-title">Мой инструктор</h3><div class="sd-home-card">Загрузка…</div></div>"""
+        else -> """<div class="sd-block"><h3 class="sd-block-title">Мой инструктор</h3><div class="sd-home-card sd-muted">Инструктор не назначен</div></div>"""
+    }
     return """<h2>Главная</h2>
-        <div class="sd-home-card"><strong>Баланс:</strong> ${user.balance} талонов.</div>
-        <div class="sd-home-card"><strong>Мой инструктор:</strong> $instText</div>
+        $cadetProfileCard
+        $instructorBlockHtml
         $loadingLine
-        <div class="sd-block"><h3 class="sd-block-title">Моё вождение</h3><div class="sd-list">$sessList</div></div>
+        <div class="sd-block sd-block-schedule"><h3 class="sd-block-title">Мой график</h3><div class="sd-schedule-days">$cadetScheduleSectionsHtml</div></div>
         <p class="sd-version">Версия: $version</p>"""
 }
 
@@ -3138,8 +3254,13 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                             return@addEventListener
                         }
                         requestStartByInstructor(sessionId) { err ->
-                            if (err != null) updateState { networkError = err }
-                            else getSessionsForInstructor(usr.id) { sess -> updateState { recordingSessions = sess } }
+                            if (err != null) {
+                                showToast(err)
+                                updateState { networkError = err }
+                            } else {
+                                showToast("Ожидайте подтверждения от курсанта")
+                                getSessionsForInstructor(usr.id) { sess -> updateState { recordingSessions = sess } }
+                            }
                         }
                     })
                 }
@@ -3183,6 +3304,148 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                                     updateState { recordingOpenWindows = wins; recordingSessions = sess }
                                 }
                             }
+                        }
+                    })
+                }
+                if (drivingTimerInterval != 0) { window.clearInterval(drivingTimerInterval); drivingTimerInterval = 0 }
+                val timerBlock = document.getElementById("sd-driving-timer-block")
+                if (timerBlock != null) {
+                    val sessionId = timerBlock.getAttribute("data-session-id") ?: ""
+                    val totalMs = (timerBlock.getAttribute("data-total-ms") ?: "").toLongOrNull() ?: (90 * 60 * 1000)
+                    fun tick() {
+                        val block = document.getElementById("sd-driving-timer-block") ?: run {
+                            if (drivingTimerInterval != 0) { window.clearInterval(drivingTimerInterval); drivingTimerInterval = 0 }
+                            return
+                        }
+                        val startMs = (block.getAttribute("data-session-start-ms") ?: "0").toLongOrNull() ?: 0L
+                        var pausedMs = (block.getAttribute("data-session-paused-ms") ?: "0").toLongOrNull() ?: 0L
+                        val localPauseAt = block.getAttribute("data-local-pause-at")?.toLongOrNull()
+                        if (localPauseAt != null) {
+                            val now = js("Date.now()").unsafeCast<Double>().toLong()
+                            pausedMs += (now - localPauseAt)
+                        }
+                        val now = js("Date.now()").unsafeCast<Double>().toLong()
+                        val elapsed = ((now - startMs) - pausedMs).coerceAtLeast(0)
+                        val remaining = (totalMs - elapsed).coerceIn(0, totalMs)
+                        val minutes = (remaining / 60_000).toInt()
+                        val seconds = ((remaining % 60_000) / 1000).toInt()
+                        val timeStr = "$minutes:${seconds.toString().padStart(2, '0')}"
+                        document.getElementById("sd-driving-timer-remaining")?.textContent = timeStr
+                        val pct = if (totalMs > 0) (100.0 * remaining / totalMs).coerceIn(0.0, 100.0) else 0.0
+                        (document.getElementById("sd-driving-timer-progress-fill")?.asDynamic())?.style?.width = "${pct}%"
+                        val isActive = block.getAttribute("data-session-is-active") != "false"
+                        val onPause = localPauseAt != null || !isActive
+                        document.getElementById("sd-driving-timer-title")?.textContent = if (onPause) "Вождение: на паузе" else "Вождение: в процессе"
+                        document.getElementById("sd-driving-timer-pause")?.asDynamic()?.disabled = onPause
+                        document.getElementById("sd-driving-timer-play")?.asDynamic()?.disabled = !onPause
+                    }
+                    tick()
+                    drivingTimerInterval = window.setInterval({ tick() }, 1000)
+                    document.getElementById("sd-driving-timer-pause")?.addEventListener("click", {
+                        val block = document.getElementById("sd-driving-timer-block") ?: return@addEventListener
+                        if (block.getAttribute("data-local-pause-at") != null) return@addEventListener
+                        val sid = block.getAttribute("data-session-id") ?: return@addEventListener
+                        val pausedMs = (block.getAttribute("data-session-paused-ms") ?: "0").toLongOrNull() ?: 0L
+                        block.setAttribute("data-local-pause-at", js("Date.now()").unsafeCast<Double>().toString())
+                        updateSessionTimer(sid, pausedMs, false) { err ->
+                            if (err != null) {
+                                showToast(err)
+                                block.removeAttribute("data-local-pause-at")
+                            } else block.setAttribute("data-session-is-active", "false")
+                        }
+                    })
+                    document.getElementById("sd-driving-timer-play")?.addEventListener("click", {
+                        val block = document.getElementById("sd-driving-timer-block") ?: return@addEventListener
+                        val sid = block.getAttribute("data-session-id") ?: return@addEventListener
+                        val pausedMs = (block.getAttribute("data-session-paused-ms") ?: "0").toLongOrNull() ?: 0L
+                        val localPauseAt = block.getAttribute("data-local-pause-at")?.toLongOrNull()
+                        val effectivePaused = if (localPauseAt != null) {
+                            val now = js("Date.now()").unsafeCast<Double>().toLong()
+                            block.removeAttribute("data-local-pause-at")
+                            pausedMs + (now - localPauseAt)
+                        } else pausedMs
+                        updateSessionTimer(sid, effectivePaused, true) { err ->
+                            if (err != null) showToast(err)
+                            else {
+                                block.setAttribute("data-session-paused-ms", effectivePaused.toString())
+                                block.setAttribute("data-session-is-active", "true")
+                            }
+                        }
+                    })
+                    document.getElementById("sd-driving-timer-stop")?.addEventListener("click", {
+                        if (!window.asDynamic().confirm("Завершить вождение досрочно?")) return@addEventListener
+                        val sid = timerBlock.getAttribute("data-session-id") ?: return@addEventListener
+                        val remainingEl = document.getElementById("sd-driving-timer-remaining")
+                        val remainingStr = remainingEl?.textContent ?: ""
+                        val ratingInput = window.asDynamic().prompt("Оценка курсанта (1–5):", "5") ?: return@addEventListener
+                        val rating = ratingInput.unsafeCast<String>().toIntOrNull()?.coerceIn(1, 5) ?: 5
+                        completeSession(sid, rating, rating, usr.id, remainingStr) { err ->
+                            if (err != null) {
+                                showToast(err)
+                            } else {
+                                showToast("Вождение завершено")
+                                getOpenWindowsForInstructor(usr.id) { wins ->
+                                    getSessionsForInstructor(usr.id) { sess ->
+                                        updateState { recordingOpenWindows = wins; recordingSessions = sess }
+                                    }
+                                }
+                            }
+                        }
+                    })
+                }
+            }
+            if (usr.role == "cadet") {
+                val cadetConfirmNodes = root.querySelectorAll(".sd-cadet-schedule-confirm")
+                for (k in 0 until cadetConfirmNodes.length) {
+                    val btn = cadetConfirmNodes.item(k) as? org.w3c.dom.Element ?: continue
+                    val sessionId = btn.getAttribute("data-session-id") ?: continue
+                    btn.addEventListener("click", {
+                        confirmBookingByCadet(sessionId) { err ->
+                            if (err != null) updateState { networkError = err }
+                            else getSessionsForCadet(usr.id) { sess -> updateState { recordingSessions = sess } }
+                        }
+                    })
+                }
+                val cadetStartThresholdMs = START_ALLOWED_MINUTES_BEFORE * 60 * 1000
+                val cadetStartNodes = root.querySelectorAll(".sd-cadet-schedule-start")
+                for (k in 0 until cadetStartNodes.length) {
+                    val btn = cadetStartNodes.item(k) as? org.w3c.dom.Element ?: continue
+                    val sessionId = btn.getAttribute("data-session-id") ?: continue
+                    val startMsStr = btn.getAttribute("data-start-ms")
+                    btn.addEventListener("click", {
+                        val startMs = startMsStr?.toLongOrNull() ?: 0L
+                        val now = js("Date.now()").unsafeCast<Double>().toLong()
+                        if (now < startMs - cadetStartThresholdMs) {
+                            showToast("Ещё рано! Кнопка активируется за 15 мин. до вождения.")
+                            return@addEventListener
+                        }
+                        startSession(sessionId) { err ->
+                            if (err != null) {
+                                showToast(err)
+                                updateState { networkError = err }
+                            } else {
+                                confirmSessionByCadet(sessionId) { err2 ->
+                                    if (err2 != null) {
+                                        showToast(err2)
+                                        updateState { networkError = err2 }
+                                    } else {
+                                        showToast("Вождение начато")
+                                        getSessionsForCadet(usr.id) { sess -> updateState { recordingSessions = sess } }
+                                    }
+                                }
+                            }
+                        }
+                    })
+                }
+                val cadetCancelNodes = root.querySelectorAll(".sd-cadet-schedule-cancel")
+                for (k in 0 until cadetCancelNodes.length) {
+                    val btn = cadetCancelNodes.item(k) as? org.w3c.dom.Element ?: continue
+                    val sessionId = btn.getAttribute("data-session-id") ?: continue
+                    btn.addEventListener("click", {
+                        if (!window.confirm("Вы уверены, что хотите отменить вождение?")) return@addEventListener
+                        cancelByCadet(sessionId) { err ->
+                            if (err != null) updateState { networkError = err }
+                            else getSessionsForCadet(usr.id) { sess -> updateState { recordingSessions = sess } }
                         }
                     })
                 }

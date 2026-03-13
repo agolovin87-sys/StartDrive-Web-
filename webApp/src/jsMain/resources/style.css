@@ -573,6 +573,153 @@ a.sd-cadet-icon-btn:active {
     pointer-events: none;
 }
 
+/* ── Карточка «Мой инструктор» у курсанта (как в Android: светлая синяя карточка) ── */
+.sd-instructor-card-wrap {
+    padding: 10px 14px 14px;
+}
+.sd-instructor-card {
+    background: linear-gradient(145deg, #D0E3F5 0%, #e0edf9 50%, #c5daf0 100%);
+    border-radius: 16px;
+    overflow: hidden;
+    border: 2px solid rgba(255,255,255,0.9);
+    box-shadow: 0 6px 20px rgba(25,118,210,0.25), 0 2px 8px rgba(0,0,0,0.08);
+}
+.sd-instructor-card .sd-instructor-card-label {
+    display: block;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #111;
+    padding: 12px 14px 4px;
+    letter-spacing: 0.3px;
+}
+.sd-instructor-card .sd-cadet-top {
+    padding: 6px 14px 10px;
+}
+.sd-instructor-card .sd-cadet-name {
+    color: #0f172a !important;
+    text-shadow: none;
+}
+.sd-instructor-badge {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.7px;
+    text-transform: uppercase;
+    background: rgba(25,118,210,0.18);
+    color: #1565c0;
+    border: 1px solid rgba(25,118,210,0.4);
+}
+.sd-instructor-avatar {
+    width: 46px;
+    height: 46px;
+    min-width: 46px;
+    border-radius: 50%;
+    color: #fff;
+    font-weight: 800;
+    font-size: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid rgba(255,255,255,0.5);
+    letter-spacing: -0.5px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+}
+.sd-instructor-card .sd-cadet-rows {
+    padding: 0 14px 14px;
+}
+.sd-instructor-card .sd-cadet-row {
+    color: #1e293b;
+    background: rgba(255,255,255,0.6);
+}
+
+/* ── Таймер вождения у инструктора (1,5 ч), над блоком «Мой график» ── */
+.sd-driving-timer-block {
+    margin: 0 0 20px 0;
+    border-radius: 16px;
+    overflow: hidden;
+    border: 2px solid rgba(255,255,255,0.9);
+    box-shadow: 0 6px 20px rgba(25,118,210,0.3), 0 2px 8px rgba(0,0,0,0.08);
+    background: linear-gradient(145deg, #D0E3F5 0%, #e0edf9 50%, #c5daf0 100%);
+}
+.sd-driving-timer-inner {
+    padding: 18px 20px;
+}
+.sd-driving-timer-title {
+    margin: 0 0 10px;
+    font-size: 1rem;
+    font-weight: 700;
+    color: #0f172a;
+    text-align: center;
+}
+.sd-driving-timer-cadet {
+    margin: 0 0 8px;
+    font-size: 0.9rem;
+    color: #1e293b;
+    text-align: center;
+}
+.sd-driving-timer-remaining-label {
+    margin: 0 0 10px;
+    font-size: 0.9rem;
+    color: #334155;
+    text-align: center;
+}
+.sd-driving-timer-remaining {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: #0f172a;
+}
+.sd-driving-timer-progress-track {
+    height: 10px;
+    border-radius: 6px;
+    background: rgba(255,255,255,0.6);
+    overflow: hidden;
+}
+.sd-driving-timer-progress-fill {
+    height: 100%;
+    border-radius: 6px;
+    background: linear-gradient(90deg, #1976D2 0%, #42A5F5 100%);
+    transition: width 0.3s ease;
+}
+
+.sd-driving-timer-actions {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    margin-top: 14px;
+}
+.sd-timer-btn {
+    width: 48px;
+    height: 48px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.9);
+    color: #0f172a;
+    font-size: 1.25rem;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.sd-timer-btn:hover:not(:disabled) {
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+}
+.sd-timer-btn:active:not(:disabled) {
+    transform: scale(0.98);
+}
+.sd-timer-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.sd-timer-btn-pause { background: linear-gradient(145deg, #fff 0%, #e8e8e8 100%); }
+.sd-timer-btn-play  { background: linear-gradient(145deg, #E8F5E9 0%, #C8E6C9 100%); color: #2E7D32; }
+.sd-timer-btn-stop  { background: linear-gradient(145deg, #FFEBEE 0%, #FFCDD2 100%); color: #C62828; }
+
 /* Строки информации */
 .sd-cadet-rows {
     display: flex;

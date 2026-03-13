@@ -16,7 +16,6 @@ private var voiceRecorder: dynamic = null
 private var voiceRecorderMimeType: String = "audio/webm"
 private var voiceRecordInterval: Int = 0
 private var voicePlayInterval: Int = 0
-private var drivingTimerInterval: Int = 0
 private val chatScrollByContactId = mutableMapOf<String, Int>()
 
 private fun saveChatScrollForCurrentContact() {
@@ -157,6 +156,7 @@ fun main() {
             window.requestAnimationFrame {
                 render()
                 renderScheduled = false
+                startDrivingTimers()
             }
         }
 
@@ -585,8 +585,6 @@ private val LESSON_DURATION_MS = LESSON_DURATION_MINUTES * 60 * 1000
 
 /** За сколько минут до вождения активируется кнопка «Начать вождение». */
 private const val START_ALLOWED_MINUTES_BEFORE = 15L
-/** Длительность занятия вождения в минутах (1,5 часа), для таймера у инструктора. */
-private const val DRIVING_DURATION_MINUTES = 90L
 
 /** Категории билетов ПДД — как в Android (PddRepository.getCategories). */
 private val PDD_CATEGORIES = listOf(
@@ -784,6 +782,40 @@ private fun generateExamTicket(bundle: dynamic, categoryId: String): Pair<List<P
 }
 
 private var examTimerIntervalId: Int? = null
+private var drivingTimerIntervalId: Int? = null
+
+private fun clearDrivingTimer() {
+    drivingTimerIntervalId?.let { id -> js("clearInterval").unsafeCast<(Int) -> Unit>().invoke(id) }
+    drivingTimerIntervalId = null
+}
+
+private fun startDrivingTimers() {
+    clearDrivingTimer()
+    drivingTimerIntervalId = js("setInterval").unsafeCast<(Any?, Int) -> Int>().invoke({
+        val blocks = document.querySelectorAll(".sd-sch-timer-block")
+        val totalMs = (LESSON_DURATION_MS).toDouble()
+        for (i in 0 until blocks.length) {
+            val el = blocks.item(i) as? org.w3c.dom.Element ?: continue
+            val endMs = (el.getAttribute("data-end-ms") ?: "0").toLongOrNull() ?: 0L
+            val now = js("Date.now()").unsafeCast<Double>().toLong()
+            val remaining = endMs - now
+            val valEl = el.querySelector(".sd-sch-timer-value")
+            val fillEl = el.querySelector(".sd-sch-timer-bar-fill")
+            if (remaining <= 0) {
+                valEl?.textContent = "Завершено"
+                (fillEl as? org.w3c.dom.HTMLElement)?.style?.width = "0%"
+            } else {
+                val pct = (remaining.toDouble() / totalMs * 100.0).coerceIn(0.0, 100.0)
+                val mins = remaining / 60000L
+                val secs = (remaining % 60000L) / 1000L
+                val mm = if (mins < 10) "0$mins" else "$mins"
+                val ss = if (secs < 10) "0$secs" else "$secs"
+                valEl?.textContent = "$mm:$ss"
+                (fillEl as? org.w3c.dom.HTMLElement)?.style?.width = "$pct%"
+            }
+        }
+    }, 1000)
+}
 
 private fun clearExamTimer() {
     examTimerIntervalId?.let { id -> js("clearInterval").unsafeCast<(Int) -> Unit>().invoke(id) }
@@ -1310,46 +1342,48 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
                     s.status == "inProgress" -> "В процессе"
                     else -> "Подтверждён"
                 }
+                val avatarLetter = cadetName.trim().split(" ").filter { it.isNotBlank() }.mapNotNull { it.firstOrNull()?.uppercaseChar() }.take(2).joinToString("")
                 val showConfirm = bookedByCadet && !s.instructorConfirmed
                 val showStart = s.status == "scheduled" && s.instructorConfirmed
-                val confirmBtn = if (showConfirm) """<button type="button" class="sd-btn sd-btn-small sd-btn-primary sd-home-schedule-confirm" data-session-id="${s.id.escapeHtml()}" title="Подтвердить бронь">$iconSelectSvg Подтвердить</button>""" else ""
-                val startBtn = if (showStart) """<button type="button" class="sd-btn sd-btn-small sd-btn-primary sd-home-schedule-start" data-session-id="${s.id.escapeHtml()}" data-start-ms="$startMs" title="Начать вождение (доступно за 15 мин)">$iconPlaySvg Начать</button>""" else ""
-                val lateBtn = if (s.status == "scheduled") """<button type="button" class="sd-btn sd-btn-small sd-btn-late sd-home-schedule-late" data-session-id="${s.id.escapeHtml()}" title="Опаздываю">$iconLateSvg Опаздываю</button>""" else ""
+                val statusClass = when {
+                    bookedByCadet && !s.instructorConfirmed -> "sd-sch-status-waiting"
+                    !s.instructorConfirmed -> "sd-sch-status-pending"
+                    s.status == "inProgress" -> "sd-sch-status-active"
+                    else -> "sd-sch-status-confirmed"
+                }
+                val confirmBtn = if (showConfirm) """<button type="button" class="sd-sch-btn sd-sch-confirm-btn sd-home-schedule-confirm" data-session-id="${s.id.escapeHtml()}">$iconSelectSvg Подтвердить</button>""" else ""
+                val startBtn = if (showStart) """<button type="button" class="sd-sch-btn sd-sch-start-btn sd-home-schedule-start" data-session-id="${s.id.escapeHtml()}" data-start-ms="$startMs">$iconPlaySvg Начать</button>""" else ""
+                val lateBtn = if (s.status == "scheduled") """<button type="button" class="sd-sch-btn sd-sch-late-btn sd-home-schedule-late" data-session-id="${s.id.escapeHtml()}">$iconLateSvg Опаздываю</button>""" else ""
+                val cancelBtn = """<button type="button" class="sd-sch-btn sd-sch-cancel-btn sd-home-schedule-cancel" data-session-id="${s.id.escapeHtml()}">$iconTrashSvg Отменить</button>"""
+                val timerBlock = if (s.status == "inProgress") {
+                    val endMs = (s.actualStartMs ?: s.startTimeMillis ?: 0L) + LESSON_DURATION_MS
+                    """<div class="sd-sch-timer-block" data-end-ms="$endMs">
+                        <div class="sd-sch-timer-header">
+                            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                            <span class="sd-sch-timer-label">Осталось:</span>
+                            <span class="sd-sch-timer-value">--:--</span>
+                        </div>
+                        <div class="sd-sch-timer-bar-wrap"><div class="sd-sch-timer-bar-fill"></div></div>
+                    </div>"""
+                } else ""
                 """<div class="sd-schedule-card" data-session-id="${s.id.escapeHtml()}" data-start-ms="$startMs">
-                <div class="sd-schedule-card-body">
-                    <div class="sd-schedule-card-row">$iconCalendarSvg <span class="sd-schedule-card-label">Дата:</span> $dateStr</div>
-                    <div class="sd-schedule-card-row">$iconClockSvg <span class="sd-schedule-card-label">Время:</span> $timeStr</div>
-                    <div class="sd-schedule-card-row">$iconUserSvg <span class="sd-schedule-card-label">Курсант:</span> ${cadetName.escapeHtml()}</div>
-                    <div class="sd-schedule-card-status">$statusText</div>
-                </div>
-                <div class="sd-schedule-card-actions">$confirmBtn $startBtn $lateBtn <button type="button" class="sd-btn sd-btn-small sd-btn-delete sd-home-schedule-cancel" data-session-id="${s.id.escapeHtml()}">$iconTrashSvg Отменить</button></div>
-            </div>"""
+                    <div class="sd-sch-avatar">${avatarLetter.escapeHtml()}</div>
+                    <div class="sd-sch-body">
+                        <div class="sd-sch-name">${cadetName.escapeHtml()}</div>
+                        <div class="sd-sch-dt">
+                            <span class="sd-sch-pill">$iconCalendarSvg $dateStr</span>
+                            <span class="sd-sch-pill">$iconClockSvg $timeStr</span>
+                        </div>
+                        <span class="sd-sch-status $statusClass">$statusText</span>
+                        $timerBlock
+                    </div>
+                    <div class="sd-sch-actions">$confirmBtn$startBtn$lateBtn$cancelBtn</div>
+                </div>"""
             }
             """<details class="sd-schedule-day" ${if (count > 0) "open" else ""}><summary class="sd-schedule-day-title">$dayName ($count)</summary><div class="sd-schedule-list">$cardsHtml</div></details>"""
         }.joinToString("")
     }
     val runningLateModalHtml = """<div class="sd-modal-overlay sd-hidden" id="sd-running-late-modal"><div class="sd-modal"><h3 class="sd-modal-title">Опаздываю</h3><p>Выберите задержку:</p><div class="sd-running-late-options"><label class="sd-radio"><input type="radio" name="sd-late-mins" value="5" /> 5 мин.</label><label class="sd-radio"><input type="radio" name="sd-late-mins" value="10" /> 10 мин.</label><label class="sd-radio"><input type="radio" name="sd-late-mins" value="15" /> 15 мин.</label></div><p class="sd-modal-actions"><button type="button" id="sd-running-late-confirm" class="sd-btn sd-btn-primary">Подтвердить</button><button type="button" id="sd-running-late-cancel" class="sd-btn sd-btn-secondary">Отмена</button></p></div></div>"""
-    val inProgressSession = sessions.find { it.status == "inProgress" }
-    val totalTimerMs = DRIVING_DURATION_MINUTES * 60 * 1000
-    val timerBlockHtml = if (inProgressSession != null) {
-        val cadetName = cadets.find { it.id == inProgressSession.cadetId }?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "Курсант (${inProgressSession.cadetId.take(8)})"
-        val startMs = inProgressSession.sessionStartTimeMillis
-        val pausedMs = inProgressSession.sessionPausedTimeMillis
-        val isActive = inProgressSession.sessionIsActive
-        """<div class="sd-driving-timer-block" id="sd-driving-timer-block" data-session-id="${inProgressSession.id.escapeHtml()}" data-session-start-ms="$startMs" data-session-paused-ms="$pausedMs" data-total-ms="$totalTimerMs" data-session-is-active="$isActive">
-            <div class="sd-driving-timer-inner">
-                <p class="sd-driving-timer-title" id="sd-driving-timer-title">${if (isActive) "Вождение: в процессе" else "Вождение: на паузе"}</p>
-                <p class="sd-driving-timer-cadet"><strong>Курсант:</strong> ${cadetName.escapeHtml()}</p>
-                <p class="sd-driving-timer-remaining-label">Осталось: <span id="sd-driving-timer-remaining" class="sd-driving-timer-remaining">—</span></p>
-                <div class="sd-driving-timer-progress-track"><div class="sd-driving-timer-progress-fill" id="sd-driving-timer-progress-fill"></div></div>
-                <div class="sd-driving-timer-actions">
-                    <button type="button" class="sd-timer-btn sd-timer-btn-pause" id="sd-driving-timer-pause" title="Пауза" aria-label="Пауза">⏸</button>
-                    <button type="button" class="sd-timer-btn sd-timer-btn-play" id="sd-driving-timer-play" title="Продолжить" aria-label="Продолжить">▶</button>
-                    <button type="button" class="sd-timer-btn sd-timer-btn-stop" id="sd-driving-timer-stop" title="Остановить" aria-label="Остановить">⏹</button>
-                </div>
-            </div>
-        </div>"""
-    } else ""
     val instrInitials = user.fullName.split(" ").filter { it.isNotBlank() }.take(2).joinToString("") { it.first().uppercase() }.ifBlank { "?" }
     val instrAvatarHue = (user.fullName.hashCode() and 0x7FFFFFFF) % 360
     val instrAvatarBg = "hsl($instrAvatarHue,50%,32%)"
@@ -1375,120 +1409,59 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
         </div>"""
     return """<h2>Главная</h2>
         $profileCard
-        <div class="sd-block"><h3 class="sd-block-title">Мои курсанты (${cadets.size})</h3><div class="sd-cadet-cards">$cadetsListHtml</div></div>
+        <details class="sd-block sd-details-block" open><summary class="sd-block-title">Мои курсанты (${cadets.size})</summary><div class="sd-cadet-cards">$cadetsListHtml</div></details>
         $loadingLine
-        $timerBlockHtml
         <div class="sd-block sd-block-schedule"><h3 class="sd-block-title">Мой график</h3><div class="sd-schedule-days">$scheduleSectionsHtml</div>$runningLateModalHtml</div>
         <p class="sd-version">Версия: $version</p>"""
 }
 
 private fun renderCadetHomeContent(user: User, version: String): String {
     val inst = appState.cadetInstructor
-    val loading = appState.recordingLoading
-    val sessions = appState.recordingSessions.filter { it.status == "scheduled" || it.status == "inProgress" }.sortedBy { it.startTimeMillis ?: 0L }.take(50)
-    val loadingLine = if (loading) """<p class="sd-loading-text">Загрузка…</p>""" else ""
-    val instName = inst?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "—"
-    val sessionsByWeekday = sessions.groupBy { getWeekdayIndex(it.startTimeMillis) }
-    val cadetScheduleSectionsHtml = if (sessions.isEmpty()) {
-        """<p class="sd-muted">Нет запланированных занятий</p>"""
-    } else {
-        WEEKDAY_NAMES.mapIndexed { index, dayName ->
-            val daySessions = (sessionsByWeekday[index] ?: emptyList()).sortedBy { it.startTimeMillis ?: 0L }
-            val count = daySessions.size
-            val cardsHtml = daySessions.joinToString("") { s ->
-                val dateStr = formatDateOnly(s.startTimeMillis)
-                val timeStr = formatTimeOnly(s.startTimeMillis)
-                val startMs = s.startTimeMillis ?: 0L
-                val statusText = when {
-                    s.status == "inProgress" -> "в процессе"
-                    s.startRequestedByInstructor -> "Инструктор ожидает подтверждения начала вождения"
-                    s.status == "scheduled" && s.instructorConfirmed -> "подтверждён"
-                    s.openWindowId.isNotBlank() && !s.instructorConfirmed -> "Ожидает подтверждения инструктором"
-                    else -> "Ожидает вашего подтверждения"
-                }
-                val showConfirmBooking = !s.instructorConfirmed && s.openWindowId.isEmpty()
-                val showStart = s.status == "scheduled" && s.instructorConfirmed
-                val confirmBtn = if (showConfirmBooking) """<button type="button" class="sd-btn sd-btn-small sd-btn-primary sd-cadet-schedule-confirm" data-session-id="${s.id.escapeHtml()}" title="Подтвердить запись">$iconSelectSvg Подтвердить запись</button>""" else ""
-                val startBtn = if (showStart) """<button type="button" class="sd-btn sd-btn-small sd-btn-primary sd-cadet-schedule-start" data-session-id="${s.id.escapeHtml()}" data-start-ms="$startMs" title="Начать вождение (доступно за 15 мин)">$iconPlaySvg Начать</button>""" else ""
-                """<div class="sd-schedule-card sd-cadet-schedule-card" data-session-id="${s.id.escapeHtml()}" data-start-ms="$startMs">
-                <div class="sd-schedule-card-body">
-                    <div class="sd-schedule-card-row">$iconCalendarSvg <span class="sd-schedule-card-label">Дата:</span> $dateStr</div>
-                    <div class="sd-schedule-card-row">$iconClockSvg <span class="sd-schedule-card-label">Время:</span> $timeStr</div>
-                    <div class="sd-schedule-card-row">$iconUserSvg <span class="sd-schedule-card-label">Инструктор:</span> ${instName.escapeHtml()}</div>
-                    <div class="sd-schedule-card-status">$statusText</div>
-                </div>
-                <div class="sd-schedule-card-actions">$confirmBtn $startBtn <button type="button" class="sd-btn sd-btn-small sd-btn-delete sd-cadet-schedule-cancel" data-session-id="${s.id.escapeHtml()}">$iconTrashSvg Отменить</button></div>
-            </div>"""
-            }
-            """<details class="sd-schedule-day" ${if (count > 0) "open" else ""}><summary class="sd-schedule-day-title">$dayName ($count)</summary><div class="sd-schedule-list">$cardsHtml</div></details>"""
-        }.joinToString("")
+    val instText = when {
+        inst != null -> inst.fullName.escapeHtml()
+        user.assignedInstructorId != null -> "загрузка…"
+        else -> "не назначен"
     }
-    // Профиль курсанта — как у инструктора (аватар, ФИО, бейдж, email, телефон, талоны)
-    val cadetInitials = user.fullName.split(" ").filter { it.isNotBlank() }.take(2).joinToString("") { it.first().uppercase() }.ifBlank { "?" }
-    val cadetAvatarHue = (user.fullName.hashCode() and 0x7FFFFFFF) % 360
-    val cadetAvatarBg = "hsl($cadetAvatarHue,50%,32%)"
-    val svgEmail = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>"""
-    val svgPhoneP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>"""
-    val svgTicketP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M22 10V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2s.9-2 2-2zm-2-1.46c-1.19.69-2 1.99-2 3.46s.81 2.77 2 3.46V18H4v-2.54c1.19-.69 2-1.99 2-3.46 0-1.48-.8-2.77-1.99-3.46L4 6h16v2.54z"/></svg>"""
-    val cadetProfileCard = """
-        <div class="sd-profile-card">
-            <div class="sd-profile-accent-bar"></div>
-            <div class="sd-profile-card-shimmer" aria-hidden="true"></div>
-            <div class="sd-profile-hero">
-                <div class="sd-profile-avatar" style="background:$cadetAvatarBg">$cadetInitials</div>
-                <div class="sd-profile-hero-info">
-                    <p class="sd-profile-fullname">${(user.fullName.ifBlank { "—" }).escapeHtml()}</p>
-                    <span class="sd-profile-role-badge">Курсант</span>
-                </div>
-            </div>
-            <div class="sd-profile-info-rows">
-                <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgEmail</span><span class="sd-profile-info-label">Email</span><span class="sd-profile-info-value">${(user.email.ifBlank { "—" }).escapeHtml()}</span></div>
-                <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgPhoneP</span><span class="sd-profile-info-label">Телефон</span><span class="sd-profile-info-value">${(user.phone.ifBlank { "—" }).escapeHtml()}</span></div>
-                <div class="sd-profile-info-row sd-profile-info-row-balance"><span class="sd-profile-info-icon">$svgTicketP</span><span class="sd-profile-info-label">Талоны</span><span class="sd-balance-badge">${user.balance}</span></div>
-            </div>
-        </div>"""
-    // Карточка «Мой инструктор» — как в Android: блок с заголовком, карточка инструктора (аватар, ФИО, телефон, Чат/Позвонить)
-    val instructorBlockHtml = when {
-        inst != null -> {
-            val initials = inst.fullName.split(" ").filter { it.isNotBlank() }.take(2).joinToString("") { it.first().uppercase() }.ifBlank { "?" }
-            val avatarHue = (inst.fullName.hashCode() and 0x7FFFFFFF) % 360
-            val avatarBg = "hsl($avatarHue,50%,32%)"
-            val phoneDisplay = (inst.phone.ifBlank { "—" }).escapeHtml()
-            val phoneHref = if (inst.phone.isNotBlank()) "tel:${inst.phone.escapeHtml()}" else "#"
-            val phoneDisabled = if (inst.phone.isBlank()) " sd-cadet-icon-btn-disabled" else ""
-            val svgChat = """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>"""
-            val svgPhone = """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.6 1.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.77a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.02z"/></svg>"""
-            val svgPhoneRow = """<svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" style="opacity:0.6;flex-shrink:0"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.6 1.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.77a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.02z"/></svg>"""
-            """<div class="sd-block"><h3 class="sd-block-title">Мой инструктор</h3>
-                <div class="sd-instructor-card-wrap">
-                    <div class="sd-instructor-card">
-                        <div class="sd-instructor-card-label">Карточка инструктора:</div>
-                        <div class="sd-cadet-top">
-                            <div class="sd-instructor-avatar" style="background:$avatarBg">$initials</div>
-                            <div class="sd-cadet-head">
-                                <p class="sd-cadet-name">${(inst.fullName.ifBlank { "—" }).escapeHtml()}</p>
-                                <span class="sd-instructor-badge">Инструктор</span>
-                            </div>
-                            <div class="sd-cadet-quick">
-                                <button type="button" class="sd-cadet-icon-btn sd-cadet-chat-btn" data-contact-id="${inst.id.escapeHtml()}" title="Чат">$svgChat</button>
-                                <a href="$phoneHref" class="sd-cadet-icon-btn$phoneDisabled" title="Позвонить">$svgPhone</a>
-                            </div>
-                        </div>
-                        <div class="sd-cadet-rows">
-                            <div class="sd-cadet-row">$svgPhoneRow $phoneDisplay</div>
-                        </div>
+    val loading = appState.recordingLoading
+    val sessions = appState.recordingSessions.filter { it.status == "scheduled" || it.status == "inProgress" }.take(20)
+    val loadingLine = if (loading) """<p class="sd-loading-text">Загрузка…</p>""" else ""
+    val sessList = if (sessions.isEmpty()) {
+        """<div class="sd-record-empty">Нет запланированных занятий</div>"""
+    } else {
+        sessions.joinToString("") { s ->
+            val dateStr = formatDateOnly(s.startTimeMillis)
+            val timeStr = formatTimeOnly(s.startTimeMillis)
+            val statusText = when {
+                s.status == "inProgress" -> "В процессе"
+                else -> "Запланировано"
+            }
+            val statusCls = if (s.status == "inProgress") "sd-record-status-active" else "sd-record-status-sched"
+            val timerBlock = if (s.status == "inProgress") {
+                val endMs = (s.actualStartMs ?: s.startTimeMillis ?: 0L) + LESSON_DURATION_MS
+                """<div class="sd-sch-timer-block" data-end-ms="$endMs">
+                    <div class="sd-sch-timer-header">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        <span class="sd-sch-timer-label">Осталось:</span>
+                        <span class="sd-sch-timer-value">--:--</span>
                     </div>
+                    <div class="sd-sch-timer-bar-wrap"><div class="sd-sch-timer-bar-fill"></div></div>
+                </div>"""
+            } else ""
+            """<div class="sd-record-card">
+                <div class="sd-record-card-dt">
+                    <span class="sd-sch-pill">$iconCalendarSvg $dateStr</span>
+                    <span class="sd-sch-pill">$iconClockSvg $timeStr</span>
                 </div>
+                <span class="sd-record-card-status $statusCls">Статус: $statusText</span>
+                $timerBlock
             </div>"""
         }
-        user.assignedInstructorId != null -> """<div class="sd-block"><h3 class="sd-block-title">Мой инструктор</h3><div class="sd-home-card">Загрузка…</div></div>"""
-        else -> """<div class="sd-block"><h3 class="sd-block-title">Мой инструктор</h3><div class="sd-home-card sd-muted">Инструктор не назначен</div></div>"""
     }
     return """<h2>Главная</h2>
-        $cadetProfileCard
-        $instructorBlockHtml
+        <div class="sd-home-card"><strong>Баланс:</strong> ${user.balance} талонов.</div>
+        <div class="sd-home-card"><strong>Мой инструктор:</strong> $instText</div>
         $loadingLine
-        <div class="sd-block sd-block-schedule"><h3 class="sd-block-title">Мой график</h3><div class="sd-schedule-days">$cadetScheduleSectionsHtml</div></div>
+        <div class="sd-block"><h3 class="sd-block-title">Моё вождение</h3><div class="sd-record-list">$sessList</div></div>
         <p class="sd-version">Версия: $version</p>"""
 }
 
@@ -1497,68 +1470,212 @@ private fun renderRecordingTabContent(user: User): String {
     val windows = appState.recordingOpenWindows
     val sessions = appState.recordingSessions
     val cadets = appState.instructorCadets
-    val loadingLine = if (loading) """<p class="sd-loading-text">Загрузка… <button type="button" id="sd-stop-loading" class="sd-btn sd-btn-small sd-btn-secondary">Показать пусто</button></p>""" else ""
+    val loadingLine = if (loading) """<div class="sd-rec-loading">Загрузка… <button type="button" id="sd-stop-loading" class="sd-btn sd-btn-small sd-btn-secondary">Показать пусто</button></div>""" else ""
+
+    val recCalendarIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>"""
+    val recClockIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>"""
+    val recUserPlusIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>"""
+    val recPlusIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>"""
+    val recCheckIco = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>"""
+    val recCarIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v5a2 2 0 0 1-2 2h-2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg>"""
+
     return when (user.role) {
         "instructor" -> {
             val scheduledSessions = sessions.filter { it.status == "scheduled" || it.status == "inProgress" }.take(50)
-            val assignedList = if (scheduledSessions.isEmpty()) """<p class="sd-muted">Нет записей</p>""" else scheduledSessions.joinToString("") { s ->
-                val cadetName = cadets.find { it.id == s.cadetId }?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "Курсант (${s.cadetId.take(8)})"
-                val dateStr = formatDateOnly(s.startTimeMillis)
-                val timeStr = formatTimeOnly(s.startTimeMillis)
-                val bookedByCadet = s.openWindowId.isNotBlank()
-                val statusText = when {
-                    bookedByCadet && !s.instructorConfirmed -> "Курсант забронировал — ожидает вашего подтверждения"
-                    !s.instructorConfirmed -> "Ожидает подтверждения записи курсантом"
-                    else -> "Подтверждён"
-                }
-                val showConfirm = bookedByCadet && !s.instructorConfirmed
-                val confirmBtn = if (showConfirm) """<button type="button" class="sd-btn sd-btn-small sd-btn-primary sd-recording-confirm-session" data-session-id="${s.id.escapeHtml()}">Подтвердить</button>""" else ""
-                """<div class="sd-recording-assigned-card">
-                    <div class="sd-recording-assigned-head"><strong>${cadetName.escapeHtml()}</strong></div>
-                    <div class="sd-recording-assigned-datetime">$dateStr, $timeStr</div>
-                    <div class="sd-recording-assigned-status">$statusText</div>
-                    <div class="sd-recording-assigned-actions">$confirmBtn <button type="button" class="sd-btn sd-btn-small sd-btn-delete sd-recording-cancel-session" data-session-id="${s.id.escapeHtml()}">Отменить</button></div>
-                </div>"""
-            }
             val freeWindows = windows.filter { it.status == "free" }
-            val freeWindowsList = if (freeWindows.isEmpty()) """<p class="sd-muted">Нет свободных окон</p>""" else freeWindows.joinToString("") { w ->
-                val dt = formatDateTime(w.dateTimeMillis)
-                """<div class="sd-recording-window-row"><span class="sd-recording-window-dt">$dt</span><span class="sd-recording-window-status">свободно</span><button type="button" class="sd-btn sd-btn-small sd-btn-delete" data-window-id="${w.id.escapeHtml()}">Удалить</button></div>"""
+
+            val assignedList = if (scheduledSessions.isEmpty()) {
+                """<div class="sd-rec-empty"><div class="sd-rec-empty-ico">📋</div><div>Нет запланированных занятий</div></div>"""
+            } else {
+                scheduledSessions.joinToString("") { s ->
+                    val cadetName = cadets.find { it.id == s.cadetId }?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "Курсант"
+                    val avatarLetter = cadetName.firstOrNull()?.uppercaseChar()?.toString() ?: "К"
+                    val dateStr = formatDateOnly(s.startTimeMillis)
+                    val timeStr = formatTimeOnly(s.startTimeMillis)
+                    val bookedByCadet = s.openWindowId.isNotBlank()
+                    val statusText = when {
+                        bookedByCadet && !s.instructorConfirmed -> "Ожидает вашего подтверждения"
+                        !s.instructorConfirmed -> "Ожидает подтверждения курсантом"
+                        else -> "Подтверждён"
+                    }
+                    val statusClass = when {
+                        bookedByCadet && !s.instructorConfirmed -> "sd-rec-status-waiting"
+                        !s.instructorConfirmed -> "sd-rec-status-pending"
+                        else -> "sd-rec-status-confirmed"
+                    }
+                    val showConfirm = bookedByCadet && !s.instructorConfirmed
+                    val confirmBtn = if (showConfirm) """<button type="button" class="sd-rec-confirm-btn sd-recording-confirm-session" data-session-id="${s.id.escapeHtml()}">$recCheckIco Подтвердить</button>""" else ""
+                    """<div class="sd-rec-session-card">
+                        <div class="sd-rec-scard-avatar">${avatarLetter.escapeHtml()}</div>
+                        <div class="sd-rec-scard-body">
+                            <div class="sd-rec-scard-name">${cadetName.escapeHtml()}</div>
+                            <div class="sd-rec-scard-dt">
+                                <span class="sd-rec-dt-pill">$recCalendarIco $dateStr</span>
+                                <span class="sd-rec-dt-pill">$recClockIco $timeStr</span>
+                            </div>
+                            <span class="sd-rec-scard-status $statusClass">$statusText</span>
+                        </div>
+                        <div class="sd-rec-scard-actions">
+                            $confirmBtn
+                            <button type="button" class="sd-rec-cancel-btn sd-recording-cancel-session" data-session-id="${s.id.escapeHtml()}">Отменить</button>
+                        </div>
+                    </div>"""
+                }
             }
+
+            val freeWindowsList = if (freeWindows.isEmpty()) {
+                """<div class="sd-rec-empty"><div class="sd-rec-empty-ico">🕐</div><div>Нет свободных окон</div></div>"""
+            } else {
+                freeWindows.joinToString("") { w ->
+                    val dateStr = formatDateOnly(w.dateTimeMillis)
+                    val timeStr = formatTimeOnly(w.dateTimeMillis)
+                    """<div class="sd-rec-window-card">
+                        <div class="sd-rec-window-avatar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+                        <div class="sd-rec-scard-body">
+                            <span class="sd-rec-window-status">Свободно</span>
+                            <div class="sd-rec-scard-dt">
+                                <span class="sd-rec-dt-pill sd-rec-dt-pill-purple">$recCalendarIco $dateStr</span>
+                                <span class="sd-rec-dt-pill sd-rec-dt-pill-purple">$recClockIco $timeStr</span>
+                            </div>
+                        </div>
+                        <div class="sd-rec-scard-actions">
+                            <button type="button" class="sd-rec-chip-del" data-window-id="${w.id.escapeHtml()}"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg> Удалить</button>
+                        </div>
+                    </div>"""
+                }
+            }
+
             val cadetOptions = cadets.sortedBy { it.fullName }.joinToString("") { c ->
                 """<option value="${c.id.escapeHtml()}">${formatShortName(c.fullName).escapeHtml()}</option>"""
             }
-            """<h2>Запись</h2>$loadingLine
-               <div class="sd-recording-block">
-                 <h3 class="sd-recording-section-title">Записанные на вождение</h3>
-                 <div class="sd-recording-assigned-list">$assignedList</div>
-               </div>
-               <div class="sd-recording-block">
-                 <h3 class="sd-recording-section-title">Свободные окна</h3>
-                 <div class="sd-list">$freeWindowsList</div>
-               </div>
-               <div class="sd-recording-block">
-                 <h3 class="sd-recording-section-title">Записать на вождение</h3>
-                 <p><label>Курсант</label><select id="sd-recording-book-cadet" class="sd-input"><option value="">Выберите курсанта</option>$cadetOptions</select></p>
-                 <p><label>Дата и время</label><input type="datetime-local" id="sd-recording-book-dt" class="sd-input" min="" /></p>
-                 <p><button type="button" id="sd-recording-book-btn" class="sd-btn sd-btn-primary">Записать</button></p>
-               </div>
-               <div class="sd-recording-block">
-                 <h3 class="sd-recording-section-title">Добавить окно</h3>
-                 <p><label>Дата и время</label><input type="datetime-local" id="sd-recording-add-dt" class="sd-input" min="" /></p>
-                 <p><button type="button" id="sd-recording-add-btn" class="sd-btn sd-btn-primary">Подтвердить</button></p>
-               </div>"""
+
+            """$loadingLine<div class="sd-rec-wrap">
+                <div class="sd-rec-stats-bar">
+                    <div class="sd-rec-stat-card sd-rec-stat-blue">
+                        <span class="sd-rec-stat-val">${scheduledSessions.size}</span>
+                        <span class="sd-rec-stat-label">Занятий запланировано</span>
+                    </div>
+                    <div class="sd-rec-stat-card sd-rec-stat-green">
+                        <span class="sd-rec-stat-val">${freeWindows.size}</span>
+                        <span class="sd-rec-stat-label">Свободных окон</span>
+                    </div>
+                </div>
+                <div class="sd-rec-section">
+                    <div class="sd-rec-section-hdr">
+                        <span class="sd-rec-section-ico sd-rec-ico-blue">$recCalendarIco</span>
+                        <span class="sd-rec-section-ttl">Записанные на вождение</span>
+                    </div>
+                    <div class="sd-rec-cards">$assignedList</div>
+                </div>
+                <div class="sd-rec-section">
+                    <div class="sd-rec-section-hdr">
+                        <span class="sd-rec-section-ico sd-rec-ico-purple">$recClockIco</span>
+                        <span class="sd-rec-section-ttl">Свободные окна</span>
+                    </div>
+                    <div class="sd-rec-windows">$freeWindowsList</div>
+                </div>
+                <div class="sd-rec-forms-row">
+                    <div class="sd-rec-form-card">
+                        <div class="sd-rec-form-hdr">
+                            <span class="sd-rec-section-ico sd-rec-ico-blue">$recUserPlusIco</span>
+                            <span class="sd-rec-section-ttl">Записать курсанта</span>
+                        </div>
+                        <div class="sd-rec-picker-wrap">
+                            <span class="sd-rec-picker-ico sd-rec-picker-ico-user">$recUserPlusIco</span>
+                            <select id="sd-recording-book-cadet" class="sd-rec-picker-select"><option value="">Выберите курсанта…</option>$cadetOptions</select>
+                            <span class="sd-rec-picker-chevron"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+                        </div>
+                        <div class="sd-rec-picker-wrap">
+                            <span class="sd-rec-picker-ico sd-rec-picker-ico-cal">$recCalendarIco</span>
+                            <input type="datetime-local" id="sd-recording-book-dt" class="sd-rec-picker-input" min="" />
+                        </div>
+                        <button type="button" id="sd-recording-book-btn" class="sd-rec-submit sd-rec-submit-blue">
+                            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                            Записать
+                        </button>
+                    </div>
+                    <div class="sd-rec-form-card">
+                        <div class="sd-rec-form-hdr">
+                            <span class="sd-rec-section-ico sd-rec-ico-purple">$recPlusIco</span>
+                            <span class="sd-rec-section-ttl">Добавить окно</span>
+                        </div>
+                        <div class="sd-rec-picker-wrap">
+                            <span class="sd-rec-picker-ico sd-rec-picker-ico-cal sd-rec-picker-ico-purple">$recClockIco</span>
+                            <input type="datetime-local" id="sd-recording-add-dt" class="sd-rec-picker-input sd-rec-picker-input-purple" min="" />
+                        </div>
+                        <button type="button" id="sd-recording-add-btn" class="sd-rec-submit sd-rec-submit-purple">
+                            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                            Добавить
+                        </button>
+                    </div>
+                </div>
+            </div>"""
         }
         "cadet" -> {
-            val slotsHtml = windows.joinToString("") { w ->
-                """<div class="sd-record-row"><span>${formatDateTime(w.dateTimeMillis)}</span> <button type="button" class="sd-btn sd-btn-primary sd-btn-small" data-window-id="${w.id.escapeHtml()}">Записаться</button></div>"""
+            val myScheduled = sessions.filter { it.status == "scheduled" }.take(10)
+
+            val slotsHtml = if (windows.isEmpty()) {
+                """<div class="sd-rec-empty"><div class="sd-rec-empty-ico">🗓️</div><div>Нет доступных слотов</div></div>"""
+            } else {
+                windows.joinToString("") { w ->
+                    val dateStr = formatDateOnly(w.dateTimeMillis)
+                    val timeStr = formatTimeOnly(w.dateTimeMillis)
+                    """<div class="sd-rec-slot-card">
+                        <div class="sd-rec-slot-info">
+                            <div class="sd-rec-slot-dt">
+                                <span class="sd-rec-dt-pill">$recCalendarIco $dateStr</span>
+                                <span class="sd-rec-dt-pill">$recClockIco $timeStr</span>
+                            </div>
+                        </div>
+                        <button type="button" class="sd-rec-book-slot-btn sd-btn sd-btn-primary sd-btn-small" data-window-id="${w.id.escapeHtml()}">Записаться</button>
+                    </div>"""
+                }
             }
-            val myRecords = sessions.filter { it.status == "scheduled" }.take(10).joinToString("") { """<div class="sd-record-row">${formatDateTime(it.startTimeMillis)} — ${it.status}</div>""" }
-            """<h2>Запись на вождение</h2>$loadingLine
-               <div class="sd-recording-block"><h3 class="sd-recording-section-title">Свободные слоты</h3><div class="sd-list">$slotsHtml</div></div>
-               <div class="sd-recording-block"><h3 class="sd-recording-section-title">Мои записи</h3><div class="sd-list">$myRecords</div></div>"""
+
+            val myRecords = if (myScheduled.isEmpty()) {
+                """<div class="sd-rec-empty"><div class="sd-rec-empty-ico">📝</div><div>Нет запланированных занятий</div></div>"""
+            } else {
+                myScheduled.joinToString("") { s ->
+                    val dateStr = formatDateOnly(s.startTimeMillis)
+                    val timeStr = formatTimeOnly(s.startTimeMillis)
+                    """<div class="sd-rec-my-record">
+                        <div class="sd-rec-my-dt">
+                            <span class="sd-rec-dt-pill">$recCalendarIco $dateStr</span>
+                            <span class="sd-rec-dt-pill">$recClockIco $timeStr</span>
+                        </div>
+                        <span class="sd-rec-scard-status sd-rec-status-confirmed">Запланировано</span>
+                    </div>"""
+                }
+            }
+
+            """$loadingLine<div class="sd-rec-wrap">
+                <div class="sd-rec-stats-bar">
+                    <div class="sd-rec-stat-card sd-rec-stat-blue">
+                        <span class="sd-rec-stat-val">${myScheduled.size}</span>
+                        <span class="sd-rec-stat-label">Моих занятий</span>
+                    </div>
+                    <div class="sd-rec-stat-card sd-rec-stat-green">
+                        <span class="sd-rec-stat-val">${windows.size}</span>
+                        <span class="sd-rec-stat-label">Доступных слотов</span>
+                    </div>
+                </div>
+                <div class="sd-rec-section">
+                    <div class="sd-rec-section-hdr">
+                        <span class="sd-rec-section-ico sd-rec-ico-green">$recCarIco</span>
+                        <span class="sd-rec-section-ttl">Доступные слоты</span>
+                    </div>
+                    <div class="sd-rec-slots">$slotsHtml</div>
+                </div>
+                <div class="sd-rec-section">
+                    <div class="sd-rec-section-hdr">
+                        <span class="sd-rec-section-ico sd-rec-ico-blue">$recCalendarIco</span>
+                        <span class="sd-rec-section-ttl">Мои записи</span>
+                    </div>
+                    <div class="sd-rec-my-list">$myRecords</div>
+                </div>
+            </div>"""
         }
-        else -> """<h2>Запись</h2><p>Доступно инструктору и курсанту.</p>"""
+        else -> """<div class="sd-rec-wrap"><div class="sd-rec-section"><p>Доступно инструктору и курсанту.</p></div></div>"""
     }
 }
 
@@ -3254,13 +3371,8 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                             return@addEventListener
                         }
                         requestStartByInstructor(sessionId) { err ->
-                            if (err != null) {
-                                showToast(err)
-                                updateState { networkError = err }
-                            } else {
-                                showToast("Ожидайте подтверждения от курсанта")
-                                getSessionsForInstructor(usr.id) { sess -> updateState { recordingSessions = sess } }
-                            }
+                            if (err != null) updateState { networkError = err }
+                            else getSessionsForInstructor(usr.id) { sess -> updateState { recordingSessions = sess } }
                         }
                     })
                 }
@@ -3307,148 +3419,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                         }
                     })
                 }
-                if (drivingTimerInterval != 0) { window.clearInterval(drivingTimerInterval); drivingTimerInterval = 0 }
-                val timerBlock = document.getElementById("sd-driving-timer-block")
-                if (timerBlock != null) {
-                    val sessionId = timerBlock.getAttribute("data-session-id") ?: ""
-                    val totalMs = (timerBlock.getAttribute("data-total-ms") ?: "").toLongOrNull() ?: (90 * 60 * 1000)
-                    fun tick() {
-                        val block = document.getElementById("sd-driving-timer-block") ?: run {
-                            if (drivingTimerInterval != 0) { window.clearInterval(drivingTimerInterval); drivingTimerInterval = 0 }
-                            return
-                        }
-                        val startMs = (block.getAttribute("data-session-start-ms") ?: "0").toLongOrNull() ?: 0L
-                        var pausedMs = (block.getAttribute("data-session-paused-ms") ?: "0").toLongOrNull() ?: 0L
-                        val localPauseAt = block.getAttribute("data-local-pause-at")?.toLongOrNull()
-                        if (localPauseAt != null) {
-                            val now = js("Date.now()").unsafeCast<Double>().toLong()
-                            pausedMs += (now - localPauseAt)
-                        }
-                        val now = js("Date.now()").unsafeCast<Double>().toLong()
-                        val elapsed = ((now - startMs) - pausedMs).coerceAtLeast(0)
-                        val remaining = (totalMs - elapsed).coerceIn(0, totalMs)
-                        val minutes = (remaining / 60_000).toInt()
-                        val seconds = ((remaining % 60_000) / 1000).toInt()
-                        val timeStr = "$minutes:${seconds.toString().padStart(2, '0')}"
-                        document.getElementById("sd-driving-timer-remaining")?.textContent = timeStr
-                        val pct = if (totalMs > 0) (100.0 * remaining / totalMs).coerceIn(0.0, 100.0) else 0.0
-                        (document.getElementById("sd-driving-timer-progress-fill")?.asDynamic())?.style?.width = "${pct}%"
-                        val isActive = block.getAttribute("data-session-is-active") != "false"
-                        val onPause = localPauseAt != null || !isActive
-                        document.getElementById("sd-driving-timer-title")?.textContent = if (onPause) "Вождение: на паузе" else "Вождение: в процессе"
-                        document.getElementById("sd-driving-timer-pause")?.asDynamic()?.disabled = onPause
-                        document.getElementById("sd-driving-timer-play")?.asDynamic()?.disabled = !onPause
-                    }
-                    tick()
-                    drivingTimerInterval = window.setInterval({ tick() }, 1000)
-                    document.getElementById("sd-driving-timer-pause")?.addEventListener("click", {
-                        val block = document.getElementById("sd-driving-timer-block") ?: return@addEventListener
-                        if (block.getAttribute("data-local-pause-at") != null) return@addEventListener
-                        val sid = block.getAttribute("data-session-id") ?: return@addEventListener
-                        val pausedMs = (block.getAttribute("data-session-paused-ms") ?: "0").toLongOrNull() ?: 0L
-                        block.setAttribute("data-local-pause-at", js("Date.now()").unsafeCast<Double>().toString())
-                        updateSessionTimer(sid, pausedMs, false) { err ->
-                            if (err != null) {
-                                showToast(err)
-                                block.removeAttribute("data-local-pause-at")
-                            } else block.setAttribute("data-session-is-active", "false")
-                        }
-                    })
-                    document.getElementById("sd-driving-timer-play")?.addEventListener("click", {
-                        val block = document.getElementById("sd-driving-timer-block") ?: return@addEventListener
-                        val sid = block.getAttribute("data-session-id") ?: return@addEventListener
-                        val pausedMs = (block.getAttribute("data-session-paused-ms") ?: "0").toLongOrNull() ?: 0L
-                        val localPauseAt = block.getAttribute("data-local-pause-at")?.toLongOrNull()
-                        val effectivePaused = if (localPauseAt != null) {
-                            val now = js("Date.now()").unsafeCast<Double>().toLong()
-                            block.removeAttribute("data-local-pause-at")
-                            pausedMs + (now - localPauseAt)
-                        } else pausedMs
-                        updateSessionTimer(sid, effectivePaused, true) { err ->
-                            if (err != null) showToast(err)
-                            else {
-                                block.setAttribute("data-session-paused-ms", effectivePaused.toString())
-                                block.setAttribute("data-session-is-active", "true")
-                            }
-                        }
-                    })
-                    document.getElementById("sd-driving-timer-stop")?.addEventListener("click", {
-                        if (!window.asDynamic().confirm("Завершить вождение досрочно?")) return@addEventListener
-                        val sid = timerBlock.getAttribute("data-session-id") ?: return@addEventListener
-                        val remainingEl = document.getElementById("sd-driving-timer-remaining")
-                        val remainingStr = remainingEl?.textContent ?: ""
-                        val ratingInput = window.asDynamic().prompt("Оценка курсанта (1–5):", "5") ?: return@addEventListener
-                        val rating = ratingInput.unsafeCast<String>().toIntOrNull()?.coerceIn(1, 5) ?: 5
-                        completeSession(sid, rating, rating, usr.id, remainingStr) { err ->
-                            if (err != null) {
-                                showToast(err)
-                            } else {
-                                showToast("Вождение завершено")
-                                getOpenWindowsForInstructor(usr.id) { wins ->
-                                    getSessionsForInstructor(usr.id) { sess ->
-                                        updateState { recordingOpenWindows = wins; recordingSessions = sess }
-                                    }
-                                }
-                            }
-                        }
-                    })
-                }
-            }
-            if (usr.role == "cadet") {
-                val cadetConfirmNodes = root.querySelectorAll(".sd-cadet-schedule-confirm")
-                for (k in 0 until cadetConfirmNodes.length) {
-                    val btn = cadetConfirmNodes.item(k) as? org.w3c.dom.Element ?: continue
-                    val sessionId = btn.getAttribute("data-session-id") ?: continue
-                    btn.addEventListener("click", {
-                        confirmBookingByCadet(sessionId) { err ->
-                            if (err != null) updateState { networkError = err }
-                            else getSessionsForCadet(usr.id) { sess -> updateState { recordingSessions = sess } }
-                        }
-                    })
-                }
-                val cadetStartThresholdMs = START_ALLOWED_MINUTES_BEFORE * 60 * 1000
-                val cadetStartNodes = root.querySelectorAll(".sd-cadet-schedule-start")
-                for (k in 0 until cadetStartNodes.length) {
-                    val btn = cadetStartNodes.item(k) as? org.w3c.dom.Element ?: continue
-                    val sessionId = btn.getAttribute("data-session-id") ?: continue
-                    val startMsStr = btn.getAttribute("data-start-ms")
-                    btn.addEventListener("click", {
-                        val startMs = startMsStr?.toLongOrNull() ?: 0L
-                        val now = js("Date.now()").unsafeCast<Double>().toLong()
-                        if (now < startMs - cadetStartThresholdMs) {
-                            showToast("Ещё рано! Кнопка активируется за 15 мин. до вождения.")
-                            return@addEventListener
-                        }
-                        startSession(sessionId) { err ->
-                            if (err != null) {
-                                showToast(err)
-                                updateState { networkError = err }
-                            } else {
-                                confirmSessionByCadet(sessionId) { err2 ->
-                                    if (err2 != null) {
-                                        showToast(err2)
-                                        updateState { networkError = err2 }
-                                    } else {
-                                        showToast("Вождение начато")
-                                        getSessionsForCadet(usr.id) { sess -> updateState { recordingSessions = sess } }
-                                    }
-                                }
-                            }
-                        }
-                    })
-                }
-                val cadetCancelNodes = root.querySelectorAll(".sd-cadet-schedule-cancel")
-                for (k in 0 until cadetCancelNodes.length) {
-                    val btn = cadetCancelNodes.item(k) as? org.w3c.dom.Element ?: continue
-                    val sessionId = btn.getAttribute("data-session-id") ?: continue
-                    btn.addEventListener("click", {
-                        if (!window.confirm("Вы уверены, что хотите отменить вождение?")) return@addEventListener
-                        cancelByCadet(sessionId) { err ->
-                            if (err != null) updateState { networkError = err }
-                            else getSessionsForCadet(usr.id) { sess -> updateState { recordingSessions = sess } }
-                        }
-                    })
-                }
+                startDrivingTimers()
             }
             document.getElementById("sd-chat-back")?.addEventListener("click", {
                 try { (voiceRecorder.asDynamic()).stop() } catch (_: Throwable) { }

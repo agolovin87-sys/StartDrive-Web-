@@ -8,6 +8,7 @@ import org.w3c.dom.HTMLButtonElement
 import org.w3c.dom.HTMLInputElement
 import org.w3c.dom.HTMLSelectElement
 import org.w3c.dom.events.Event
+import org.w3c.dom.events.EventListener
 
 private var presenceUnsubscribes: MutableList<() -> Unit> = mutableListOf()
 private var voiceRecorderChunks: dynamic = null
@@ -17,6 +18,9 @@ private var voiceRecorderMimeType: String = "audio/webm"
 private var voiceRecordInterval: Int = 0
 private var voicePlayInterval: Int = 0
 private val chatScrollByContactId = mutableMapOf<String, Int>()
+private var cadetNotificationAudio: dynamic = null
+private var cadetNotificationAudioUnlocked: Boolean = false
+private var cadetNotificationAudioContext: dynamic = null
 
 private fun saveChatScrollForCurrentContact() {
     val contactId = appState.selectedChatContactId ?: return
@@ -138,7 +142,11 @@ fun main() {
                     (root.unsafeCast<dynamic>().querySelector("nav.sd-tabs") as? org.w3c.dom.Element)?.innerHTML = tabButtons
                     lastRenderedTabIndex = state.selectedTabIndex
                 }
-                val cardContent = if (state.pddExamMode && state.pddQuestions.isNotEmpty()) renderTicketsTabContent() else tabContent
+                val cardContent = when {
+                    state.notificationsViewOpen -> """<div class="sd-notif-full-view"><p class="sd-notif-back-row"><button type="button" id="sd-notif-back" class="sd-btn sd-btn-secondary">← Назад</button></p>${renderNotificationsTabContent(state.user!!)}</div>"""
+                    state.pddExamMode && state.pddQuestions.isNotEmpty() -> renderTicketsTabContent()
+                    else -> tabContent
+                }
                 sdCard.innerHTML = cardContent
                 if (state.pddScrollToSignDetail && state.pddCategoryId == "signs" && state.pddSelectedSign != null) {
                     (sdCard.querySelector("#sd-pdd-sign-detail-scroll") as? org.w3c.dom.Element)?.let { el ->
@@ -147,6 +155,8 @@ fun main() {
                     updateState { pddScrollToSignDetail = false }
                 }
                 attachListeners(root)
+                appendSoundSettingsModalIfNeeded(root)
+                appendAllowSoundBarIfNeeded(root)
                 return
             }
             lastRenderedTabIndex = null
@@ -161,6 +171,8 @@ fun main() {
             }
             root.innerHTML = networkBanner + loadingOverlay + html
             attachListeners(root)
+            appendSoundSettingsModalIfNeeded(root)
+            appendAllowSoundBarIfNeeded(root)
         }
 
         var renderScheduled = false
@@ -194,14 +206,19 @@ fun main() {
                     }
                     return@getCurrentUser
                 }
-                updateState { this.user = user; error = null; networkError = null }
+                val loadedNotifications = loadNotificationsFromStorage(user.id)
                 updateState {
+                    this.user = user
+                    error = null
+                    networkError = null
+                    notifications = loadedNotifications
                     screen = when (user.role) {
                         "admin" -> AppScreen.Admin
                         "instructor" -> if (user.isActive) AppScreen.Instructor else AppScreen.PendingApproval
                         "cadet" -> if (user.isActive) AppScreen.Cadet else AppScreen.PendingApproval
                         else -> AppScreen.PendingApproval
                     }
+                    showSoundSettingsModal = (user.role == "cadet" && user.isActive && isFirstRunSoundSetting())
                 }
                 setPresence(user.id, true)
             }
@@ -799,6 +816,7 @@ private fun generateExamTicket(bundle: dynamic, categoryId: String): Pair<List<P
 
 private var examTimerIntervalId: Int? = null
 private var drivingTimerIntervalId: Int? = null
+private var cadetWindowsPollIntervalId: Int = 0
 /** Сессии, по которым уже вызвано завершение по таймеру (чтобы не вызывать повторно). */
 private val sessionCompletionRequestedIds = mutableSetOf<String>()
 
@@ -1167,10 +1185,15 @@ private fun formatDateTimeEkaterinburg(ms: Long?): String {
 
 /** Показать всплывающее сообщение (toast), исчезает через 4 с или по клику. */
 private fun showToast(message: String) {
+    showToastWithDuration(message, 4000)
+}
+
+/** Toast с заданной длительностью и опциональным классом (например sd-toast-important). */
+private fun showToastWithDuration(message: String, durationMs: Int, extraClass: String? = null) {
     val existing = document.querySelector(".sd-toast")
     existing?.parentNode?.removeChild(existing)
     val div = document.createElement("div")
-    div.className = "sd-toast"
+    div.className = "sd-toast" + (if (extraClass != null) " $extraClass" else "")
     div.setAttribute("role", "alert")
     div.textContent = message
     document.body?.appendChild(div)
@@ -1179,8 +1202,231 @@ private fun showToast(message: String) {
         div.parentNode?.removeChild(div)
         window.clearTimeout(timeoutId)
     }
-    timeoutId = window.setTimeout({ remove() }, 4000)
+    timeoutId = window.setTimeout({ remove() }, durationMs)
     div.addEventListener("click", { remove() })
+}
+
+/** Звуковое и текстовое уведомление курсанту: инструктор добавил свободное окно. Обновляет экран, переключает на вкладку «Запись» и сохраняет в «Уведомления». */
+private fun showCadetNewWindowNotification() {
+    val text = "Инструктор добавил свободное окно. Можно записаться на вождение."
+    val now = js("Date.now()").unsafeCast<Double>().toLong()
+    updateState {
+        notifications = notifications + AppNotification(dateTimeMs = now, text = text)
+        selectedTabIndex = 1
+    }
+    appState.user?.id?.let { saveNotificationsToStorage(it, appState.notifications) }
+    showToastWithDuration(text, 8000, "sd-toast-important")
+    try {
+        val perm = js("(function(){ return typeof Notification !== 'undefined' ? Notification.permission : 'denied'; })").unsafeCast<() -> String>().invoke()
+        if (perm == "granted") {
+            js("(function(t){ try { new Notification('StartDrive', { body: t, tag: 'sd-new-window' }); } catch(e) {} })").unsafeCast<(String) -> Unit>().invoke(text)
+        } else if (perm == "default") {
+            js("(function(t){ try { Notification.requestPermission().then(function(p){ if(p==='granted') new Notification('StartDrive', { body: t, tag: 'sd-new-window' }); }); } catch(e) {} })").unsafeCast<(String) -> Unit>().invoke(text)
+        }
+    } catch (_: Throwable) { }
+    if (getSoundNotificationsEnabled() != false) playInstruktorDobavilOknoSound()
+}
+
+private const val NOTIFICATIONS_STORAGE_KEY_PREFIX = "sd_notifications_"
+
+/** Ключ в localStorage: включены ли звуковые уведомления (true/false). Отсутствие ключа = первый запуск. */
+private const val SOUND_NOTIFICATIONS_ENABLED_KEY = "sd_sound_notifications_enabled"
+
+/** Читает сохранённый выбор пользователя: null = ещё не выбирал (первый запуск), true/false = включено/выключено. */
+private fun getSoundNotificationsEnabled(): Boolean? {
+    val raw = window.asDynamic().localStorage?.getItem(SOUND_NOTIFICATIONS_ENABLED_KEY) as? String ?: return null
+    return when (raw) {
+        "true" -> true
+        "false" -> false
+        else -> null
+    }
+}
+
+/** Сохраняет выбор пользователя по звуковым уведомлениям в localStorage. */
+private fun setSoundNotificationsEnabled(enabled: Boolean) {
+    try {
+        window.asDynamic().localStorage?.setItem(SOUND_NOTIFICATIONS_ENABLED_KEY, if (enabled) "true" else "false")
+    } catch (_: Throwable) { }
+}
+
+/** true, если пользователь ещё не делал выбор (ключ в localStorage отсутствует). */
+private fun isFirstRunSoundSetting(): Boolean = getSoundNotificationsEnabled() == null
+
+/** HTML модального окна «Настройки звуковых уведомлений» (первый запуск). */
+private fun renderSoundSettingsModalHtml(): String = """
+    <div class="sd-modal-overlay sd-sound-settings-overlay" id="sd-sound-settings-modal">
+        <div class="sd-modal sd-sound-settings-modal">
+            <h3 class="sd-modal-title">Звуковые уведомления</h3>
+            <p class="sd-sound-settings-text">Включить автоматическое воспроизведение звука и голоса?</p>
+            <p class="sd-modal-actions sd-sound-settings-actions">
+                <button type="button" id="sd-sound-enable-btn" class="sd-btn sd-btn-primary">Включить</button>
+                <button type="button" id="sd-sound-disable-btn" class="sd-btn sd-btn-secondary">Отключить</button>
+            </p>
+        </div>
+    </div>
+""".trimIndent()
+
+/** Удаляет модальное окно настроек звука из DOM. */
+private fun removeSoundSettingsModal() {
+    document.getElementById("sd-sound-settings-modal")?.let { el ->
+        el.parentNode?.removeChild(el)
+    }
+}
+
+/** Добавляет модальное окно настроек звука в root и вешает обработчики кнопок (если флаг показа включён). */
+private fun appendSoundSettingsModalIfNeeded(root: org.w3c.dom.Element) {
+    if (!appState.showSoundSettingsModal) return
+    val wrap = document.createElement("div")
+    wrap.innerHTML = renderSoundSettingsModalHtml()
+    val modal = wrap.firstElementChild ?: return
+    root.appendChild(modal)
+    val enableBtn = modal.querySelector("#sd-sound-enable-btn")
+    val disableBtn = modal.querySelector("#sd-sound-disable-btn")
+    enableBtn?.addEventListener("click", {
+        setSoundNotificationsEnabled(true)
+        unlockCadetNotificationAudio()
+        updateState { showSoundSettingsModal = false }
+        removeSoundSettingsModal()
+    })
+    disableBtn?.addEventListener("click", {
+        setSoundNotificationsEnabled(false)
+        updateState { showSoundSettingsModal = false }
+        removeSoundSettingsModal()
+    })
+}
+
+/** Показать кнопку «Разрешить звук» курсанту, если звук включён, но согласие ещё не дано. */
+private fun appendAllowSoundBarIfNeeded(root: org.w3c.dom.Element) {
+    if (appState.user?.role != "cadet") return
+    if (getSoundNotificationsEnabled() != true) return
+    if (appState.soundAudioUnlocked) return
+    val bar = document.createElement("div")
+    bar.id = "sd-allow-sound-bar"
+    bar.className = "sd-allow-sound-bar"
+    bar.innerHTML = """
+        <p class="sd-allow-sound-text">Браузер требует одно нажатие для воспроизведения звука уведомлений.</p>
+        <button type="button" id="sd-allow-sound-btn" class="sd-btn sd-btn-primary sd-allow-sound-btn">🔊 Разрешить звук</button>
+    """.trimIndent()
+    root.appendChild(bar)
+    val allowBtn = bar.querySelector("#sd-allow-sound-btn")
+    allowBtn?.addEventListener("click", { ev: Event ->
+        ev.preventDefault()
+        ev.stopPropagation()
+        bar.parentNode?.removeChild(bar)
+        unlockCadetNotificationAudio()
+    })
+}
+
+private fun loadNotificationsFromStorage(userId: String): List<AppNotification> {
+    return try {
+        val raw = window.asDynamic().localStorage?.getItem(NOTIFICATIONS_STORAGE_KEY_PREFIX + userId) as? String ?: return emptyList()
+        val arr = js("(function(r){ return JSON.parse(r); })").unsafeCast<(String) -> dynamic>().invoke(raw)
+        val len = (arr?.length as? Int) ?: 0
+        (0 until len).mapNotNull { i ->
+            val o = arr?.get(i)
+            val obj = js("(function(x){ return x; })").unsafeCast<(Any?) -> dynamic>().invoke(o)
+            val ms = (obj?.dateTimeMs as? Number)?.toLong() ?: return@mapNotNull null
+            val t = (js("(function(x){ return x && x.text; })").unsafeCast<(dynamic) -> Any?>().invoke(obj) as? String) ?: return@mapNotNull null
+            AppNotification(dateTimeMs = ms, text = t)
+        }
+    } catch (_: Throwable) { emptyList() }
+}
+
+private fun saveNotificationsToStorage(userId: String, list: List<AppNotification>) {
+    try {
+        val arr = list.map { js("(function(m,t){ return { dateTimeMs: m, text: t }; })").unsafeCast<(Long, String) -> dynamic>().invoke(it.dateTimeMs, it.text) }
+        val json = js("(function(a){ return JSON.stringify(a); })").unsafeCast<(Any) -> String>().invoke(arr)
+        window.asDynamic().localStorage?.setItem(NOTIFICATIONS_STORAGE_KEY_PREFIX + userId, json)
+    } catch (_: Throwable) { }
+}
+
+/** Показать уведомление снизу экрана и сохранить в список уведомлений (и в localStorage). */
+private fun showNotification(text: String) {
+    val now = js("Date.now()").unsafeCast<Double>().toLong()
+    updateState { notifications = notifications + AppNotification(dateTimeMs = now, text = text) }
+    appState.user?.id?.let { saveNotificationsToStorage(it, appState.notifications) }
+    showToast(text)
+}
+
+/** Базовый URL для ресурсов (звуки) — от origin, чтобы всегда грузить ваш MP3. */
+private fun getResourceBaseUrl(): String {
+    val origin = kotlinx.browser.window.location.origin
+    return if (origin.endsWith("/")) origin else origin + "/"
+}
+
+/** Полный URL вашего звука: instruktor_dobavil_okno.mp3 из «Фото для приложения/звуки». */
+private fun getCadetNotificationSoundUrl(): String =
+    getResourceBaseUrl() + "sounds/instruktor_dobavil_okno.mp3"
+
+/** Один общий Audio для звука «Инструктор добавил свободное окно»; разблокируется по первому клику пользователя. */
+private fun getOrCreateCadetNotificationAudio(): dynamic {
+    if (cadetNotificationAudio != null && cadetNotificationAudio != js("undefined")) return cadetNotificationAudio
+    val audio = document.createElement("audio").asDynamic()
+    audio.preload = "auto"
+    audio.volume = 1.0
+    audio.src = getCadetNotificationSoundUrl()
+    cadetNotificationAudio = audio
+    return audio
+}
+
+/** Разблокировать воспроизведение звука уведомления (нужен один раз после клика/касания пользователя из-за политики autoplay). */
+private fun unlockCadetNotificationAudio() {
+    if (cadetNotificationAudioUnlocked) return
+    cadetNotificationAudioUnlocked = true
+    updateState { soundAudioUnlocked = true }
+    try {
+        val audio = getOrCreateCadetNotificationAudio()
+        audio.currentTime = 0.0
+        audio.play()?.then({
+            audio.pause()
+            audio.currentTime = 0.0
+        })?.catch { _ -> Unit }
+        if (cadetNotificationAudioContext == null || cadetNotificationAudioContext == js("undefined")) {
+            cadetNotificationAudioContext = js("new (window.AudioContext || window.webkitAudioContext)()").unsafeCast<dynamic>()
+        }
+        val ctx = cadetNotificationAudioContext
+        if (ctx != null) ctx.asDynamic().resume()?.catch { _ -> Unit }
+    } catch (_: Throwable) { }
+}
+
+/** Короткий звуковой сигнал через Web Audio API (два «динь-динь», всегда слышно). */
+private fun playCadetNotificationBeep() {
+    try {
+        var ctx = cadetNotificationAudioContext
+        if (ctx == null || ctx == js("undefined")) {
+            ctx = js("new (window.AudioContext || window.webkitAudioContext)()").unsafeCast<dynamic>()
+            cadetNotificationAudioContext = ctx
+        }
+        val c = ctx.asDynamic()
+        js("(function(ctx){ function beep(delay){ var o=ctx.createOscillator(),g=ctx.createGain(); o.connect(g); g.connect(ctx.destination); o.frequency.value=880; o.type='sine'; g.gain.value=0.5; o.start(ctx.currentTime+delay); o.stop(ctx.currentTime+delay+0.12); } function run(){ beep(0); beep(0.18); } var r=ctx.resume; if(r){ r.call(ctx).then(run).catch(run); } else run(); })").unsafeCast<(dynamic) -> Unit>().invoke(c)
+    } catch (_: Throwable) { }
+}
+
+/** Голосовое уведомление через TTS (Web Speech API): «Инструктор добавил свободное окно». */
+private fun playCadetNewWindowVoiceNotification() {
+    try {
+        val synth = kotlinx.browser.window.asDynamic().speechSynthesis
+        if (synth == null || synth == js("undefined")) return
+        val utterance = js("new SpeechSynthesisUtterance()").unsafeCast<dynamic>()
+        utterance.text = "Инструктор добавил свободное окно. Можно записаться на вождение."
+        utterance.lang = "ru-RU"
+        utterance.rate = 0.95
+        utterance.volume = 1.0
+        js("(function(s,u){ try { s.speak(u); } catch(e) {} })").unsafeCast<(dynamic, dynamic) -> Unit>().invoke(synth, utterance)
+    } catch (_: Throwable) { }
+}
+
+/** Воспроизвести звуковое уведомление: только ваш файл instruktor_dobavil_okno.mp3 (без TTS и без бипа). */
+private fun playInstruktorDobavilOknoSound() {
+    try {
+        if (cadetNotificationAudioContext != null && cadetNotificationAudioContext != js("undefined")) {
+            cadetNotificationAudioContext.asDynamic().resume()?.catch { _: dynamic -> Unit }
+        }
+        val audio = getOrCreateCadetNotificationAudio()
+        audio.src = getCadetNotificationSoundUrl()
+        audio.currentTime = 0.0
+        audio.play()?.catch { _ -> Unit }
+    } catch (_: Throwable) { }
 }
 
 private fun renderAdminHomeContent(): String {
@@ -1367,6 +1613,8 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
         </div>"""
     }
     val sessionsByWeekday = sessions.groupBy { getWeekdayIndex(it.startTimeMillis) }
+    val nowMs = js("Date.now()").unsafeCast<Double>().toLong()
+    val lateDisabled = appState.instructorRunningLateUntilMs > 0L && nowMs < appState.instructorRunningLateUntilMs
     val scheduleSectionsHtml = if (sessions.isEmpty()) {
         """<p class="sd-muted">Нет записанных на вождение курсантов</p>"""
     } else {
@@ -1391,6 +1639,8 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
                 val avatarLetter = cadetName.trim().split(" ").filter { it.isNotBlank() }.mapNotNull { it.firstOrNull()?.uppercaseChar() }.take(2).joinToString("")
                 val showConfirm = bookedByCadet && !s.instructorConfirmed && s.status != "completed"
                 val showStart = s.status == "scheduled" && s.instructorConfirmed && !s.startRequestedByInstructor
+                val nowMs = js("Date.now()").unsafeCast<Double>().toLong()
+                val startBtnDisabled = showStart && (nowMs < startMs - START_ALLOWED_MINUTES_BEFORE * 60 * 1000)
                 val statusClass = when {
                     s.status == "completed" && s.instructorRating == 0 -> "sd-sch-status-waiting"
                     bookedByCadet && !s.instructorConfirmed -> "sd-sch-status-waiting"
@@ -1400,8 +1650,8 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
                     else -> "sd-sch-status-confirmed"
                 }
                 val confirmBtn = if (showConfirm) """<button type="button" class="sd-sch-btn sd-sch-confirm-btn sd-home-schedule-confirm" data-session-id="${s.id.escapeHtml()}">$iconSelectSvg Подтвердить</button>""" else ""
-                val startBtn = if (showStart) """<button type="button" class="sd-sch-btn sd-sch-start-btn sd-home-schedule-start" data-session-id="${s.id.escapeHtml()}" data-start-ms="$startMs">$iconPlaySvg Начать</button>""" else ""
-                val lateBtn = if (s.status == "scheduled") """<button type="button" class="sd-sch-btn sd-sch-late-btn sd-home-schedule-late" data-session-id="${s.id.escapeHtml()}">$iconLateSvg Опаздываю</button>""" else ""
+                val startBtn = if (showStart) """<button type="button" class="sd-sch-btn sd-sch-start-btn sd-home-schedule-start${if (startBtnDisabled) " sd-sch-start-disabled" else ""}"${if (startBtnDisabled) " disabled" else ""} data-session-id="${s.id.escapeHtml()}" data-start-ms="$startMs">$iconPlaySvg Начать</button>""" else ""
+                val lateBtn = if (s.status == "scheduled") """<button type="button" class="sd-sch-btn sd-sch-late-btn sd-home-schedule-late" data-session-id="${s.id.escapeHtml()}"${if (lateDisabled) " disabled title=\"Задержка активна\"" else ""}>$iconLateSvg Опаздываю</button>""" else ""
                 val cancelBtn = if (s.status != "completed") """<button type="button" class="sd-sch-btn sd-sch-cancel-btn sd-home-schedule-cancel" data-session-id="${s.id.escapeHtml()}">$iconTrashSvg Отменить</button>""" else ""
                 val rateCadetBtn = if (s.status == "completed" && s.instructorRating == 0) """<button type="button" class="sd-sch-btn sd-sch-rate-btn sd-instructor-rate-cadet-btn" data-session-id="${s.id.escapeHtml()}" data-cadet-name="${(cadets.find { it.id == s.cadetId }?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "Курсант").escapeHtml()}">Поставить оценку</button>""" else ""
                 val timerBlock = if (s.status == "inProgress") {
@@ -1493,6 +1743,8 @@ private fun renderCadetHomeContent(user: User, version: String): String {
     val svgPhoneP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>"""
     val svgTicketP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M22 10V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2s.9-2 2-2zm-2-1.46c-1.19.69-2 1.99-2 3.46s.81 2.77 2 3.46V18H4v-2.54c1.19-.69 2-1.99 2-3.46 0-1.48-.8-2.77-1.99-3.46L4 6h16v2.54z"/></svg>"""
     val svgInstructor = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>"""
+    val svgDriving = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/></svg>"""
+    val completedDrivingsCount = (appState.recordingSessions + appState.historySessions).distinctBy { it.id }.count { it.status == "completed" }
     val profileCard = """
         <div class="sd-profile-card">
             <div class="sd-profile-accent-bar"></div>
@@ -1508,6 +1760,7 @@ private fun renderCadetHomeContent(user: User, version: String): String {
                 <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgEmail</span><span class="sd-profile-info-label">Email</span><span class="sd-profile-info-value">${(user.email.ifBlank { "—" }).escapeHtml()}</span></div>
                 <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgPhoneP</span><span class="sd-profile-info-label">Телефон</span><span class="sd-profile-info-value">${(user.phone.ifBlank { "—" }).escapeHtml()}</span></div>
                 <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgInstructor</span><span class="sd-profile-info-label">Инструктор</span><span class="sd-profile-info-value">$instText</span></div>
+                <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgDriving</span><span class="sd-profile-info-label">Вождений завершено</span><span class="sd-profile-info-value">$completedDrivingsCount</span></div>
                 <div class="sd-profile-info-row sd-profile-info-row-balance"><span class="sd-profile-info-icon">$svgTicketP</span><span class="sd-profile-info-label">Талоны</span><span class="sd-balance-badge">${user.balance}</span></div>
             </div>
         </div>"""
@@ -1695,29 +1948,35 @@ private fun renderRecordingTabContent(user: User): String {
                         </button>
                     </div>
                 </div>
-            </div><div class="sd-modal-overlay sd-hidden" id="sd-instructor-cancel-reason-modal"><div class="sd-modal"><h3 class="sd-modal-title">Выберите причину отмены:</h3><div class="sd-rate-options-instructor sd-cancel-reason-options"><label class="sd-radio"><input type="radio" name="sd-cancel-reason" value="Курсант не явился" checked /> Курсант не явился</label><label class="sd-radio"><input type="radio" name="sd-cancel-reason" value="ТС на ремонте" /> ТС на ремонте</label></div><p class="sd-modal-actions"><button type="button" id="sd-instructor-cancel-reason-confirm" class="sd-btn sd-btn-primary">Подтвердить</button><button type="button" id="sd-instructor-cancel-reason-cancel" class="sd-btn sd-btn-secondary">Отмена</button></p></div></div>"""
+            </div><div class="sd-modal-overlay sd-hidden" id="sd-instructor-cancel-reason-modal"><div class="sd-modal"><h3 class="sd-modal-title">Выберите причину отмены:</h3><div class="sd-rate-options-instructor sd-cancel-reason-options"><label class="sd-radio"><input type="radio" name="sd-cancel-reason" value="Курсант не явился" checked /> Курсант не явился</label><label class="sd-radio"><input type="radio" name="sd-cancel-reason" value="ТС на ремонте" /> ТС на ремонте</label></div><p class="sd-modal-actions"><button type="button" id="sd-instructor-cancel-reason-confirm" class="sd-btn sd-btn-primary">Подтвердить</button><button type="button" id="sd-instructor-cancel-reason-cancel" class="sd-btn sd-btn-secondary">Отмена</button></p></div></div>
+            <div class="sd-modal-overlay sd-hidden" id="sd-rec-delete-window-confirm-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вы уверены?</h3><p class="sd-modal-actions"><button type="button" id="sd-rec-delete-window-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-rec-delete-window-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>
+            <div class="sd-modal-overlay sd-hidden" id="sd-rec-cancel-session-confirm-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вы уверены?</h3><p class="sd-modal-actions"><button type="button" id="sd-rec-cancel-session-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-rec-cancel-session-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>"""
         }
         "cadet" -> {
             val myScheduled = sessions.filter { it.status == "scheduled" }.take(10)
 
             val slotsHtml = if (windows.isEmpty()) {
-                """<div class="sd-rec-empty"><div class="sd-rec-empty-ico">🗓️</div><div>Нет доступных слотов</div></div>"""
+                """<div class="sd-rec-empty"><div class="sd-rec-empty-ico">🗓️</div><div>Нет свободных окон инструктора</div></div>"""
             } else {
                 windows.joinToString("") { w ->
                     val dateStr = formatDateOnly(w.dateTimeMillis)
                     val timeStr = formatTimeOnly(w.dateTimeMillis)
                     """<div class="sd-rec-slot-card">
-                        <div class="sd-rec-slot-info">
+                        <div class="sd-rec-slot-avatar" aria-hidden="true">$recClockIco</div>
+                        <div class="sd-rec-slot-body">
+                            <div class="sd-rec-slot-title">Свободное окно</div>
                             <div class="sd-rec-slot-dt">
-                                <span class="sd-rec-dt-pill">$recCalendarIco $dateStr</span>
-                                <span class="sd-rec-dt-pill">$recClockIco $timeStr</span>
+                                <span class="sd-rec-dt-pill sd-rec-slot-pill">$recCalendarIco $dateStr</span>
+                                <span class="sd-rec-dt-pill sd-rec-slot-pill">$recClockIco $timeStr</span>
                             </div>
                         </div>
-                        <button type="button" class="sd-rec-book-slot-btn sd-btn sd-btn-primary sd-btn-small" data-window-id="${w.id.escapeHtml()}">Записаться</button>
+                        <button type="button" class="sd-rec-book-slot-btn" data-window-id="${w.id.escapeHtml()}">Забронировать</button>
                     </div>"""
                 }
             }
 
+            val recStatusCheckIco = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>"""
+            val recStatusClockIco = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>"""
             val myRecords = if (myScheduled.isEmpty()) {
                 """<div class="sd-rec-empty"><div class="sd-rec-empty-ico">📝</div><div>Нет запланированных занятий</div></div>"""
             } else {
@@ -1730,20 +1989,27 @@ private fun renderRecordingTabContent(user: User): String {
                         else -> "Запланировано"
                     }
                     val statusClass = if (s.instructorConfirmed) "sd-rec-status-confirmed" else "sd-rec-status-pending"
+                    val statusIco = if (s.instructorConfirmed) recStatusCheckIco else recStatusClockIco
                     val confirmBtn = if (needConfirm) """<button type="button" class="sd-rec-confirm-btn sd-recording-confirm-session" data-session-id="${s.id.escapeHtml()}">$recCheckIco Подтвердить</button>""" else ""
+                    val cancelBtn = """<button type="button" class="sd-rec-cancel-btn sd-recording-cancel-session" data-session-id="${s.id.escapeHtml()}">Отменить</button>"""
                     val dateStr = formatDateOnly(s.startTimeMillis)
                     val timeStr = formatTimeOnly(s.startTimeMillis)
                     """<div class="sd-rec-my-record">
-                        <div class="sd-rec-my-dt">
-                            <span class="sd-rec-dt-pill">$recCalendarIco $dateStr</span>
-                            <span class="sd-rec-dt-pill">$recClockIco $timeStr</span>
+                        <div class="sd-rec-my-record-avatar" aria-hidden="true">$recCarIco</div>
+                        <div class="sd-rec-my-record-body">
+                            <div class="sd-rec-my-record-title">Вождение</div>
+                            <div class="sd-rec-my-dt">
+                                <span class="sd-rec-dt-pill">$recCalendarIco $dateStr</span>
+                                <span class="sd-rec-dt-pill">$recClockIco $timeStr</span>
+                            </div>
+                            <span class="sd-rec-my-record-status $statusClass">$statusIco $statusText</span>
                         </div>
-                        <span class="sd-rec-scard-status $statusClass">$statusText</span>
-                        <div class="sd-rec-scard-actions">$confirmBtn</div>
+                        <div class="sd-rec-my-record-actions">$confirmBtn $cancelBtn</div>
                     </div>"""
                 }
             }
 
+            val cadetCancelModal = """<div class="sd-modal-overlay sd-hidden" id="sd-rec-cancel-session-confirm-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вы уверены?</h3><p class="sd-modal-actions"><button type="button" id="sd-rec-cancel-session-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-rec-cancel-session-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>"""
             """$loadingLine<div class="sd-rec-wrap">
                 <div class="sd-rec-stats-bar">
                     <div class="sd-rec-stat-card sd-rec-stat-blue">
@@ -1752,24 +2018,24 @@ private fun renderRecordingTabContent(user: User): String {
                     </div>
                     <div class="sd-rec-stat-card sd-rec-stat-green">
                         <span class="sd-rec-stat-val">${windows.size}</span>
-                        <span class="sd-rec-stat-label">Доступных слотов</span>
+                        <span class="sd-rec-stat-label">Свободных окон инструктора</span>
                     </div>
                 </div>
                 <div class="sd-rec-section">
                     <div class="sd-rec-section-hdr">
                         <span class="sd-rec-section-ico sd-rec-ico-green">$recCarIco</span>
-                        <span class="sd-rec-section-ttl">Доступные слоты</span>
+                        <span class="sd-rec-section-ttl">Свободные окна инструктора</span>
                     </div>
                     <div class="sd-rec-slots">$slotsHtml</div>
                 </div>
                 <div class="sd-rec-section">
                     <div class="sd-rec-section-hdr">
-                        <span class="sd-rec-section-ico sd-rec-ico-blue">$recCalendarIco</span>
+                        <span class="sd-rec-section-ico sd-rec-ico-blue">$recCarIco</span>
                         <span class="sd-rec-section-ttl">Записан на вождение</span>
                     </div>
                     <div class="sd-rec-my-list">$myRecords</div>
                 </div>
-            </div>"""
+            </div>$cadetCancelModal"""
         }
         else -> """<div class="sd-rec-wrap"><div class="sd-rec-section"><p>Доступно инструктору и курсанту.</p></div></div>"""
     }
@@ -1877,7 +2143,7 @@ private fun renderHistoryTabContent(user: User): String {
         val completedCardsHtml = if (completedSessions.isEmpty()) """<p class="sd-history-empty">Нет завершённых занятий</p>""" else completedSessions.joinToString("") { s ->
             val drivingDt = (s.startTimeMillis?.takeIf { it > 0 }?.let { formatMessageDateTime(it) }) ?: "—"
             val completedDt = (s.completedAtMillis?.takeIf { it > 0 }?.let { formatMessageDateTime(it) }) ?: "—"
-            val ratingRow = if (s.instructorRating in 3..5) """<div class="sd-history-session-row"><strong>Оценка курсанта:</strong> ${s.instructorRating}</div>""" else ""
+            val ratingRow = if (s.instructorRating in 3..5) """<div class="sd-history-session-row"><strong>Оценка курсанта:</strong> ${s.instructorRating} <span class="sd-history-rating-star" aria-hidden="true">★</span></div>""" else ""
             """<div class="sd-history-session-card sd-history-completed-card">
                 <div class="sd-history-card-icon sd-history-icon-check">$SD_ICON_CHECK_SVG</div>
                 <div class="sd-history-card-body">
@@ -2438,14 +2704,55 @@ private fun renderTicketsTabContentCategoriesOnly(): String {
     return """<h2>Билеты ПДД</h2><div class="sd-tickets-content"><div class="sd-ticket-categories">$categoriesHtml</div></div>"""
 }
 
-private fun renderSettingsTabContent(user: User): String =
-    """<h2>Настройки</h2>
+private fun renderNotificationsTabContent(user: User): String {
+    val list = appState.notifications.reversed()
+    val listHtml = if (list.isEmpty()) """<p class="sd-notif-empty">Нет уведомлений</p>""" else list.joinToString("") { n ->
+        val dt = formatMessageDateTime(n.dateTimeMs).replaceFirst(" ", ", ")
+        """<div class="sd-notif-item"><div class="sd-notif-dt">$dt</div><div class="sd-notif-text">${n.text.escapeHtml()}</div></div>"""
+    }
+    return """<div class="sd-notif-screen">
+        <div class="sd-notif-header">
+            <h2 class="sd-notif-title">Уведомления</h2>
+            <button type="button" id="sd-notif-clear" class="sd-btn sd-btn-icon sd-notif-clear-btn" title="Очистить" aria-label="Очистить"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>
+        </div>
+        <div class="sd-notif-list">$listHtml</div>
+        <div class="sd-modal-overlay sd-hidden" id="sd-notif-clear-confirm-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вы уверены?</h3><p class="sd-notif-clear-text">Вся история уведомлений будет удалена.</p><p class="sd-modal-actions"><button type="button" id="sd-notif-clear-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-notif-clear-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>
+        </div>"""
+}
+
+/** Вешает обработчики «Очистить» и модалки подтверждения внутри выпадающего блока уведомлений. */
+private fun attachNotifDropdownListeners(dropdownEl: org.w3c.dom.Element) {
+    dropdownEl.querySelector("#sd-notif-clear")?.addEventListener("click", {
+        dropdownEl.querySelector("#sd-notif-clear-confirm-modal")?.unsafeCast<org.w3c.dom.HTMLElement>()?.classList?.remove("sd-hidden")
+    })
+    dropdownEl.querySelector("#sd-notif-clear-yes")?.addEventListener("click", {
+        updateState { notifications = emptyList() }
+        appState.user?.id?.let { saveNotificationsToStorage(it, emptyList()) }
+        dropdownEl.querySelector("#sd-notif-clear-confirm-modal")?.unsafeCast<org.w3c.dom.HTMLElement>()?.classList?.add("sd-hidden")
+    })
+    dropdownEl.querySelector("#sd-notif-clear-no")?.addEventListener("click", {
+        dropdownEl.querySelector("#sd-notif-clear-confirm-modal")?.unsafeCast<org.w3c.dom.HTMLElement>()?.classList?.add("sd-hidden")
+    })
+}
+
+private fun renderSettingsTabContent(user: User): String {
+    val soundBlock = if (user.role == "cadet") {
+        val checked = getSoundNotificationsEnabled() == true
+        val showAllowBtn = checked && !appState.soundAudioUnlocked
+        val allowBtnHtml = if (showAllowBtn) """<p style="margin-top:8px"><button type="button" id="sd-allow-sound-settings-btn" class="sd-btn sd-btn-primary">🔊 Разрешить воспроизведение звука</button></p><p class="sd-settings-hint">Браузер требует одно нажатие для доступа к звуку.</p>""" else ""
+        """<p style="margin-top:16px">Уведомления:</p>
+           <label class="sd-settings-checkbox"><input type="checkbox" id="sd-settings-sound-notifications" ${if (checked) "checked" else ""} /> Включить звук уведомлений</label>
+           $allowBtnHtml"""
+    } else ""
+    return """<h2>Настройки</h2>
        <label>ФИО</label><input type="text" id="sd-settings-fullName" class="sd-input" value="${user.fullName.escapeHtml()}" />
        <label>Телефон</label><input type="tel" id="sd-settings-phone" class="sd-input" value="${user.phone.escapeHtml()}" />
        <button type="button" id="sd-settings-save" class="sd-btn sd-btn-primary">Сохранить профиль</button>
+       $soundBlock
        <p style="margin-top:16px">Сменить пароль:</p>
        <label>Новый пароль</label><input type="password" id="sd-settings-newpassword" class="sd-input" placeholder="мин. 6 символов" />
        <button type="button" id="sd-settings-password" class="sd-btn sd-btn-secondary">Сменить пароль</button>"""
+}
 
 private fun renderBalanceTabContent(user: User): String {
     if (user.role != "admin") return """<h2>Баланс</h2><p>Ваш баланс: ${user.balance} талонов.</p>"""
@@ -2585,6 +2892,9 @@ private fun renderPanel(user: User, roleTitle: String, tabs: List<String>): Stri
                 <h1>StartDrive · $roleTitle</h1>
                 <p>${formatShortName(user.fullName)} · ${user.email}</p>
             </div>
+            <button type="button" id="sd-btn-notifications" class="sd-btn sd-btn-notifications" title="Уведомления" aria-label="Уведомления">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            </button>
             <button type="button" id="sd-btn-signout" class="sd-btn sd-btn-signout" title="Выйти">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18">
                     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
@@ -2698,6 +3008,9 @@ private fun forceFullPanelRender(root: org.w3c.dom.Element, useExamContent: Bool
                 <h1>StartDrive · $roleTitle</h1>
                 <p>${formatShortName(user.fullName)} · ${user.email}</p>
             </div>
+            <button type="button" id="sd-btn-notifications" class="sd-btn sd-btn-notifications" title="Уведомления" aria-label="Уведомления">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            </button>
             <button type="button" id="sd-btn-signout" class="sd-btn sd-btn-signout" title="Выйти">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18">
                     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
@@ -2729,6 +3042,17 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
     root.addEventListener("click", { e: dynamic ->
         if (appState.screen != AppScreen.Admin && appState.screen != AppScreen.Instructor && appState.screen != AppScreen.Cadet) return@addEventListener
         val target = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+        if (target.id == "sd-allow-sound-settings-btn" || target.id == "sd-allow-sound-btn") {
+            (e as? org.w3c.dom.events.Event)?.preventDefault()
+            (e as? org.w3c.dom.events.Event)?.stopPropagation()
+            setSoundNotificationsEnabled(true)
+            unlockCadetNotificationAudio()
+            if (target.id == "sd-allow-sound-btn") {
+                document.getElementById("sd-allow-sound-bar")?.let { el -> el.parentNode?.removeChild(el) }
+            }
+            showToast("Звук уведомлений разрешён")
+            return@addEventListener
+        }
         val closestHelper = js("(function(el, sel) { return el && el.closest ? el.closest(sel) : null; })").unsafeCast<(Any?, String) -> Any?>()
         val closest = { s: String ->
             try {
@@ -2785,17 +3109,9 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                     (e as? org.w3c.dom.events.Event)?.preventDefault()
                     (e as? org.w3c.dom.events.Event)?.stopPropagation()
                     val wid = delWindowBtn.getAttribute("data-window-id") ?: return@addEventListener
-                    val openWin = appState.recordingOpenWindows.find { it.id == wid }
-                    val dateStr = openWin?.dateTimeMillis?.let { formatDateOnly(it) } ?: ""
-                    val timeStr = openWin?.dateTimeMillis?.let { formatTimeOnly(it) } ?: ""
-                    val msg = "Вы уверены, что хотите удалить окно вождения ($dateStr, $timeStr)?"
-                    if (!window.confirm(msg)) return@addEventListener
-                    val instId = appState.user?.id ?: return@addEventListener
-                    deleteOpenWindow(wid) { err ->
-                        if (err != null) updateState { networkError = err }
-                        else getOpenWindowsForInstructor(instId) { wins ->
-                            updateState { recordingOpenWindows = wins }
-                        }
+                    document.getElementById("sd-rec-delete-window-confirm-modal")?.let { modal ->
+                        modal.asDynamic().dataset["windowId"] = wid
+                        modal.classList.remove("sd-hidden")
                     }
                     return@addEventListener
                 }
@@ -3170,6 +3486,7 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
         }
         val tabBtn = closest(".sd-tab")
         if (tabBtn != null) {
+            if (appState.user?.role == "cadet") unlockCadetNotificationAudio()
             val idx = tabBtn.getAttribute("data-tab")?.toIntOrNull() ?: return@addEventListener
             var newbiesOpen = appState.adminNewbiesSectionOpen
             var instOpen = appState.adminInstructorsSectionOpen
@@ -3204,6 +3521,7 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             val myCadetsOpenVal = instructorMyCadetsOpen
             updateState {
                 selectedTabIndex = idx
+                notificationsViewOpen = false
                 recordingLoading = false
                 historyLoading = false
                 balanceAdminLoading = false
@@ -3265,10 +3583,14 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                     }
                 } else {
                     val instId = user.assignedInstructorId ?: ""
+                    val prevWindowsCount = appState.recordingOpenWindows.size
                     getOpenWindowsForCadet(instId) { wins ->
                         getSessionsForCadet(user.id) { sess ->
                             window.clearTimeout(tid)
                             updateState { recordingOpenWindows = wins; recordingSessions = sess; recordingLoading = false }
+                            if (user.role == "cadet" && wins.size > prevWindowsCount && prevWindowsCount > 0) {
+                                showCadetNewWindowNotification()
+                            }
                             user.assignedInstructorId?.let { id -> getUserById(id) { inst -> updateState { cadetInstructor = inst } } }
                         }
                     }
@@ -3546,6 +3868,27 @@ private fun attachListeners(root: org.w3c.dom.Element) {
             })
         }
         AppScreen.Admin, AppScreen.Instructor, AppScreen.Cadet -> {
+            if (cadetWindowsPollIntervalId != 0) {
+                window.clearInterval(cadetWindowsPollIntervalId)
+                cadetWindowsPollIntervalId = 0
+            }
+            root.asDynamic().onclick = null
+            root.asDynamic().ontouchstart = null
+            if (appState.user?.role == "cadet") {
+                try {
+                    if (js("(function(){ return typeof Notification !== 'undefined' && Notification.permission === 'default'; })").unsafeCast<() -> Boolean>().invoke()) {
+                        js("(function(){ try { Notification.requestPermission(); } catch(e) {} })").unsafeCast<() -> Unit>().invoke()
+                    }
+                } catch (_: Throwable) { }
+                var once: (dynamic) -> Unit = {}
+                once = {
+                    unlockCadetNotificationAudio()
+                    root.asDynamic().onclick = null
+                    root.asDynamic().ontouchstart = null
+                }
+                root.asDynamic().onclick = once
+                root.asDynamic().ontouchstart = once
+            }
             val uid = appState.user?.id
             if (appState.selectedTabIndex != 2) {
                 unsubscribeChat()
@@ -3588,13 +3931,36 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                         updateState { recordingLoading = true }
                         val tid = window.setTimeout({ updateState { recordingLoading = false } }, 8000)
                         val instId = usr.assignedInstructorId ?: ""
+                        val prevWindowsCount = appState.recordingOpenWindows.size
                         getOpenWindowsForCadet(instId) { wins ->
                             getSessionsForCadet(usr.id) { sess ->
                                 window.clearTimeout(tid)
                                 updateState { recordingOpenWindows = wins; recordingSessions = sess; recordingLoading = false }
+                                if (usr.role == "cadet" && wins.size > prevWindowsCount && prevWindowsCount > 0) {
+                                    showCadetNewWindowNotification()
+                                }
                                 usr.assignedInstructorId?.let { id -> getUserById(id) { inst -> updateState { cadetInstructor = inst } } }
                             }
                         }
+                    }
+                    if (cadetWindowsPollIntervalId == 0 && usr.role == "cadet") {
+                        cadetWindowsPollIntervalId = window.setInterval({
+                            val u = appState.user ?: return@setInterval
+                            if (u.role != "cadet") return@setInterval
+                            if (appState.selectedTabIndex != 0 && appState.selectedTabIndex != 1) return@setInterval
+                            val instId = u.assignedInstructorId ?: return@setInterval
+                            val prevCount = appState.recordingOpenWindows.size
+                            getOpenWindowsForCadet(instId) { wins ->
+                                if (wins.size > prevCount) {
+                                    getSessionsForCadet(u.id) { sess ->
+                                        updateState { recordingOpenWindows = wins; recordingSessions = sess }
+                                        showCadetNewWindowNotification()
+                                    }
+                                } else if (wins.size != prevCount) {
+                                    updateState { recordingOpenWindows = wins }
+                                }
+                            }
+                        }, 25000).unsafeCast<Int>()
                     }
                 }
                 usr.role == "instructor" && appState.selectedTabIndex == 4 -> {
@@ -3669,6 +4035,25 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 document.getElementById("sd-btn-signout")?.addEventListener("click", {
                 signOutAndClearPresence()
             })
+                if (appState.screen == AppScreen.Instructor || appState.screen == AppScreen.Cadet) {
+                    document.getElementById("sd-btn-notifications")?.addEventListener("click", {
+                        val uid = appState.user?.id
+                        if (uid != null) {
+                            val loaded = loadNotificationsFromStorage(uid)
+                            updateState { notifications = loaded; notificationsViewOpen = true }
+                        } else {
+                            updateState { notificationsViewOpen = true }
+                        }
+                    })
+                }
+                document.getElementById("sd-notif-back")?.addEventListener("click", {
+                    updateState { notificationsViewOpen = false }
+                })
+                if (appState.notificationsViewOpen) {
+                    (root.querySelector("#sd-card") as? org.w3c.dom.Element)?.let { card ->
+                        attachNotifDropdownListeners(card)
+                    }
+                }
             if (usr.role == "instructor") {
                 val homeConfirmNodes = root.querySelectorAll(".sd-home-schedule-confirm")
                 for (k in 0 until homeConfirmNodes.length) {
@@ -3677,7 +4062,10 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     btn.addEventListener("click", {
                         confirmBookingByInstructor(sessionId) { err ->
                             if (err != null) updateState { networkError = err }
-                            else getSessionsForInstructor(usr.id) { sess -> updateState { recordingSessions = sess } }
+                            else {
+                                showNotification("Запись подтверждена")
+                                getSessionsForInstructor(usr.id) { sess -> updateState { recordingSessions = sess } }
+                            }
                         }
                     })
                 }
@@ -3690,22 +4078,13 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     btn.addEventListener("click", {
                         val startMs = startMsStr?.toLongOrNull() ?: 0L
                         val now = js("Date.now()").unsafeCast<Double>().toLong()
-                        fun doRequestStart() {
-                            requestStartByInstructor(sessionId) { err ->
-                                if (err != null) updateState { networkError = err }
-                                else getSessionsForInstructor(usr.id) { sess -> updateState { recordingSessions = sess } }
-                            }
+                        if (now < startMs - startThresholdMs) {
+                            showToast("Активируется за 15 мин. до назначенного вождения!")
+                            return@addEventListener
                         }
-                        if (now >= startMs - startThresholdMs) {
-                            doRequestStart()
-                        } else {
-                            val remMs = startMs - now
-                            val remMin = (remMs / 60000).toInt()
-                            val h = remMin / 60
-                            val m = remMin % 60
-                            val timeStr = "${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}"
-                            if (!window.confirm("Вы уверены, что хотите начать вождение раньше назначенного времени? До вождения ещё: $timeStr минут.")) return@addEventListener
-                            doRequestStart()
+                        requestStartByInstructor(sessionId) { err ->
+                            if (err != null) updateState { networkError = err }
+                            else getSessionsForInstructor(usr.id) { sess -> updateState { recordingSessions = sess } }
                         }
                     })
                 }
@@ -3725,11 +4104,30 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
                     val checkedEl = root.querySelector("input[name=\"sd-late-mins\"]:checked")?.asDynamic()
                     val delay = (checkedEl?.value as? String)?.toIntOrNull() ?: run { showToast("Выберите задержку"); return@addEventListener }
+                    val originalStart = appState.recordingSessions.find { it.id == sessionId }?.startTimeMillis ?: 0L
+                    val delayMs = delay * 60L * 1000L
+                    val untilMs = js("Date.now()").unsafeCast<Double>().toLong() + delayMs
+                    updateState { instructorRunningLateUntilMs = untilMs }
                     setInstructorRunningLate(sessionId, delay) { err ->
-                        if (err != null) updateState { networkError = err }
-                        else {
-                            getSessionsForInstructor(usr.id) { sess -> updateState { recordingSessions = sess } }
-                            modal.classList.add("sd-hidden")
+                        if (err != null) {
+                            updateState { networkError = err; instructorRunningLateUntilMs = 0L }
+                            return@setInstructorRunningLate
+                        }
+                        getSessionsForInstructor(usr.id) { sess ->
+                            val toShift = sess.filter { it.id != sessionId && it.status == "scheduled" && it.startTimeMillis != null && it.startTimeMillis!! > originalStart && it.startTimeMillis!! <= originalStart + delayMs }
+                            fun shiftNext(remaining: List<DrivingSession>) {
+                                if (remaining.isEmpty()) {
+                                    getSessionsForInstructor(usr.id) { s -> updateState { recordingSessions = s } }
+                                    showNotification("Опаздываю: сдвиг на $delay мин.")
+                                    modal.classList.add("sd-hidden")
+                                    return
+                                }
+                                val sess = remaining.first()
+                                updateSessionStartTime(sess.id, (sess.startTimeMillis ?: 0L) + delayMs) {
+                                    shiftNext(remaining.drop(1))
+                                }
+                            }
+                            shiftNext(toShift)
                         }
                     }
                 })
@@ -3756,10 +4154,13 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     modal.classList.add("sd-hidden")
                     cancelByInstructor(sessionId, reason) { err ->
                         if (err != null) updateState { networkError = err }
-                        else getOpenWindowsForInstructor(usr.id) { wins ->
-                            getSessionsForInstructor(usr.id) { sess ->
-                                getBalanceHistory(usr.id) { hist ->
-                                    updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                        else {
+                            showNotification("Вождение отменено")
+                            getOpenWindowsForInstructor(usr.id) { wins ->
+                                getSessionsForInstructor(usr.id) { sess ->
+                                    getBalanceHistory(usr.id) { hist ->
+                                        updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                                    }
                                 }
                             }
                         }
@@ -3767,6 +4168,23 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 })
                 document.getElementById("sd-instructor-cancel-reason-cancel")?.addEventListener("click", {
                     document.getElementById("sd-instructor-cancel-reason-modal")?.classList?.add("sd-hidden")
+                })
+                document.getElementById("sd-rec-delete-window-yes")?.addEventListener("click", {
+                    val modal = document.getElementById("sd-rec-delete-window-confirm-modal") ?: return@addEventListener
+                    val wid = modal.asDynamic().dataset["windowId"] as? String ?: return@addEventListener
+                    modal.classList.add("sd-hidden")
+                    deleteOpenWindow(wid) { err ->
+                        if (err != null) updateState { networkError = err }
+                        else {
+                            showNotification("Окно удалено")
+                            getOpenWindowsForInstructor(usr.id) { wins ->
+                                updateState { recordingOpenWindows = wins }
+                            }
+                        }
+                    }
+                })
+                document.getElementById("sd-rec-delete-window-no")?.addEventListener("click", {
+                    document.getElementById("sd-rec-delete-window-confirm-modal")?.classList?.add("sd-hidden")
                 })
                 val timerPauseNodes = root.querySelectorAll(".sd-sch-timer-actions .sd-sch-pause")
                 for (kp in 0 until timerPauseNodes.length) {
@@ -3813,10 +4231,13 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     modal.classList.add("sd-hidden")
                     completeDrivingSession(sessionId) { err ->
                         if (err != null) updateState { networkError = err }
-                        else getOpenWindowsForInstructor(usr.id) { wins ->
-                            getSessionsForInstructor(usr.id) { sess ->
-                                getBalanceHistory(usr.id) { hist ->
-                                    updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                        else {
+                            showNotification("Вождение завершено досрочно")
+                            getOpenWindowsForInstructor(usr.id) { wins ->
+                                getSessionsForInstructor(usr.id) { sess ->
+                                    getBalanceHistory(usr.id) { hist ->
+                                        updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                                    }
                                 }
                             }
                         }
@@ -3852,6 +4273,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     setInstructorRating(sessionId, rating) { err ->
                         if (err != null) updateState { networkError = err }
                         else {
+                            showNotification("Оценка курсанту поставлена")
                             getOpenWindowsForInstructor(usr.id) { wins ->
                                 getSessionsForInstructor(usr.id) { sess ->
                                     getBalanceHistory(usr.id) { hist ->
@@ -3962,6 +4384,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 addOpenWindow(usr.id, ms) { _, err ->
                     if (err != null) updateState { networkError = err }
                     else {
+                        showNotification("Добавлено свободное окно для записи")
                         getOpenWindowsForInstructor(usr.id) { wins ->
                             getSessionsForInstructor(usr.id) { sess ->
                                 updateState { recordingOpenWindows = wins; recordingSessions = sess; networkError = null }
@@ -3992,6 +4415,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 createSession(usr.id, cadetId, ms, null) { _, err ->
                     if (err != null) updateState { networkError = err }
                     else {
+                        showNotification("Вождение назначено")
                         getSessionsForInstructor(usr.id) { sess ->
                             updateState { recordingSessions = sess; networkError = null }
                         }
@@ -4018,14 +4442,41 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 val btn = cancelSessionNodes.item(k) as? org.w3c.dom.Element ?: continue
                 val sessionId = btn.getAttribute("data-session-id") ?: continue
                 btn.addEventListener("click", {
-                    document.getElementById("sd-instructor-cancel-reason-modal")?.let { modal ->
+                    document.getElementById("sd-rec-cancel-session-confirm-modal")?.let { modal ->
                         modal.asDynamic().dataset["sessionId"] = sessionId
-                        root.querySelector("input[name=sd-cancel-reason]")?.unsafeCast<HTMLInputElement>()?.checked = true
                         modal.classList.remove("sd-hidden")
                     }
                 })
             }
-            val bookNodes = root.querySelectorAll(".sd-list .sd-btn-small[data-window-id]")
+            document.getElementById("sd-rec-cancel-session-yes")?.addEventListener("click", {
+                val modal = document.getElementById("sd-rec-cancel-session-confirm-modal") ?: return@addEventListener
+                val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
+                modal.classList.add("sd-hidden")
+                cancelByInstructor(sessionId, "—") { err ->
+                    if (err != null) updateState { networkError = err }
+                    else {
+                        showNotification("Вождение отменено")
+                        if (usr.role == "cadet") {
+                            val instId = usr.assignedInstructorId ?: ""
+                            getOpenWindowsForCadet(instId) { wins ->
+                                getSessionsForCadet(usr.id) { sess ->
+                                    updateState { recordingOpenWindows = wins; recordingSessions = sess }
+                                }
+                            }
+                        } else {
+                            getOpenWindowsForInstructor(usr.id) { wins ->
+                                getSessionsForInstructor(usr.id) { sess ->
+                                    updateState { recordingOpenWindows = wins; recordingSessions = sess }
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+            document.getElementById("sd-rec-cancel-session-no")?.addEventListener("click", {
+                document.getElementById("sd-rec-cancel-session-confirm-modal")?.classList?.add("sd-hidden")
+            })
+            val bookNodes = root.querySelectorAll(".sd-rec-book-slot-btn[data-window-id]")
             for (k in 0 until bookNodes.length) {
                 val btn = bookNodes.item(k) as? org.w3c.dom.Element ?: continue
                 val wid = btn.getAttribute("data-window-id") ?: continue
@@ -4033,6 +4484,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     bookWindow(wid, usr.id) { err ->
                         if (err != null) updateState { networkError = err }
                         else {
+                            showNotification("Вы записаны на вождение")
                             val instId = usr.assignedInstructorId ?: ""
                             getOpenWindowsForCadet(instId) { wins ->
                                 getSessionsForCadet(usr.id) { sess ->
@@ -4050,7 +4502,10 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 btn.addEventListener("click", {
                     startSession(sessionId) { err ->
                         if (err != null) updateState { networkError = err }
-                        else getSessionsForCadet(usr.id) { sess -> updateState { recordingSessions = sess } }
+                        else {
+                            showNotification("Вождение начато")
+                            getSessionsForCadet(usr.id) { sess -> updateState { recordingSessions = sess } }
+                        }
                     }
                 })
             }
@@ -4094,9 +4549,12 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     modal.classList.add("sd-hidden")
                     setCadetRating(sessionId, sel) { err ->
                         if (err != null) updateState { networkError = err }
-                        else getSessionsForCadet(usr.id) { sess ->
-                            getBalanceHistory(usr.id) { hist ->
-                                updateState { recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                        else {
+                            showNotification("Оценка инструктору поставлена")
+                            getSessionsForCadet(usr.id) { sess ->
+                                getBalanceHistory(usr.id) { hist ->
+                                    updateState { recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                                }
                             }
                         }
                     }
@@ -4115,6 +4573,11 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     else getUsers { list ->
                         loadBalanceHistoryForUsers(list.map { it.id }) { hist ->
                             updateState { balanceAdminUsers = list; balanceAdminHistory = hist }
+                            val targetName = list.find { it.id == targetId }?.fullName?.takeIf { it.isNotBlank() } ?: "Пользователь"
+                            when (type) {
+                                "credit" -> showNotification("Зачислено $amount талонов пользователю $targetName")
+                                "debit" -> showNotification("Списано $amount талонов у пользователя $targetName")
+                            }
                         }
                     }
                 }
@@ -4138,6 +4601,10 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 changePassword(newPass)
                     .then { updateState { networkError = null }; (document.getElementById("sd-settings-newpassword") as? HTMLInputElement)?.value = "" }
                     .catch { e -> updateState { networkError = (e.asDynamic().message as? String) ?: "Ошибка смены пароля" } }
+            })
+            document.getElementById("sd-settings-sound-notifications")?.addEventListener("change", {
+                val cb = document.getElementById("sd-settings-sound-notifications") as? HTMLInputElement ?: return@addEventListener
+                setSoundNotificationsEnabled(cb.checked)
             })
             }
         }

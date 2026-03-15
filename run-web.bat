@@ -1,16 +1,29 @@
 @echo off
+setlocal enabledelayedexpansion
 title StartDrive Web
 cd /d "%~dp0"
 
 if not defined JAVA_HOME (
   set "JAVA_HOME=C:\Program Files\Android\Android Studio\jbr"
-  if not exist "%JAVA_HOME%\bin\java.exe" (
-    echo JAVA not found. Install JDK 11+ or set JAVA_HOME to your JDK.
-    echo Example: set "JAVA_HOME=C:\Program Files\Android\Android Studio\jbr"
-    pause
-    exit /b 1
-  )
+  if exist "!JAVA_HOME!\bin\java.exe" goto java_ok
+  set "JAVA_HOME=C:\Program Files\Android\Android Studio\jre"
+  if exist "!JAVA_HOME!\bin\java.exe" goto java_ok
+  set "JAVA_HOME=C:\Program Files\Java\jdk-17"
+  if exist "!JAVA_HOME!\bin\java.exe" goto java_ok
+  set "JAVA_HOME=C:\Program Files\Java\jdk-21"
+  if exist "!JAVA_HOME!\bin\java.exe" goto java_ok
+  set "JAVA_HOME=C:\Program Files\Java\jdk-11"
+  if exist "!JAVA_HOME!\bin\java.exe" goto java_ok
+  echo JAVA not found. Install JDK 11+ or set JAVA_HOME before running.
+  echo.
+  echo If Android Studio is installed, run in cmd:
+  echo   set "JAVA_HOME=C:\Program Files\Android\Android Studio\jbr"
+  echo   run-web.bat
+  echo.
+  pause
+  exit /b 1
 )
+:java_ok
 set "PATH=%JAVA_HOME%\bin;%PATH%"
 
 echo Checking port 8081...

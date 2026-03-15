@@ -464,6 +464,28 @@ fun setInstructorRunningLate(sessionId: String, delayMinutes: Int, callback: (St
     }
 }
 
+/** Сдвинуть время начала сессии (и окна при наличии) — для каскадного сдвига при «Опаздываю». */
+fun updateSessionStartTime(sessionId: String, newStartMs: Long, callback: (String?) -> Unit) {
+    getSession(sessionId) { session ->
+        if (session == null) {
+            callback("Сессия не найдена")
+            return@getSession
+        }
+        val newTs = getFirestoreTimestampFromMillis(newStartMs)
+        val firestore = getFirestore()
+        firestore.collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId)
+            .update(kotlin.js.json("startTime" to newTs))
+            .then {
+                if (session.openWindowId.isNotBlank()) {
+                    firestore.collection(FirebasePaths.INSTRUCTOR_OPEN_WINDOWS).doc(session.openWindowId)
+                        .update(kotlin.js.json("dateTime" to newTs))
+                } else js("Promise.resolve()")
+            }
+            .then { callback(null) }
+            .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
+    }
+}
+
 /** Отменить вождение инструктором: освободить окно (если было), поставить статус отмены и причину. */
 fun cancelByInstructor(sessionId: String, reason: String, callback: (String?) -> Unit) {
     getSession(sessionId) { session ->

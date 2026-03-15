@@ -82,12 +82,51 @@ body {
     box-shadow:
         0 4px 20px rgba(0,0,0,0.45),
         0 1px 0 rgba(255,255,255,0.05) inset;
-    overflow: hidden;
+    overflow: visible;
 }
 
 .sd-header-text {
     flex: 1;
     min-width: 0;
+}
+.sd-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.sd-notif-dropdown-wrap {
+    position: relative;
+}
+.sd-notif-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 6px;
+    min-width: 280px;
+    max-width: min(360px, calc(100vw - 24px));
+    max-height: 70vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background: var(--sd-surface);
+    border: 1px solid var(--sd-border);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+    z-index: 300;
+}
+.sd-notif-dropdown.sd-hidden {
+    display: none !important;
+}
+.sd-notif-dropdown .sd-notif-screen {
+    max-height: 70vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+.sd-notif-dropdown .sd-notif-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
 }
 
 /* Глянцевый блик */
@@ -1129,6 +1168,53 @@ a.sd-cadet-icon-btn:active {
     margin: 0;
     text-align: center;
 }
+.sd-sound-settings-modal .sd-modal-title {
+    margin: 0 0 0.75rem 0;
+}
+.sd-sound-settings-text {
+    margin: 0 0 1.25rem 0;
+    font-size: 0.95rem;
+    line-height: 1.4;
+    color: var(--sd-text-secondary, #555);
+}
+.sd-sound-settings-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+/* Блок «Разрешить звук» для курсанта (одно нажатие для согласия на воспроизведение) */
+.sd-allow-sound-bar {
+    position: fixed;
+    bottom: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 150;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+    padding: 10px 16px;
+    margin: 0 12px;
+    max-width: 400px;
+    background: linear-gradient(135deg, #1a237e 0%, #0d47a1 100%);
+    color: #fff;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    border: 1px solid rgba(255,255,255,0.2);
+}
+.sd-allow-sound-text {
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.35;
+}
+.sd-allow-sound-btn {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
 .sd-rate-cadet-name {
     font-weight: 600;
     margin: 0.5rem 0 0.75rem;
@@ -1898,25 +1984,100 @@ a.sd-cadet-icon-btn:active {
     box-shadow: 0 4px 16px rgba(123,31,162,0.3);
 }
 
-/* Cadet slots */
-.sd-rec-slots { display: flex; flex-direction: column; gap: 10px; }
+/* Cadet slots — свободные окна инструктора */
+.sd-rec-slots { display: flex; flex-direction: column; gap: 12px; }
 .sd-rec-slot-card {
-    display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    padding: 12px 14px; border-radius: 14px;
-    background: #f6f9fd; border: 1px solid rgba(67,160,71,0.18);
-    flex-wrap: wrap;
+    display: flex; align-items: center; gap: 14px;
+    padding: 16px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 50%, #e0f2e0 100%);
+    border: 1px solid rgba(67,160,71,0.25);
+    box-shadow: 0 2px 12px rgba(67,160,71,0.1);
+    transition: box-shadow 0.2s ease;
 }
-.sd-rec-slot-info { flex: 1; min-width: 0; }
-.sd-rec-slot-dt { display: flex; flex-wrap: wrap; gap: 6px; }
-.sd-rec-book-slot-btn { flex-shrink: 0; }
+.sd-rec-slot-card:hover { box-shadow: 0 4px 20px rgba(67,160,71,0.18); }
+.sd-rec-slot-avatar {
+    width: 48px; height: 48px; border-radius: 50%;
+    background: linear-gradient(135deg, #66BB6A, #2E7D32);
+    color: #fff;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    box-shadow: 0 2px 10px rgba(46,125,50,0.35);
+}
+.sd-rec-slot-avatar svg { width: 24px; height: 24px; }
+.sd-rec-slot-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.sd-rec-slot-title {
+    font-size: 1rem; font-weight: 700; color: #1b5e20;
+    line-height: 1.25;
+}
+.sd-rec-slot-dt { display: flex; flex-wrap: wrap; gap: 8px; }
+.sd-rec-slot-pill {
+    background: rgba(46,125,50,0.12) !important;
+    color: #1b5e20 !important;
+    font-weight: 600;
+}
+.sd-rec-book-slot-btn {
+    flex-shrink: 0;
+    position: relative; overflow: hidden;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 10px 18px; border: none; border-radius: 12px; cursor: pointer;
+    background: linear-gradient(180deg, #81C784 0%, #66BB6A 35%, #43A047 65%, #2E7D32 100%);
+    color: #fff; font-size: 0.9rem; font-weight: 700;
+    box-shadow: 0 3px 12px rgba(46,125,50,0.4), inset 0 1px 0 rgba(255,255,255,0.4);
+    transition: box-shadow 0.2s, transform 0.1s;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+    min-height: 44px;
+}
+.sd-rec-book-slot-btn::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 50%;
+    background: linear-gradient(180deg, rgba(255,255,255,0.35) 0%, rgba(255,255,255,0.05) 100%);
+    border-radius: 12px 12px 0 0;
+    pointer-events: none;
+}
+.sd-rec-book-slot-btn:hover {
+    box-shadow: 0 5px 18px rgba(46,125,50,0.5), inset 0 1px 0 rgba(255,255,255,0.4);
+}
+.sd-rec-book-slot-btn:active { transform: scale(0.98); }
 
-/* My records (cadet) */
-.sd-rec-my-list { display: flex; flex-direction: column; gap: 10px; }
+/* My records (cadet) — карточка «Записан на вождение» */
+.sd-rec-my-list { display: flex; flex-direction: column; gap: 12px; }
 .sd-rec-my-record {
-    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
-    padding: 12px 14px; border-radius: 12px;
-    background: #f6f9fd; border: 1px solid rgba(25,118,210,0.13);
+    display: flex; align-items: center; gap: 14px;
+    padding: 16px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, #e8f0fe 0%, #dceefb 60%, #e3f2fd 100%);
+    border: 1px solid rgba(25,118,210,0.2);
+    box-shadow: 0 2px 12px rgba(25,118,210,0.08);
+    transition: box-shadow 0.2s ease;
 }
+.sd-rec-my-record:hover { box-shadow: 0 4px 20px rgba(25,118,210,0.14); }
+.sd-rec-my-record-avatar {
+    width: 48px; height: 48px; border-radius: 50%;
+    background: linear-gradient(135deg, #42A5F5, #1565C0);
+    color: #fff;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    box-shadow: 0 2px 10px rgba(25,118,210,0.3);
+}
+.sd-rec-my-record-avatar svg { width: 24px; height: 24px; }
+.sd-rec-my-record-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.sd-rec-my-record-title {
+    font-size: 1rem; font-weight: 700; color: #1c1c1e;
+    line-height: 1.25;
+}
+.sd-rec-my-record .sd-rec-my-dt { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+.sd-rec-my-record-status {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 0.8rem; font-weight: 700;
+    padding: 4px 10px; border-radius: 20px;
+    align-self: flex-start;
+}
+.sd-rec-my-record-status svg { flex-shrink: 0; opacity: 0.95; }
+.sd-rec-my-record-actions {
+    display: flex; flex-direction: column; gap: 8px;
+    flex-shrink: 0; align-items: stretch;
+    min-width: 120px;
+}
+.sd-rec-my-record-actions .sd-rec-confirm-btn { width: 100%; }
 .sd-rec-my-dt { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* Empty state */
@@ -1942,6 +2103,29 @@ a.sd-cadet-icon-btn:active {
         margin-left: 0; width: 100%; flex-direction: row;
     }
     .sd-rec-chip-del { flex: 1; justify-content: center; }
+
+    /* Карточка свободного окна (курсант) — мобильная адаптация */
+    .sd-rec-slot-card {
+        flex-wrap: wrap; padding: 14px; gap: 12px;
+        -webkit-tap-highlight-color: transparent;
+    }
+    .sd-rec-slot-avatar { width: 44px; height: 44px; }
+    .sd-rec-slot-avatar svg { width: 22px; height: 22px; }
+    .sd-rec-slot-body { min-width: 0; }
+    .sd-rec-book-slot-btn { width: 100%; min-height: 44px; }
+
+    /* Карточка «Записан на вождение» (курсант) — мобильная адаптация */
+    .sd-rec-my-record {
+        flex-wrap: wrap; padding: 14px; gap: 12px;
+        -webkit-tap-highlight-color: transparent;
+    }
+    .sd-rec-my-record-avatar { width: 44px; height: 44px; }
+    .sd-rec-my-record-avatar svg { width: 22px; height: 22px; }
+    .sd-rec-my-record-body { min-width: 0; }
+    .sd-rec-my-record-actions {
+        width: 100%; min-width: unset; flex-direction: row; justify-content: stretch;
+    }
+    .sd-rec-my-record-actions .sd-rec-confirm-btn { flex: 1; min-height: 44px; }
 
     /* Stats bar — two small columns on mobile */
     .sd-rec-stats-bar { gap: 8px; }
@@ -2020,6 +2204,12 @@ a.sd-cadet-icon-btn:active {
 .sd-sch-status-waiting    { background: rgba(230,81,0,0.12);  color: #bf360c; }
 .sd-sch-status-pending    { background: rgba(97,97,97,0.1);   color: #424242; }
 .sd-sch-status-active     { background: rgba(25,118,210,0.12); color: #1565C0; }
+/* В блоке «Мой график» статус в карточке — красным */
+.sd-block-schedule .sd-sch-status,
+.sd-block-schedule .sd-sch-status-confirmed,
+.sd-block-schedule .sd-sch-status-waiting,
+.sd-block-schedule .sd-sch-status-pending,
+.sd-block-schedule .sd-sch-status-active { color: #c62828 !important; }
 
 /* Action buttons */
 .sd-sch-actions { display: flex; flex-direction: column; gap: 7px; flex-shrink: 0; align-self: center; min-width: 118px; }
@@ -2043,6 +2233,10 @@ a.sd-cadet-icon-btn:active {
 .sd-sch-confirm-btn:hover { box-shadow: 0 4px 14px rgba(46,125,50,0.45),inset 0 1px 0 rgba(255,255,255,0.25); }
 .sd-sch-start-btn { background: linear-gradient(180deg,#64b5f6 0%,#1e88e5 55%,#1565c0 100%); box-shadow: 0 2px 8px rgba(21,101,192,0.35),inset 0 1px 0 rgba(255,255,255,0.25); }
 .sd-sch-start-btn:hover { box-shadow: 0 4px 14px rgba(21,101,192,0.45),inset 0 1px 0 rgba(255,255,255,0.25); }
+.sd-sch-start-btn:disabled,
+.sd-sch-start-btn.sd-sch-start-disabled { background: linear-gradient(180deg,#9e9e9e 0%,#757575 55%,#616161 100%); box-shadow: 0 2px 6px rgba(0,0,0,0.2); cursor: not-allowed; opacity: 0.9; }
+.sd-sch-start-btn:disabled:hover,
+.sd-sch-start-btn.sd-sch-start-disabled:hover { box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
 .sd-sch-late-btn { background: linear-gradient(180deg,#ffb74d 0%,#f57c00 55%,#e65100 100%); box-shadow: 0 2px 8px rgba(230,81,0,0.35),inset 0 1px 0 rgba(255,255,255,0.25); }
 .sd-sch-late-btn:hover { box-shadow: 0 4px 14px rgba(230,81,0,0.45),inset 0 1px 0 rgba(255,255,255,0.25); }
 .sd-sch-cancel-btn { background: linear-gradient(180deg,#ef9a9a 0%,#e53935 55%,#c62828 100%); box-shadow: 0 2px 8px rgba(198,40,40,0.35),inset 0 1px 0 rgba(255,255,255,0.25); }
@@ -2646,6 +2840,24 @@ a.sd-cadet-icon-btn:active {
     border-color: var(--sd-primary);
     box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.12);
 }
+.sd-settings-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 8px 0;
+    cursor: pointer;
+    font-size: 1rem;
+}
+.sd-settings-checkbox input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+    cursor: pointer;
+}
+.sd-settings-hint {
+    margin: 6px 0 0;
+    font-size: 0.85rem;
+    color: var(--sd-text-secondary, #666);
+}
 
 .sd-checkbox {
     display: flex;
@@ -3229,6 +3441,110 @@ a.sd-cadet-icon-btn:active {
     display: inline;
 }
 
+.sd-btn-notifications {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 10px;
+    background: rgba(255,255,255,0.08);
+    color: #fff;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+.sd-btn-notifications:hover {
+    background: rgba(255,255,255,0.15);
+    border-color: rgba(255,255,255,0.4);
+}
+
+/* Полноэкранный экран уведомлений (по кнопке в шапке) */
+.sd-notif-full-view {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.sd-notif-back-row {
+    margin: 0 0 12px;
+    padding: 0;
+}
+.sd-notif-back-row .sd-btn {
+    min-height: 44px;
+}
+
+/* Вкладка «Уведомления» (как в приложении Android) */
+.sd-notif-screen {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.sd-notif-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    flex-shrink: 0;
+}
+.sd-notif-title {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--sd-text);
+}
+.sd-notif-clear-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--sd-primary);
+    cursor: pointer;
+}
+.sd-notif-clear-btn:hover {
+    background: rgba(25, 118, 210, 0.08);
+}
+.sd-notif-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 0 16px 16px;
+    overflow-y: auto;
+}
+.sd-notif-empty {
+    margin: 24px 16px;
+    font-size: 0.95rem;
+    color: var(--sd-text-secondary);
+}
+.sd-notif-item {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--sd-border);
+}
+.sd-notif-item:last-child {
+    border-bottom: none;
+}
+.sd-notif-dt {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--sd-text-secondary);
+    margin-bottom: 4px;
+}
+.sd-notif-text {
+    font-size: 0.9rem;
+    line-height: 1.4;
+    color: var(--sd-text);
+}
+.sd-notif-clear-text {
+    margin: 0 0 16px;
+    font-size: 0.95rem;
+    color: var(--sd-text-secondary);
+}
+
 /* ═══════════════════════════════════════
    НИЖНЯЯ НАВИГАЦИЯ (мобильный стиль)
    ═══════════════════════════════════════ */
@@ -3451,6 +3767,17 @@ a.sd-cadet-icon-btn:active {
 @keyframes sd-toast-in {
     from { opacity: 0; transform: translateX(-50%) translateY(12px); }
     to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* Важное уведомление (новое окно от инструктора) — дольше видно, выделение */
+.sd-toast.sd-toast-important {
+    background: linear-gradient(135deg, #1565C0 0%, #0D47A1 100%);
+    padding: 16px 22px;
+    font-weight: 600;
+    border: 2px solid rgba(255,255,255,0.25);
+}
+.sd-toast.sd-toast-important:hover {
+    background: linear-gradient(135deg, #1976D2 0%, #1565C0 100%);
 }
 
 /* Адаптив под мобильные */
@@ -4393,6 +4720,7 @@ a.sd-cadet-icon-btn:active {
 .sd-hist-debit  { color: #dc2626; }
 .sd-hist-done   { color: #16a34a; }
 .sd-hist-cancel { color: #dc2626; }
+.sd-history-rating-star { color: #eab308; margin-left: 4px; font-size: 1.1em; }
 .sd-history-empty {
     color: #94a3b8;
     font-size: 0.88rem;

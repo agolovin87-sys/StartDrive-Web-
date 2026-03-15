@@ -116,6 +116,22 @@ data class AppState(
     var pddExamAdditionalStartTimeMs: Double? = null,
     var pddExamAdditionalDurationSec: Int = 300, // 5 мин на 5 вопросов, 10 мин на 10
     var pddExamResultPass: Boolean? = null,
+    /** Список уведомлений: дата, время, текст (сохраняются при действиях). */
+    var notifications: List<AppNotification> = emptyList(),
+    /** Открыт ли полноэкранный экран уведомлений по кнопке в шапке. */
+    var notificationsViewOpen: Boolean = false,
+    /** Показать ли окно настроек звуковых уведомлений (при первом запуске курсанта). */
+    var showSoundSettingsModal: Boolean = false,
+    /** Пользователь дал согласие на воспроизведение звука (нажал «Разрешить звук» или «Включить» в настройках). */
+    var soundAudioUnlocked: Boolean = false,
+    /** До какого времени (мс) кнопка «Опаздываю» неактивна после выбора задержки. */
+    var instructorRunningLateUntilMs: Long = 0L,
+)
+
+/** Одно уведомление: дата, время, текст. */
+data class AppNotification(
+    val dateTimeMs: Long,
+    val text: String,
 )
 
 var appState = AppState()

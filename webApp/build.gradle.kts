@@ -13,6 +13,27 @@ val pddSourceDir: java.io.File = if (project.hasProperty("pddSource")) {
     project.file("${System.getProperty("user.home")}/Downloads/pdd_russia-master/pdd_russia-master")
 }
 
+// Звук уведомления для курсанта «Инструктор добавил свободное окно»
+// Источник: -PcadetSoundSource=путь к .mp3; по умолчанию — из папки Android «Фото для приложения/звуки»
+val cadetSoundSourcePath = when {
+    project.hasProperty("cadetSoundSource") -> project.file(project.property("cadetSoundSource") as String)
+    else -> rootProject.file("../../Фото для приложения/звуки/instruktor _dobavil_okno.mp3")
+}
+val appRawDir = project(":app").file("src/main/res/raw")
+val copyCadetSound = tasks.register<Copy>("copyCadetSound") {
+    into(layout.projectDirectory.dir("src/jsMain/resources/sounds"))
+    if (cadetSoundSourcePath.exists()) {
+        from(cadetSoundSourcePath.parentFile) {
+            include(cadetSoundSourcePath.name)
+            rename { _ -> "instruktor_dobavil_okno.mp3" }
+        }
+    } else if (appRawDir.exists()) {
+        from(appRawDir) {
+            include("instruktor_dobavil_okno.*")
+        }
+    }
+}
+
 val copyPddToWeb = tasks.register<Copy>("copyPddToWeb") {
     into(layout.projectDirectory.dir("src/jsMain/resources/pdd"))
     if (pddSourceDir.exists()) {
@@ -102,7 +123,7 @@ kotlin {
     }
 }
 
-tasks.named("jsProcessResources").configure { dependsOn(buildPddBundle) }
+tasks.named("jsProcessResources").configure { dependsOn(buildPddBundle, copyCadetSound) }
 tasks.named("compileKotlinJs").configure { dependsOn(generatePddEmbedded) }
 tasks.named("compileDevelopmentExecutableKotlinJs").configure { dependsOn(generatePddEmbedded) }
 tasks.named("compileProductionExecutableKotlinJs").configure { dependsOn(generatePddEmbedded) }

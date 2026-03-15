@@ -47,6 +47,15 @@ private fun parseTimestamp(ts: dynamic): Long? {
         ?: (ts as? Number)?.toLong()
 }
 
+/** Обновляет документ окна инструктора; если документа нет (удалён), промис всё равно резолвится. */
+private fun updateInstructorWindowIfExists(windowId: String, data: dynamic): dynamic {
+    val ref = getFirestore().collection(FirebasePaths.INSTRUCTOR_OPEN_WINDOWS).doc(windowId)
+    return ref.update(data).catch { e: dynamic ->
+        val msg = (e?.message as? String) ?: ""
+        if (msg.contains("No document to update") || msg.contains("NOT_FOUND")) js("Promise.resolve()").unsafeCast<dynamic>() else js("Promise.reject")(e).unsafeCast<dynamic>()
+    }
+}
+
 fun getSessionsForInstructor(instructorId: String, callback: (List<DrivingSession>) -> Unit) {
     getFirestore().collection(FirebasePaths.DRIVING_SESSIONS)
         .where("instructorId", "==", instructorId)
@@ -363,8 +372,7 @@ fun completeDrivingSession(sessionId: String, callback: (String?) -> Unit) {
         val firestore = getFirestore()
         val windowId = session.openWindowId
         val freeWindowPromise = if (windowId.isNotBlank()) {
-            firestore.collection(FirebasePaths.INSTRUCTOR_OPEN_WINDOWS).doc(windowId)
-                .update(kotlin.js.json("status" to "free", "cadetId" to null))
+            updateInstructorWindowIfExists(windowId, kotlin.js.json("status" to "free", "cadetId" to null))
         } else js("Promise.resolve()")
         freeWindowPromise.then {
             firestore.collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId)
@@ -455,8 +463,7 @@ fun setInstructorRunningLate(sessionId: String, delayMinutes: Int, callback: (St
             ))
             .then {
                 if (session.openWindowId.isNotBlank()) {
-                    firestore.collection(FirebasePaths.INSTRUCTOR_OPEN_WINDOWS).doc(session.openWindowId)
-                        .update(kotlin.js.json("dateTime" to newTs))
+                    updateInstructorWindowIfExists(session.openWindowId, kotlin.js.json("dateTime" to newTs))
                 } else js("Promise.resolve()")
             }
             .then { callback(null) }
@@ -477,8 +484,7 @@ fun updateSessionStartTime(sessionId: String, newStartMs: Long, callback: (Strin
             .update(kotlin.js.json("startTime" to newTs))
             .then {
                 if (session.openWindowId.isNotBlank()) {
-                    firestore.collection(FirebasePaths.INSTRUCTOR_OPEN_WINDOWS).doc(session.openWindowId)
-                        .update(kotlin.js.json("dateTime" to newTs))
+                    updateInstructorWindowIfExists(session.openWindowId, kotlin.js.json("dateTime" to newTs))
                 } else js("Promise.resolve()")
             }
             .then { callback(null) }
@@ -496,8 +502,7 @@ fun cancelByInstructor(sessionId: String, reason: String, callback: (String?) ->
         val firestore = getFirestore()
         val windowId = session.openWindowId
         val freeWindowPromise = if (windowId.isNotBlank()) {
-            firestore.collection(FirebasePaths.INSTRUCTOR_OPEN_WINDOWS).doc(windowId)
-                .update(kotlin.js.json("status" to "free", "cadetId" to null))
+            updateInstructorWindowIfExists(windowId, kotlin.js.json("status" to "free", "cadetId" to null))
         } else {
             js("Promise.resolve()")
         }
@@ -507,6 +512,31 @@ fun cancelByInstructor(sessionId: String, reason: String, callback: (String?) ->
                 "status" to "cancelledByInstructor",
                 "cancelledAt" to getFirestoreTimestampNow(),
                 "cancelReason" to reasonText
+            ))
+        }.then { callback(null) }
+         .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
+    }
+}
+
+/** Отменить вождение курсантом: освободить окно (если было), поставить статус cancelledByCadet. */
+fun cancelByCadet(sessionId: String, callback: (String?) -> Unit) {
+    getSession(sessionId) { session ->
+        if (session == null) {
+            callback("Сессия не найдена")
+            return@getSession
+        }
+        val firestore = getFirestore()
+        val windowId = session.openWindowId
+        val freeWindowPromise = if (windowId.isNotBlank()) {
+            updateInstructorWindowIfExists(windowId, kotlin.js.json("status" to "free", "cadetId" to null))
+        } else {
+            js("Promise.resolve()")
+        }
+        freeWindowPromise.then {
+            firestore.collection(FirebasePaths.DRIVING_SESSIONS).doc(sessionId).update(kotlin.js.json(
+                "status" to "cancelledByCadet",
+                "cancelledAt" to getFirestoreTimestampNow(),
+                "cancelReason" to "отменено курсантом"
             ))
         }.then { callback(null) }
          .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }

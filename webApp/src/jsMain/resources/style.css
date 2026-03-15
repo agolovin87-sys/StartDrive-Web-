@@ -127,6 +127,10 @@ body {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 0 4px;
 }
 
 /* Глянцевый блик */
@@ -3512,7 +3516,7 @@ a.sd-cadet-icon-btn:active {
 .sd-notif-list {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
     padding: 0 16px 16px;
     overflow-y: auto;
 }
@@ -3522,11 +3526,31 @@ a.sd-cadet-icon-btn:active {
     color: var(--sd-text-secondary);
 }
 .sd-notif-item {
-    padding: 8px 0;
-    border-bottom: 1px solid var(--sd-border);
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 14px;
+    background: var(--sd-card);
+    border: 1px solid var(--sd-border);
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
-.sd-notif-item:last-child {
-    border-bottom: none;
+.sd-notif-icon {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    color: var(--sd-primary, #1976d2);
+}
+.sd-notif-icon svg {
+    width: 20px;
+    height: 20px;
+}
+.sd-notif-body {
+    flex: 1;
+    min-width: 0;
 }
 .sd-notif-dt {
     font-size: 0.75rem;

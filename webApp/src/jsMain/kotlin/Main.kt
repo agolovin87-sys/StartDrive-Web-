@@ -560,6 +560,44 @@ private fun formatMessageDateTime(timestampMs: Long): String {
     return "$day.$month.$year $hours:$minutes"
 }
 
+private const val LAST_BALANCE_TS_KEY_PREFIX = "sd_last_balance_ts_"
+
+/** Показывает тосты о новых операциях по балансу для текущего пользователя (зачисление/списание/установка). */
+private fun notifyNewBalanceOpsForUser(userId: String, entries: List<BalanceHistoryEntry>, users: List<User>) {
+    if (entries.isEmpty()) return
+    val storage = window.asDynamic().localStorage
+    val key = LAST_BALANCE_TS_KEY_PREFIX + userId
+    val lastStr = storage?.getItem(key) as? String
+    val lastSeen = lastStr?.toLongOrNull() ?: 0L
+    val sorted = entries.sortedBy { it.timestampMillis ?: 0L }
+    var maxTs = lastSeen
+    for (e in sorted) {
+        val ts = e.timestampMillis ?: 0L
+        if (ts <= lastSeen) {
+            if (ts > maxTs) maxTs = ts
+            continue
+        }
+        if (ts > maxTs) maxTs = ts
+        val whoName = users.find { it.id == e.performedBy }?.fullName
+            ?.takeIf { it.isNotBlank() }
+            ?.let { formatShortName(it) }
+            ?: e.performedBy.takeIf { it.isNotBlank() } ?: "Администратор"
+        val dt = if (ts > 0L) formatMessageDateTime(ts) else ""
+        val msg = when (e.type) {
+            "credit" -> "Вам зачислено ${e.amount} талонов от $whoName. Дата и время: $dt"
+            "debit" -> "У вас списано ${e.amount} талонов администратором $whoName. Дата и время: $dt"
+            "set" -> "Ваш баланс установлен на ${e.amount} талонов администратором $whoName. Дата и время: $dt"
+            else -> null
+        }
+        if (msg != null) {
+            showNotification(msg)
+        }
+    }
+    if (maxTs > 0L) {
+        storage?.setItem(key, maxTs.toString())
+    }
+}
+
 /** Цвет кружка-аватара по id контакта (у каждого контакта свой оттенок). */
 private fun avatarColorForId(id: String): String {
     val h = id.hashCode().and(0x7FFF_FFFF) % 360
@@ -2087,7 +2125,7 @@ private fun renderRecordingTabContent(user: User): String {
 
 private fun renderHistoryTabContent(user: User): String {
     val loadingLine = if (appState.historyLoading) """<p class="sd-loading-text">Загрузка…</p>""" else ""
-    val sessions = appState.historySessions.take(50)
+    val sessions = appState.historySessions
     val balance = appState.historyBalance.take(50)
 
     fun sessionStatusLabel(s: String) = when (s) {
@@ -2208,6 +2246,11 @@ private fun renderHistoryTabContent(user: User): String {
                 else -> "отменен"
             }
             val reason = s.cancelReason.takeIf { it.isNotBlank() } ?: "—"
+            val cancelledByLabel = when (s.status) {
+                "cancelledByInstructor" -> "Инструктор: ${instructorName}"
+                "cancelledByCadet" -> "Курсант: ${cadetName(s.cadetId)}"
+                else -> "—"
+            }
             """<div class="sd-history-session-card sd-history-cancelled-card">
                 <div class="sd-history-card-icon sd-history-icon-close">$SD_ICON_CLOSE_SVG</div>
                 <div class="sd-history-card-body">
@@ -2216,6 +2259,7 @@ private fun renderHistoryTabContent(user: User): String {
                     <div class="sd-history-session-row"><strong>Курсант:</strong> ${cadetName(s.cadetId).escapeHtml()}</div>
                     <div class="sd-history-session-row"><strong>Инструктор:</strong> $instructorName</div>
                     <div class="sd-history-session-row"><strong>Статус:</strong> <span class="sd-hist-cancel">$statusText</span></div>
+                    <div class="sd-history-session-row"><strong>Кем отменено:</strong> ${cancelledByLabel.escapeHtml()}</div>
                     <div class="sd-history-session-row"><strong>Причина отмены:</strong> ${reason.escapeHtml()}</div>
                 </div>
             </div>"""
@@ -2245,6 +2289,7 @@ private fun renderHistoryTabContent(user: User): String {
         val historyUsers = appState.historyUsers
         fun performedByName(performedBy: String) = if (performedBy.isBlank()) "—" else (historyUsers.find { it.id == performedBy }?.fullName)?.let { formatShortName(it) } ?: performedBy.take(8).plus("…")
         fun instructorName(instructorId: String) = (historyUsers.find { it.id == instructorId }?.fullName)?.let { formatShortName(it) } ?: "—"
+        val cadetShortNameSelf = formatShortName(user.fullName.ifBlank { "—" })
 
         val creditsHtml = if (credits.isEmpty()) """<p class="sd-history-empty">Нет зачислений</p>""" else credits.joinToString("") { b ->
             val dt = (b.timestampMillis?.takeIf { it > 0 }?.let { formatMessageDateTime(it) }) ?: "—"
@@ -2303,6 +2348,11 @@ private fun renderHistoryTabContent(user: User): String {
                 else -> "отменен"
             }
             val reason = s.cancelReason.takeIf { it.isNotBlank() } ?: "—"
+            val cancelledByLabel = when (s.status) {
+                "cancelledByInstructor" -> "Инструктор: ${instructorName(s.instructorId)}"
+                "cancelledByCadet" -> "Курсант: $cadetShortNameSelf"
+                else -> "—"
+            }
             """<div class="sd-history-session-card sd-history-cancelled-card">
                 <div class="sd-history-card-icon sd-history-icon-close">$SD_ICON_CLOSE_SVG</div>
                 <div class="sd-history-card-body">
@@ -2310,6 +2360,7 @@ private fun renderHistoryTabContent(user: User): String {
                     <div class="sd-history-session-row"><strong>Запланировано на:</strong> $plannedDt</div>
                     <div class="sd-history-session-row"><strong>Инструктор:</strong> ${instructorName(s.instructorId).escapeHtml()}</div>
                     <div class="sd-history-session-row"><strong>Статус:</strong> <span class="sd-hist-cancel">$statusText</span></div>
+                    <div class="sd-history-session-row"><strong>Кем отменено:</strong> ${cancelledByLabel.escapeHtml()}</div>
                     <div class="sd-history-session-row"><strong>Причина отмены:</strong> ${reason.escapeHtml()}</div>
                 </div>
             </div>"""
@@ -4020,18 +4071,30 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                             if (appState.selectedTabIndex != 0 && appState.selectedTabIndex != 1) return@setInterval
                             val instId = u.assignedInstructorId ?: return@setInterval
                             val prevCount = appState.recordingOpenWindows.size
+                            val prevSessionIds = appState.recordingSessions.map { it.id }.toSet()
                             getOpenWindowsForCadet(instId) { wins ->
-                                if (wins.size > prevCount) {
-                                    getSessionsForCadet(u.id) { sess ->
-                                        updateState { recordingOpenWindows = wins; recordingSessions = sess }
+                                getSessionsForCadet(u.id) { sess ->
+                                    updateState { recordingOpenWindows = wins; recordingSessions = sess }
+                                    val newScheduled = sess.filter { it.status == "scheduled" && it.id !in prevSessionIds }
+                                    if (newScheduled.isNotEmpty()) {
+                                        val first = newScheduled.minByOrNull { it.startTimeMillis ?: Long.MAX_VALUE } ?: newScheduled.first()
+                                        val text = "Инструктор записал вас на вождение" + formatDayTimeShort(first.startTimeMillis)
+                                        val now = js("Date.now()").unsafeCast<Double>().toLong()
+                                        val newList = appState.notifications + AppNotification(dateTimeMs = now, text = text)
+                                        updateState { notifications = newList; selectedTabIndex = 1 }
+                                        u.id.let { uid -> saveNotificationsToStorage(uid, newList) }
+                                        showToast(text)
+                                        if (getSoundNotificationsEnabled() == true) playInstruktorDobavilOknoSound()
+                                    }
+                                    if (wins.size > prevCount) {
                                         val windowMs = wins.minByOrNull { (it.dateTimeMillis ?: Long.MAX_VALUE) }?.dateTimeMillis
                                         showCadetNewWindowNotification(windowMs)
+                                    } else if (wins.size != prevCount) {
+                                        updateState { recordingOpenWindows = wins }
                                     }
-                                } else if (wins.size != prevCount) {
-                                    updateState { recordingOpenWindows = wins }
                                 }
                             }
-                        }, 25000).unsafeCast<Int>()
+                        }, 15000).unsafeCast<Int>()
                     }
                 }
                 usr.role == "instructor" && appState.selectedTabIndex == 4 -> {
@@ -4043,6 +4106,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                                 getBalanceHistory(usr.id) { hist ->
                                     window.clearTimeout(tid)
                                     updateState { historyUsers = list; historySessions = sess; historyBalance = hist; historyLoading = false }
+                                    notifyNewBalanceOpsForUser(usr.id, hist, list)
                                 }
                             }
                         }
@@ -4057,6 +4121,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                                 getBalanceHistory(usr.id) { hist ->
                                     window.clearTimeout(tid)
                                     updateState { historyUsers = list; historySessions = sess; historyBalance = hist; historyLoading = false }
+                                    notifyNewBalanceOpsForUser(usr.id, hist, list)
                                 }
                             }
                         }
@@ -4244,11 +4309,13 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     val selected = root.querySelector("input[name=sd-cancel-reason]:checked") as? HTMLInputElement
                     val reason = selected?.value?.takeIf { it.isNotBlank() } ?: "—"
                     modal.classList.add("sd-hidden")
-                    val startMs = appState.recordingSessions.find { it.id == sessionId }?.startTimeMillis
+                    val session = appState.recordingSessions.find { it.id == sessionId }
+                    val startMs = session?.startTimeMillis
+                    val cadetShortName = appState.instructorCadets.find { it.id == session?.cadetId }?.fullName?.let { formatShortName(it) } ?: "Курсант"
                     cancelByInstructor(sessionId, reason) { err ->
                         if (err != null) updateState { networkError = err }
                         else {
-                            showNotification("Вождение отменено" + formatDayTimeShort(startMs))
+                            showNotification("Вождение отменено" + formatDayTimeShort(startMs) + ". Курсант: $cadetShortName")
                             getOpenWindowsForInstructor(usr.id) { wins ->
                                 getSessionsForInstructor(usr.id) { sess ->
                                     getBalanceHistory(usr.id) { hist ->
@@ -4505,13 +4572,26 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 if (occupied != null) { showToast(occupied); return@addEventListener }
                 val cadet = appState.instructorCadets.find { it.id == cadetId }
                 if (cadet == null) { updateState { networkError = "Курсант не найден" }; return@addEventListener }
-                if (cadet.balance <= 0) { updateState { networkError = "У курсанта 0 талонов, запись невозможна" }; return@addEventListener }
+                if (cadet.balance <= 0) {
+                    val cadetShortName = formatShortName(cadet.fullName)
+                    val msg = "У курсанта $cadetShortName 0 талонов, запись невозможна"
+                    updateState { networkError = msg }
+                    showNotification(msg)
+                    return@addEventListener
+                }
                 val scheduledCount = appState.recordingSessions.count { it.cadetId == cadetId && (it.status == "scheduled" || it.status == "inProgress") }
-                if (scheduledCount >= cadet.balance) { updateState { networkError = "По балансу курсанта уже запланировано макс. вождений" }; return@addEventListener }
+                if (scheduledCount >= cadet.balance) {
+                    val cadetShortName = formatShortName(cadet.fullName)
+                    val msg = "По балансу курсанта $cadetShortName уже запланировано максимальное число вождений"
+                    updateState { networkError = msg }
+                    showNotification(msg)
+                    return@addEventListener
+                }
                 createSession(usr.id, cadetId, ms, null) { _, err ->
                     if (err != null) updateState { networkError = err }
                     else {
-                        showNotification("Вождение назначено" + formatDayTimeShort(ms))
+                        val cadetShortName = formatShortName(cadet.fullName)
+                        showNotification("Вождение назначено" + formatDayTimeShort(ms) + ". Курсант: $cadetShortName")
                         getSessionsForInstructor(usr.id) { sess ->
                             updateState { recordingSessions = sess; networkError = null }
                         }
@@ -4547,10 +4627,12 @@ private fun attachListeners(root: org.w3c.dom.Element) {
             document.getElementById("sd-rec-cancel-session-yes")?.addEventListener("click", {
                 val modal = document.getElementById("sd-rec-cancel-session-confirm-modal") ?: return@addEventListener
                 val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
-                val startMs = appState.recordingSessions.find { it.id == sessionId }?.startTimeMillis
+                val session = appState.recordingSessions.find { it.id == sessionId }
+                val startMs = session?.startTimeMillis
+                val cadetShortNameForNotif = if (usr.role == "instructor") appState.instructorCadets.find { it.id == session?.cadetId }?.fullName?.let { formatShortName(it) } ?: "Курсант" else null
                 modal.classList.add("sd-hidden")
                 val onSuccess = {
-                    showNotification("Вождение отменено" + formatDayTimeShort(startMs))
+                    showNotification("Вождение отменено" + formatDayTimeShort(startMs) + (if (cadetShortNameForNotif != null) ". Курсант: $cadetShortNameForNotif" else ""))
                     if (usr.role == "cadet") {
                         val instId = usr.assignedInstructorId ?: ""
                         getOpenWindowsForCadet(instId) { wins ->
@@ -4561,7 +4643,9 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     } else {
                         getOpenWindowsForInstructor(usr.id) { wins ->
                             getSessionsForInstructor(usr.id) { sess ->
-                                updateState { recordingOpenWindows = wins; recordingSessions = sess }
+                                getBalanceHistory(usr.id) { hist ->
+                                    updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                                }
                             }
                         }
                     }
@@ -4586,6 +4670,20 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 val btn = bookNodes.item(k) as? org.w3c.dom.Element ?: continue
                 val wid = btn.getAttribute("data-window-id") ?: continue
                 btn.addEventListener("click", {
+                    val userBalance = usr.balance
+                    val bookedCount = appState.recordingSessions.count { it.cadetId == usr.id && (it.status == "scheduled" || it.status == "inProgress") }
+                    if (userBalance <= 0) {
+                        val msg = "У вас 0 талонов, запись невозможна"
+                        updateState { networkError = msg }
+                        showNotification(msg)
+                        return@addEventListener
+                    }
+                    if (bookedCount >= userBalance) {
+                        val msg = "По вашему балансу уже запланировано максимальное число вождений"
+                        updateState { networkError = msg }
+                        showNotification(msg)
+                        return@addEventListener
+                    }
                     val windowMs = appState.recordingOpenWindows.find { it.id == wid }?.dateTimeMillis
                     bookWindow(wid, usr.id) { err ->
                         if (err != null) updateState { networkError = err }
@@ -4680,11 +4778,23 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     if (err != null) updateState { networkError = err }
                     else getUsers { list ->
                         loadBalanceHistoryForUsers(list.map { it.id }) { hist ->
-                            updateState { balanceAdminUsers = list; balanceAdminHistory = hist }
-                            val targetName = list.find { it.id == targetId }?.fullName?.takeIf { it.isNotBlank() } ?: "Пользователь"
+                            val targetUser = list.find { it.id == targetId }
+                            updateState {
+                                balanceAdminUsers = list
+                                balanceAdminHistory = hist
+                                if (user?.id == targetId && targetUser != null) {
+                                    user = targetUser
+                                }
+                            }
+                            val targetNameFull = targetUser?.fullName?.takeIf { it.isNotBlank() } ?: "Пользователь"
+                            val targetNameShort = formatShortName(targetNameFull)
+                            val fromShort = formatShortName(usr.fullName.ifBlank { "Администратор" })
+                            val nowTs = js("Date.now()").unsafeCast<Double>().toLong()
+                            val dt = formatMessageDateTime(nowTs)
                             when (type) {
-                                "credit" -> showNotification("Зачислено $amount талонов пользователю $targetName")
-                                "debit" -> showNotification("Списано $amount талонов у пользователя $targetName")
+                                "credit" -> showNotification("Зачислено $amount талонов. От: $fromShort. Кому: $targetNameShort. Дата и время: $dt")
+                                "debit" -> showNotification("Списано $amount талонов. От: $fromShort. У кого: $targetNameShort. Дата и время: $dt")
+                                "set" -> showNotification("Баланс установлен. От: $fromShort. Пользователь: $targetNameShort. Дата и время: $dt")
                             }
                         }
                     }

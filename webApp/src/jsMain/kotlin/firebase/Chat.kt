@@ -90,6 +90,16 @@ fun sendMessage(roomId: String, senderId: String, text: String): kotlin.js.Promi
     return ref.set(data).then { js("undefined") }
 }
 
+/** Пометить сообщения как прочитанные (одним мульти-путь update). Вызывать при открытии чата: messageIds — id сообщений от собеседника. */
+fun markMessagesAsRead(roomId: String, messageIds: List<String>): kotlin.js.Promise<Unit> {
+    val db = getDatabase() ?: return kotlin.js.Promise.reject(js("Error('Database not initialized')"))
+    if (messageIds.isEmpty()) return kotlin.js.Promise.resolve(js("undefined"))
+    val baseRef = db.ref("${FirebasePaths.CHATS}/$roomId/${FirebasePaths.MESSAGES}")
+    val updateObj = js("{}").unsafeCast<dynamic>()
+    messageIds.forEach { id -> updateObj["$id/status"] = "read" }
+    return baseRef.update(updateObj).then { js("undefined") }
+}
+
 /**
  * Загрузка голосового в Storage и запись сообщения в Realtime Database (как в Android).
  * audioBlob — Blob из MediaRecorder (например audio/webm или audio/mp4).

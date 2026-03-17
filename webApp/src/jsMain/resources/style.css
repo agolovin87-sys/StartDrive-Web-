@@ -2208,9 +2208,8 @@ a.sd-cadet-icon-btn:active {
 .sd-sch-status-waiting    { background: rgba(230,81,0,0.12);  color: #bf360c; }
 .sd-sch-status-pending    { background: rgba(97,97,97,0.1);   color: #424242; }
 .sd-sch-status-active     { background: rgba(25,118,210,0.12); color: #1565C0; }
-/* В блоке «Мой график» статус в карточке — красным */
-.sd-block-schedule .sd-sch-status,
-.sd-block-schedule .sd-sch-status-confirmed,
+/* В блоке «Мой график»: подтверждённый статус — зелёным, ожидание/ошибки — красным/серым */
+.sd-block-schedule .sd-sch-status-confirmed { color: #2E7D32 !important; }
 .sd-block-schedule .sd-sch-status-waiting,
 .sd-block-schedule .sd-sch-status-pending,
 .sd-block-schedule .sd-sch-status-active { color: #c62828 !important; }
@@ -2863,6 +2862,113 @@ a.sd-cadet-icon-btn:active {
     color: var(--sd-text-secondary, #666);
 }
 
+.sd-settings-block {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(0,0,0,0.08);
+}
+.sd-settings-block-title {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0 0 12px 0;
+    color: var(--sd-text-primary, #111);
+}
+.sd-settings-avatar-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+}
+.sd-settings-avatar-preview {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    overflow: hidden;
+    background: rgba(0,0,0,0.06);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+.sd-settings-avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.sd-settings-avatar-placeholder {
+    font-size: 2rem;
+    font-weight: 600;
+    color: rgba(0,0,0,0.35);
+}
+.sd-settings-avatar-file {
+    position: absolute;
+    width: 0.1px;
+    height: 0.1px;
+    opacity: 0;
+    overflow: hidden;
+    z-index: -1;
+}
+.sd-settings-avatar-label,
+.sd-settings-avatar-remove {
+    margin: 0;
+}
+
+/* Редактор обрезки аватара по кругу (как в Android) */
+.sd-avatar-crop-editor {
+    margin-top: 16px;
+    padding: 12px 0;
+    border-top: 1px solid rgba(0,0,0,0.08);
+}
+.sd-avatar-crop-editor.sd-hidden {
+    display: none !important;
+}
+.sd-avatar-crop-frame {
+    width: 200px;
+    height: 200px;
+    border-radius: 50%;
+    overflow: hidden;
+    position: relative;
+    background: #333;
+    margin: 0 auto 12px;
+    cursor: move;
+    touch-action: none;
+    user-select: none;
+}
+.sd-avatar-crop-img {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 200px;
+    height: 200px;
+    object-fit: cover;
+    transform-origin: center center;
+    pointer-events: none;
+}
+.sd-avatar-crop-controls {
+    max-width: 280px;
+}
+.sd-avatar-crop-scale-label {
+    display: block;
+    font-size: 0.9rem;
+    margin-bottom: 4px;
+    color: var(--sd-text-secondary, #666);
+}
+.sd-avatar-crop-scale {
+    width: 100%;
+    margin-bottom: 12px;
+    accent-color: var(--sd-primary, #1976d2);
+}
+.sd-avatar-crop-buttons {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.sd-settings-sound-select {
+    max-width: 280px;
+    display: block;
+}
+
 .sd-checkbox {
     display: flex;
     align-items: center;
@@ -3451,13 +3557,39 @@ a.sd-cadet-icon-btn:active {
     justify-content: center;
     width: 40px;
     height: 40px;
-    padding: 0;
     border: 1px solid rgba(255,255,255,0.25);
     border-radius: 10px;
     background: rgba(255,255,255,0.08);
     color: #fff;
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s;
+}
+.sd-btn-notif-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 2px;
+}
+.sd-notif-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    font-size: 0.6rem;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
+    color: #fff;
+    background: #f44336;
+    border-radius: 8px;
+    border: 2px solid var(--sd-header-bg, #0b1c38);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+    pointer-events: none;
 }
 .sd-btn-notifications:hover {
     background: rgba(255,255,255,0.15);
@@ -3674,6 +3806,29 @@ a.sd-cadet-icon-btn:active {
 .sd-tab-label {
     line-height: 1;
     white-space: nowrap;
+}
+.sd-tab {
+    padding-right: 10px;
+}
+.sd-tab-badge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    font-size: 0.55rem;
+    font-weight: 700;
+    line-height: 14px;
+    text-align: center;
+    color: #fff;
+    background: #f44336;
+    border-radius: 7px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+    pointer-events: none;
+}
+.sd-tab.sd-active .sd-tab-badge {
+    background: #ff7043;
 }
 
 /* Активная вкладка */
@@ -4157,6 +4312,31 @@ a.sd-cadet-icon-btn:active {
     text-shadow: 0 1px 6px rgba(0,0,0,0.35);
 }
 
+.sd-chat-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.sd-chat-settings-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 50%;
+    color: rgba(255,255,255,0.85);
+    cursor: pointer;
+    font-family: inherit;
+}
+.sd-chat-settings-btn:hover {
+    background: rgba(255,255,255,0.15);
+    color: #fff;
+}
+
 .sd-chat-refresh-btn {
     display: inline-flex;
     align-items: center;
@@ -4243,6 +4423,7 @@ a.sd-cadet-icon-btn:active {
     width: 44px;
     height: 44px;
     border-radius: 50%;
+    overflow: hidden;
     color: #fff;
     font-size: 0.9rem;
     font-weight: 700;
@@ -4293,6 +4474,22 @@ a.sd-cadet-icon-btn:active {
 .sd-chat-contact-status-online  { color: #4ade80; }
 .sd-chat-contact-status-offline { color: rgba(255,255,255,0.35); }
 
+.sd-chat-contact-unread {
+    flex-shrink: 0;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    margin-left: 8px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    line-height: 20px;
+    text-align: center;
+    color: #fff;
+    background: #f44336;
+    border-radius: 10px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+}
+
 /* ══════════════════════════════════════════
    ОКНО ПЕРЕПИСКИ
    ══════════════════════════════════════════ */
@@ -4335,6 +4532,7 @@ a.sd-cadet-icon-btn:active {
     width: 34px;
     height: 34px;
     border-radius: 50%;
+    overflow: hidden;
     color: #fff;
     font-size: 0.8rem;
     font-weight: 700;
@@ -4376,9 +4574,37 @@ a.sd-cadet-icon-btn:active {
     color: #111;
 }
 .sd-msg-me {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-end;
+    justify-content: flex-end;
+    gap: 6px;
     align-self: flex-end;
-    background: #d9fdd3;
+    background: transparent;
+    border-radius: 0;
+    max-width: none;
+    padding: 0;
+}
+.sd-msg-me .sd-msg-bubble-wrap {
+    display: flex;
+    flex-direction: column;
+    max-width: 82%;
+    padding: 7px 11px 5px;
     border-radius: 14px 14px 4px 14px;
+    background: #d9fdd3;
+}
+.sd-msg-my-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    overflow: hidden;
+    flex-shrink: 0;
+    background: rgba(0,0,0,0.08);
+}
+.sd-msg-avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 .sd-msg-them {
     align-self: flex-start;
@@ -4405,8 +4631,25 @@ a.sd-cadet-icon-btn:active {
     color: rgba(0,0,0,0.45);
     margin-right: auto;
 }
-.sd-msg-checks { display: inline-flex; align-items: center; }
-.sd-msg-checks-sent .sd-msg-check  { color: #8e8e93; }
+.sd-msg-checks {
+    display: inline-flex;
+    align-items: center;
+    position: relative;
+}
+.sd-msg-check-wrap {
+    display: inline-flex;
+    align-items: center;
+    margin-left: -7px;
+}
+.sd-msg-check-wrap:first-child { margin-left: 0; }
+.sd-msg-check {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+}
+/* Одна галочка серого цвета = доставлено, не прочитано */
+.sd-msg-checks-sent .sd-msg-check  { color: #9e9e9e; }
+/* Две галочки зелёные = прочитано */
 .sd-msg-checks-read .sd-msg-check  { color: #34c759; }
 
 /* ── Поле ввода ── */
@@ -4499,6 +4742,10 @@ a.sd-cadet-icon-btn:active {
 
 /* Голосовое сообщение в пузыре — плеер как в Android (Play/Pause + прогресс + длительность) */
 .sd-msg-voice {
+    min-width: 200px;
+    max-width: 280px;
+}
+.sd-msg-me.sd-msg-voice .sd-msg-bubble-wrap {
     min-width: 200px;
     max-width: 280px;
 }

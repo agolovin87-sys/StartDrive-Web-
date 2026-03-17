@@ -57,6 +57,7 @@ data class AppState(
     var chatContactsLoading: Boolean = false,
     var selectedChatContactId: String? = null,
     var chatMessages: List<ChatMessage> = emptyList(),
+    var chatUnreadCounts: Map<String, Int> = emptyMap(),
     var recordingOpenWindows: List<InstructorOpenWindow> = emptyList(),
     var recordingSessions: List<DrivingSession> = emptyList(),
     var recordingLoading: Boolean = false,
@@ -118,6 +119,8 @@ data class AppState(
     var pddExamResultPass: Boolean? = null,
     /** Список уведомлений: дата, время, текст (сохраняются при действиях). */
     var notifications: List<AppNotification> = emptyList(),
+    /** Сколько уведомлений было при последнем входе во вкладку — счётчик бейджа обнуляется при входе. */
+    var notificationsReadCount: Int = 0,
     /** Открыт ли полноэкранный экран уведомлений по кнопке в шапке. */
     var notificationsViewOpen: Boolean = false,
     /** Показать ли окно настроек звуковых уведомлений (при первом запуске курсанта). */

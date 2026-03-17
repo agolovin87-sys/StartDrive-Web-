@@ -21,6 +21,7 @@ private val chatScrollByContactId = mutableMapOf<String, Int>()
 private var cadetNotificationAudio: dynamic = null
 private var cadetNotificationAudioUnlocked: Boolean = false
 private var cadetNotificationAudioContext: dynamic = null
+private var chatMessageAudio: dynamic = null
 
 private fun saveChatScrollForCurrentContact() {
     val contactId = appState.selectedChatContactId ?: return
@@ -139,9 +140,10 @@ fun main() {
                     }
                 }
                 val (tabButtons, tabContent) = getPanelTabButtonsAndContent(state.user!!, tabs)
-                if (lastRenderedTabIndex != state.selectedTabIndex) {
-                    (root.unsafeCast<dynamic>().querySelector("nav.sd-tabs") as? org.w3c.dom.Element)?.innerHTML = tabButtons
-                    lastRenderedTabIndex = state.selectedTabIndex
+                (root.unsafeCast<dynamic>().querySelector("nav.sd-tabs") as? org.w3c.dom.Element)?.innerHTML = tabButtons
+                lastRenderedTabIndex = state.selectedTabIndex
+                if (state.screen == AppScreen.Instructor || state.screen == AppScreen.Cadet) {
+                    (root.unsafeCast<dynamic>().querySelector("#sd-btn-notifications .sd-btn-notif-wrap") as? org.w3c.dom.Element)?.innerHTML = getNotificationButtonWrapHtml()
                 }
                 val cardContent = when {
                     state.notificationsViewOpen -> """<div class="sd-notif-full-view"><p class="sd-notif-back-row"><button type="button" id="sd-notif-back" class="sd-btn sd-btn-secondary">← Назад</button></p>${renderNotificationsTabContent(state.user!!)}</div>"""
@@ -431,7 +433,7 @@ private fun renderChatTabContent(currentUser: User): String {
     val myId = currentUser.id
     if (contactId != null) {
         val contact = contacts.find { it.id == contactId } ?: return """<p class="sd-error">Контакт не найден.</p>"""
-        val iconCheck = """<svg class="sd-msg-check" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>"""
+        val iconCheck = """<svg class="sd-msg-check" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>"""
         val iconSendSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>"""
         val iconBackSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>"""
         val iconMicSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>"""
@@ -445,13 +447,15 @@ private fun renderChatTabContent(currentUser: User): String {
             val s = sec % 60
             return "$m:${s.toString().padStart(2, '0')}"
         }
+        val myAvatarDataUrl = getChatAvatarDataUrl(myId)
+        val myAvatarHtml = if (myAvatarDataUrl != null) """<div class="sd-msg-my-avatar"><img src="${myAvatarDataUrl.escapeHtml()}" alt="" class="sd-msg-avatar-img" /></div>""" else ""
         val msgsHtml = messages.joinToString("") { msg ->
             val isMe = msg.senderId == myId
             val cls = if (isMe) "sd-msg sd-msg-me" else "sd-msg sd-msg-them"
             val timeStr = formatMessageDateTime(msg.timestamp).escapeHtml()
             val statusHtml = if (isMe) {
                 val isRead = msg.status == "read"
-                val checks = if (isRead) "$iconCheck$iconCheck" else iconCheck
+                val checks = if (isRead) """<span class="sd-msg-check-wrap">$iconCheck</span><span class="sd-msg-check-wrap">$iconCheck</span>""" else """<span class="sd-msg-check-wrap">$iconCheck</span>"""
                 val checkClass = if (isRead) "sd-msg-checks sd-msg-checks-read" else "sd-msg-checks sd-msg-checks-sent"
                 """<span class="$checkClass" title="${if (isRead) "Прочитано" else "Доставлено"}">$checks</span>"""
             } else ""
@@ -465,6 +469,7 @@ private fun renderChatTabContent(currentUser: User): String {
                 val progressPct = (progress * 100).toInt()
                 val currentStr = formatVoiceDuration((currentMs / 1000).coerceAtLeast(0).coerceAtMost(dur)).escapeHtml()
                 """<div class="$cls sd-msg-voice" data-voice-id="${msg.id.escapeHtml()}" data-voice-url="${msg.voiceUrl.escapeHtml()}" data-voice-duration="$dur">
+                    <div class="sd-msg-bubble-wrap">
                     <div class="sd-voice-player">
                         <button type="button" class="sd-voice-play-btn" title="${if (isPlaying) "Пауза" else "Воспроизвести"}" aria-label="${if (isPlaying) "Пауза" else "Воспроизвести"}">${if (isPlaying) iconPauseSvg else iconPlaySvg}</button>
                         <div class="sd-voice-progress-wrap">
@@ -474,9 +479,11 @@ private fun renderChatTabContent(currentUser: User): String {
                     </div>
                     <audio id="sd-voice-audio-${msg.id.escapeHtml()}" class="sd-voice-audio" preload="metadata"></audio>
                     <div class="sd-msg-footer">$timeRow$statusHtml</div>
+                    </div>
+                    ${if (isMe) myAvatarHtml else ""}
                 </div>"""
             } else {
-                """<div class="$cls"><span class="sd-msg-text">${msg.text.escapeHtml()}</span><div class="sd-msg-footer">$timeRow$statusHtml</div></div>"""
+                """<div class="$cls"><div class="sd-msg-bubble-wrap"><span class="sd-msg-text">${msg.text.escapeHtml()}</span><div class="sd-msg-footer">$timeRow$statusHtml</div></div>${if (isMe) myAvatarHtml else ""}</div>"""
             }
         }
         val recording = appState.chatVoiceRecording
@@ -489,7 +496,7 @@ private fun renderChatTabContent(currentUser: User): String {
             </div>"""
         } else {
             """<div class="sd-chat-input-row">
-                <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="Сообщение..." maxlength="2000" />
+                <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="" maxlength="2000" aria-label="Сообщение" />
                 <button type="button" id="sd-chat-send" class="sd-chat-send-btn" title="Отправить">$iconSendSvg</button>
                 <button type="button" id="sd-chat-voice-mic" class="sd-chat-voice-mic-btn" title="Голосовое сообщение">$iconMicSvg</button>
             </div>"""
@@ -518,6 +525,8 @@ private fun renderChatTabContent(currentUser: User): String {
         val roleLabel = when (c.role) { "instructor" -> "Инструктор" "cadet" -> "Курсант" "admin" -> "Администратор" else -> c.role }.escapeHtml()
         val statusText = if (isOnline) "в сети" else "не в сети"
         val statusCls = if (isOnline) "sd-chat-contact-status-online" else "sd-chat-contact-status-offline"
+        val unread = appState.chatUnreadCounts[c.id] ?: 0
+        val unreadBadge = if (unread > 0) """<span class="sd-chat-contact-unread">${if (unread > 99) "99+" else unread.toString()}</span>""" else ""
         """<button type="button" class="sd-chat-contact" data-contact-id="${c.id.escapeHtml()}">
             <div class="sd-chat-contact-avatar-wrap">
                 <span class="sd-chat-contact-avatar" style="background:$avatarBg">$initials</span>
@@ -527,6 +536,7 @@ private fun renderChatTabContent(currentUser: User): String {
                 <span class="sd-chat-contact-name-row">${formatShortName(c.fullName).escapeHtml()}</span>
                 <span class="sd-chat-contact-meta"><span class="sd-chat-contact-role">$roleLabel</span> · <span class="sd-chat-contact-status $statusCls">$statusText</span></span>
             </span>
+            $unreadBadge
         </button>"""
     }
     val instructors = contacts.filter { it.role == "instructor" }.sortedBy { it.fullName }
@@ -536,8 +546,10 @@ private fun renderChatTabContent(currentUser: User): String {
     val cadetsSection = if (cadets.isEmpty()) "" else """<div class="sd-chat-contacts-group"><p class="sd-chat-contacts-group-title">Курсанты</p><div class="sd-chat-contacts">${cadets.joinToString("") { contactRow(it) }}</div></div>"""
     val othersSection = if (others.isEmpty()) "" else """<div class="sd-chat-contacts-group"><p class="sd-chat-contacts-group-title">Другие</p><div class="sd-chat-contacts">${others.joinToString("") { contactRow(it) }}</div></div>"""
     val contactsBlock = if (contacts.isEmpty() && !loading) """<p class="sd-chat-empty-hint">Нет доступных контактов.</p>""" else """$instructorsSection$cadetsSection$othersSection"""
+    val iconSettingsSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>"""
+    val settingsBtnHtml = """<button type="button" id="sd-chat-settings-btn" class="sd-btn sd-btn-icon sd-chat-settings-btn" title="Настройки" aria-label="Настройки">$iconSettingsSvg</button>"""
     val refreshBtnStyled = """<button type="button" id="sd-chat-refresh" class="sd-chat-refresh-btn">$iconRefreshSvg Обновить контакты</button>"""
-    return """<div class="sd-chat-tab"><div class="sd-chat-list-header"><h2 class="sd-chat-title">Чат</h2>$refreshBtnStyled</div>$loadingLine$contactsBlock</div>"""
+    return """<div class="sd-chat-tab"><div class="sd-chat-list-header"><h2 class="sd-chat-title">Чат</h2><div class="sd-chat-header-actions">$settingsBtnHtml$refreshBtnStyled</div></div>$loadingLine$contactsBlock</div>"""
 }
 
 /** Экранирует HTML, чтобы пользовательский ввод не приводил к XSS. */
@@ -562,7 +574,7 @@ private fun formatMessageDateTime(timestampMs: Long): String {
 
 private const val LAST_BALANCE_TS_KEY_PREFIX = "sd_last_balance_ts_"
 
-/** Показывает тосты о новых операциях по балансу для текущего пользователя (зачисление/списание/установка). */
+/** Показывает тосты о новых операциях по балансу для указанного пользователя (зачисление/списание/установка). Один раз на операцию: сразу помечаем последнее время, чтобы повторный вызов не дублировал уведомления. */
 private fun notifyNewBalanceOpsForUser(userId: String, entries: List<BalanceHistoryEntry>, users: List<User>) {
     if (entries.isEmpty()) return
     val storage = window.asDynamic().localStorage
@@ -570,18 +582,16 @@ private fun notifyNewBalanceOpsForUser(userId: String, entries: List<BalanceHist
     val lastStr = storage?.getItem(key) as? String
     val lastSeen = lastStr?.toLongOrNull() ?: 0L
     val sorted = entries.sortedBy { it.timestampMillis ?: 0L }
-    var maxTs = lastSeen
+    val maxTsInEntries = sorted.maxOfOrNull { it.timestampMillis ?: 0L } ?: 0L
+    if (maxTsInEntries <= lastSeen) return
+    storage?.setItem(key, maxTsInEntries.toString())
     for (e in sorted) {
         val ts = e.timestampMillis ?: 0L
-        if (ts <= lastSeen) {
-            if (ts > maxTs) maxTs = ts
-            continue
-        }
-        if (ts > maxTs) maxTs = ts
+        if (ts <= lastSeen) continue
         val whoName = users.find { it.id == e.performedBy }?.fullName
             ?.takeIf { it.isNotBlank() }
             ?.let { formatShortName(it) }
-            ?: e.performedBy.takeIf { it.isNotBlank() } ?: "Администратор"
+            ?: "Пользователь"
         val dt = if (ts > 0L) formatMessageDateTime(ts) else ""
         val msg = when (e.type) {
             "credit" -> "Вам зачислено ${e.amount} талонов от $whoName. Дата и время: $dt"
@@ -593,9 +603,18 @@ private fun notifyNewBalanceOpsForUser(userId: String, entries: List<BalanceHist
             showNotification(msg)
         }
     }
-    if (maxTs > 0L) {
-        storage?.setItem(key, maxTs.toString())
+}
+
+/** Удобный помощник: уведомления о новых операциях по балансу для текущего пользователя. */
+private fun notifyNewBalanceOpsForCurrentUser(entries: List<BalanceHistoryEntry>, users: List<User>? = null) {
+    val uid = appState.user?.id ?: return
+    val userList = when {
+        users != null && users.isNotEmpty() -> users
+        appState.historyUsers.isNotEmpty() -> appState.historyUsers
+        appState.user != null -> listOf(appState.user!!)
+        else -> emptyList()
     }
+    notifyNewBalanceOpsForUser(uid, entries, userList)
 }
 
 /** Цвет кружка-аватара по id контакта (у каждого контакта свой оттенок). */
@@ -898,6 +917,7 @@ private fun startDrivingTimers() {
                                 getSessionsForInstructor(uid) { sess ->
                                     getBalanceHistory(uid) { hist ->
                                         updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                                        notifyNewBalanceOpsForCurrentUser(hist)
                                     }
                                 }
                             }
@@ -1434,8 +1454,33 @@ private fun getResourceBaseUrl(): String {
 }
 
 /** Полный URL вашего звука: instruktor_dobavil_okno.mp3 из «Фото для приложения/звуки». */
+/** Список звуков уведомлений (имя файла без .mp3). По умолчанию iphone1. */
+private val NOTIFICATION_SOUND_OPTIONS = listOf(
+    "iphone1", "iphone2", "netflix", "oreo", "intriga", "telegram", "signalizacia", "droid", "dudka", "oldspice", "kupola", "du-hast-1", "du-hast-2"
+)
+private const val NOTIFICATION_SOUND_STORAGE_KEY = "sd_notification_sound"
+private const val CHAT_AVATAR_STORAGE_KEY_PREFIX = "sd_chat_avatar_"
+
+private fun getNotificationSoundFilename(): String =
+    (window.asDynamic().localStorage?.getItem(NOTIFICATION_SOUND_STORAGE_KEY) as? String)?.takeIf { it in NOTIFICATION_SOUND_OPTIONS } ?: "iphone1"
+
 private fun getCadetNotificationSoundUrl(): String =
-    getResourceBaseUrl() + "sounds/instruktor_dobavil_okno.mp3"
+    getResourceBaseUrl() + "sounds/" + getNotificationSoundFilename() + ".mp3"
+
+/** URL звука входящего сообщения в чате (WhatsApp-style). */
+private fun getChatMessageSoundUrl(): String =
+    getResourceBaseUrl() + "sounds/chat_message.mp3"
+
+/** Один общий Audio для звука входящего сообщения в чате; разблокируется по первому клику. */
+private fun getOrCreateChatMessageAudio(): dynamic {
+    if (chatMessageAudio != null && chatMessageAudio != js("undefined")) return chatMessageAudio
+    val audio = document.createElement("audio").asDynamic()
+    audio.preload = "auto"
+    audio.volume = 0.7
+    audio.src = getChatMessageSoundUrl()
+    chatMessageAudio = audio
+    return audio
+}
 
 /** Один общий Audio для звука «Инструктор добавил свободное окно»; разблокируется по первому клику пользователя. */
 private fun getOrCreateCadetNotificationAudio(): dynamic {
@@ -1460,12 +1505,115 @@ private fun unlockCadetNotificationAudio() {
             audio.pause()
             audio.currentTime = 0.0
         })?.catch { _ -> Unit }
+        val chatAudio = getOrCreateChatMessageAudio()
+        chatAudio.currentTime = 0.0
+        chatAudio.play()?.then({
+            chatAudio.pause()
+            chatAudio.currentTime = 0.0
+        })?.catch { _ -> Unit }
         if (cadetNotificationAudioContext == null || cadetNotificationAudioContext == js("undefined")) {
             cadetNotificationAudioContext = js("new (window.AudioContext || window.webkitAudioContext)()").unsafeCast<dynamic>()
         }
         val ctx = cadetNotificationAudioContext
         if (ctx != null) ctx.asDynamic().resume()?.catch { _ -> Unit }
     } catch (_: Throwable) { }
+}
+
+/** Разблокировать аудио для уведомлений чата (один контекст с курсантским). Вызывать при клике пользователя, чтобы браузер разрешил звук. */
+private fun unlockChatNotificationAudio() {
+    try {
+        if (cadetNotificationAudioContext == null || cadetNotificationAudioContext == js("undefined")) {
+            cadetNotificationAudioContext = js("new (window.AudioContext || window.webkitAudioContext)()").unsafeCast<dynamic>()
+        }
+        cadetNotificationAudioContext?.asDynamic()?.resume()?.catch { _: dynamic -> Unit }
+    } catch (_: Throwable) { }
+}
+
+/** Звук нового сообщения в чате: WhatsApp-style (chat_message.mp3). */
+private fun playChatMessageSound() {
+    try {
+        val audio = getOrCreateChatMessageAudio()
+        audio.src = getChatMessageSoundUrl()
+        audio.currentTime = 0.0
+        audio.volume = 0.7
+        audio.play()?.catch { _: dynamic -> Unit }
+    } catch (_: Throwable) { }
+}
+
+private val chatNotifUnsubByContactId = mutableMapOf<String, () -> Unit>()
+
+private fun chatLastSeenKey(uid: String, contactId: String): String = "sd_chat_last_seen_${uid}_$contactId"
+
+private fun getChatLastSeenMs(uid: String, contactId: String): Long {
+    return try {
+        val v = js("window.localStorage.getItem(arguments[0])")
+            .unsafeCast<(String) -> String?>()
+            .invoke(chatLastSeenKey(uid, contactId))
+        v?.toLongOrNull() ?: 0L
+    } catch (_: Throwable) { 0L }
+}
+
+private fun setChatLastSeenMs(uid: String, contactId: String, ms: Long) {
+    try {
+        js("window.localStorage.setItem(arguments[0], arguments[1])")
+            .unsafeCast<(String, String) -> Unit>()
+            .invoke(chatLastSeenKey(uid, contactId), ms.toString())
+    } catch (_: Throwable) { }
+}
+
+private fun setupChatNotificationsForContact(uid: String, contactId: String) {
+    chatNotifUnsubByContactId.remove(contactId)?.invoke()
+    val db = getDatabase() ?: return
+    val roomId = chatRoomId(uid, contactId)
+    val lastSeen = getChatLastSeenMs(uid, contactId)
+    val ref = db.ref("${com.example.startdrive.shared.FirebasePaths.CHATS}/$roomId/${com.example.startdrive.shared.FirebasePaths.MESSAGES}")
+        .orderByChild("timestamp")
+        .startAt((lastSeen + 1).toDouble())
+    val subscribeTimeMs = js("Date.now()").unsafeCast<Double>().toLong()
+    val listener: (dynamic) -> Unit = listener@{ snap: dynamic ->
+        val m = snap?.`val`()
+        val senderId = (m?.senderId as? String) ?: ""
+        val tsAny = m?.timestamp
+        val ts = when (tsAny) {
+            is Number -> tsAny.toLong()
+            else -> (tsAny?.unsafeCast<Double>())?.toLong() ?: 0L
+        }
+        if (ts <= 0L) return@listener
+        val isInitialLoad = ts < subscribeTimeMs - 2000
+        if (isInitialLoad) return@listener
+        val isViewingThisChat = (appState.selectedTabIndex == 2 && appState.selectedChatContactId == contactId)
+        if (isViewingThisChat) {
+            setChatLastSeenMs(uid, contactId, ts)
+            updateState { if (chatUnreadCounts.containsKey(contactId)) chatUnreadCounts = chatUnreadCounts - contactId }
+        } else if (senderId.isNotBlank() && senderId != uid) {
+            updateState {
+                val prev = chatUnreadCounts[contactId] ?: 0
+                chatUnreadCounts = chatUnreadCounts + (contactId to (prev + 1))
+            }
+            if (getSoundNotificationsEnabled() != false) {
+                unlockChatNotificationAudio()
+                playChatMessageSound()
+            }
+        }
+    }
+    ref.on("child_added", listener)
+    chatNotifUnsubByContactId[contactId] = {
+        try { ref.off("child_added", listener) } catch (_: Throwable) { }
+    }
+}
+
+private fun subscribeChatNotifications(uid: String, contacts: List<User>) {
+    val ids = contacts.map { it.id }.filter { it.isNotBlank() }.toSet()
+    val toRemove = chatNotifUnsubByContactId.keys.filter { it !in ids }
+    toRemove.forEach { id -> chatNotifUnsubByContactId.remove(id)?.invoke() }
+    ids.forEach { cid -> setupChatNotificationsForContact(uid, cid) }
+}
+
+private fun clearChatUnread(uid: String, contactId: String) {
+    val lastTs = appState.chatMessages.lastOrNull()?.timestamp ?: js("Date.now()").unsafeCast<Double>().toLong()
+    setChatLastSeenMs(uid, contactId, lastTs)
+    updateState { if (chatUnreadCounts.containsKey(contactId)) chatUnreadCounts = chatUnreadCounts - contactId }
+    setupChatNotificationsForContact(uid, contactId)
 }
 
 /** Короткий звуковой сигнал через Web Audio API (два «динь-динь», всегда слышно). */
@@ -2031,7 +2179,7 @@ private fun renderRecordingTabContent(user: User): String {
                     </div>
                 </div>
             </div><div class="sd-modal-overlay sd-hidden" id="sd-instructor-cancel-reason-modal"><div class="sd-modal"><h3 class="sd-modal-title">Выберите причину отмены:</h3><div class="sd-rate-options-instructor sd-cancel-reason-options"><label class="sd-radio"><input type="radio" name="sd-cancel-reason" value="Курсант не явился" checked /> Курсант не явился</label><label class="sd-radio"><input type="radio" name="sd-cancel-reason" value="ТС на ремонте" /> ТС на ремонте</label></div><p class="sd-modal-actions"><button type="button" id="sd-instructor-cancel-reason-confirm" class="sd-btn sd-btn-primary">Подтвердить</button><button type="button" id="sd-instructor-cancel-reason-cancel" class="sd-btn sd-btn-secondary">Отмена</button></p></div></div>
-            <div class="sd-modal-overlay sd-hidden" id="sd-rec-delete-window-confirm-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вы уверены?</h3><p class="sd-modal-actions"><button type="button" id="sd-rec-delete-window-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-rec-delete-window-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>
+            <div class="sd-modal-overlay sd-hidden" id="sd-instructor-rate-cadet-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вождение завершено, поставьте оценку курсанту:</h3><p id="sd-instructor-rate-cadet-name" class="sd-rate-cadet-name"></p><div class="sd-rate-options-instructor"><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="3" /> 3</label><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="4" /> 4</label><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="5" /> 5</label></div><p class="sd-modal-actions"><button type="button" id="sd-instructor-rate-cadet-confirm" class="sd-btn sd-btn-primary">Подтвердить</button></p></div></div><div class="sd-modal-overlay sd-hidden" id="sd-rec-delete-window-confirm-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вы уверены?</h3><p class="sd-modal-actions"><button type="button" id="sd-rec-delete-window-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-rec-delete-window-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>
             <div class="sd-modal-overlay sd-hidden" id="sd-rec-cancel-session-confirm-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вы уверены?</h3><p class="sd-modal-actions"><button type="button" id="sd-rec-cancel-session-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-rec-cancel-session-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>"""
         }
         "cadet" -> {
@@ -2156,7 +2304,7 @@ private fun renderHistoryTabContent(user: User): String {
         if (balance.isEmpty()) return """<p class="sd-history-empty">Нет записей</p>"""
         val users = if (withUser) appState.balanceAdminUsers else emptyList()
         val historyUsers = appState.historyUsers
-        val resolveUser = { id: String -> (users.ifEmpty { historyUsers }.find { it.id == id }?.fullName)?.let { formatShortName(it) } ?: id.take(8).plus("…") }
+        val resolveUser = { id: String -> (users.ifEmpty { historyUsers }.find { it.id == id }?.fullName)?.let { formatShortName(it) } ?: "—" }
         val byDate = balance.sortedByDescending { it.timestampMillis ?: 0L }.groupBy { formatDateOnly(it.timestampMillis) }
         val days = byDate.entries.joinToString("") { (date, entries) ->
             val rows = entries.joinToString("") { b ->
@@ -2185,7 +2333,7 @@ private fun renderHistoryTabContent(user: User): String {
         val instructorCadets = appState.instructorCadets
         val instructorName = formatShortName(user.fullName.ifBlank { "—" })
         fun cadetName(cadetId: String) = (instructorCadets.find { it.id == cadetId }?.fullName)?.let { formatShortName(it) } ?: (historyUsers.find { it.id == cadetId }?.fullName)?.let { formatShortName(it) } ?: "—"
-        fun performedByName(performedBy: String) = if (performedBy.isBlank()) "—" else (historyUsers.find { it.id == performedBy }?.fullName)?.let { formatShortName(it) } ?: performedBy.take(8).plus("…")
+        fun performedByName(performedBy: String) = if (performedBy.isBlank()) "—" else (historyUsers.find { it.id == performedBy }?.fullName)?.let { formatShortName(it) } ?: "—"
 
         val creditsHtml = if (credits.isEmpty()) """<p class="sd-history-empty">Нет зачислений</p>""" else credits.joinToString("") { b ->
             val dt = (b.timestampMillis?.takeIf { it > 0 }?.let { formatMessageDateTime(it) }) ?: "—"
@@ -2287,7 +2435,7 @@ private fun renderHistoryTabContent(user: User): String {
         val completedSessions = sessions.filter { it.status == "completed" }.sortedByDescending { it.completedAtMillis ?: it.startTimeMillis ?: 0L }
         val cancelledSessions = sessions.filter { it.status in listOf("cancelledByInstructor", "cancelledByCadet") }.sortedByDescending { it.cancelledAtMillis ?: it.startTimeMillis ?: 0L }
         val historyUsers = appState.historyUsers
-        fun performedByName(performedBy: String) = if (performedBy.isBlank()) "—" else (historyUsers.find { it.id == performedBy }?.fullName)?.let { formatShortName(it) } ?: performedBy.take(8).plus("…")
+        fun performedByName(performedBy: String) = if (performedBy.isBlank()) "—" else (historyUsers.find { it.id == performedBy }?.fullName)?.let { formatShortName(it) } ?: "—"
         fun instructorName(instructorId: String) = (historyUsers.find { it.id == instructorId }?.fullName)?.let { formatShortName(it) } ?: "—"
         val cadetShortNameSelf = formatShortName(user.fullName.ifBlank { "—" })
 
@@ -2833,23 +2981,71 @@ private fun attachNotifDropdownListeners(dropdownEl: org.w3c.dom.Element) {
     })
 }
 
+private fun getChatAvatarDataUrl(userId: String): String? =
+    (window.asDynamic().localStorage?.getItem(CHAT_AVATAR_STORAGE_KEY_PREFIX + userId) as? String)?.takeIf { it.startsWith("data:") }
+
+private fun setChatAvatarDataUrl(userId: String, dataUrl: String?) {
+    try {
+        if (dataUrl != null) window.asDynamic().localStorage?.setItem(CHAT_AVATAR_STORAGE_KEY_PREFIX + userId, dataUrl)
+        else window.asDynamic().localStorage?.removeItem(CHAT_AVATAR_STORAGE_KEY_PREFIX + userId)
+    } catch (_: Throwable) { }
+}
+
 private fun renderSettingsTabContent(user: User): String {
-    val soundBlock = if (user.role == "cadet") {
+    val avatarDataUrl = getChatAvatarDataUrl(user.id)
+    val avatarSection = """<div class="sd-settings-block">
+       <h3 class="sd-settings-block-title">Аватар в чате</h3>
+       <div class="sd-settings-avatar-wrap">
+         <div class="sd-settings-avatar-preview" id="sd-settings-avatar-preview">
+           ${if (avatarDataUrl != null) """<img src="${avatarDataUrl.escapeHtml()}" alt="" id="sd-settings-avatar-img" class="sd-settings-avatar-img" />""" else """<span class="sd-settings-avatar-placeholder" id="sd-settings-avatar-placeholder">${user.fullName.split(" ").filter { it.isNotBlank() }.take(2).joinToString("") { it.first().uppercase() }.ifBlank { "?" }.escapeHtml()}</span>"""}
+         </div>
+         <input type="file" id="sd-settings-avatar-file" class="sd-settings-avatar-file" accept="image/*" />
+         <label for="sd-settings-avatar-file" class="sd-btn sd-btn-secondary sd-settings-avatar-label">Выбрать фото</label>
+         <button type="button" id="sd-settings-avatar-remove" class="sd-btn sd-btn-secondary sd-settings-avatar-remove">Удалить аватар</button>
+       </div>
+       <div class="sd-avatar-crop-editor sd-hidden" id="sd-avatar-crop-editor">
+         <p class="sd-settings-hint" style="margin-bottom:8px">Перетащите фото и измените масштаб. Круг — область обрезки.</p>
+         <div class="sd-avatar-crop-frame" id="sd-avatar-crop-frame">
+           <img id="sd-avatar-crop-img" class="sd-avatar-crop-img" alt="" draggable="false" />
+         </div>
+         <div class="sd-avatar-crop-controls">
+           <label class="sd-avatar-crop-scale-label">Масштаб</label>
+           <input type="range" id="sd-avatar-crop-scale" class="sd-avatar-crop-scale" min="0.5" max="2" step="0.05" value="1" />
+           <div class="sd-avatar-crop-buttons">
+             <button type="button" id="sd-avatar-crop-apply" class="sd-btn sd-btn-primary">Применить</button>
+             <button type="button" id="sd-avatar-crop-cancel" class="sd-btn sd-btn-secondary">Отмена</button>
+           </div>
+         </div>
+       </div>
+       <p class="sd-settings-hint">Круглая обрезка, как в приложении. Отображается в чате.</p>
+       </div>"""
+    val soundBlock = if (user.role in listOf("cadet", "instructor", "admin")) {
         val checked = getSoundNotificationsEnabled() == true
         val showAllowBtn = checked && !appState.soundAudioUnlocked
         val allowBtnHtml = if (showAllowBtn) """<p style="margin-top:8px"><button type="button" id="sd-allow-sound-settings-btn" class="sd-btn sd-btn-primary">🔊 Разрешить воспроизведение звука</button></p><p class="sd-settings-hint">Браузер требует одно нажатие для доступа к звуку.</p>""" else ""
-        """<p style="margin-top:16px">Уведомления:</p>
+        val currentSound = getNotificationSoundFilename()
+        val soundOptionsHtml = NOTIFICATION_SOUND_OPTIONS.joinToString("") { name ->
+            val sel = if (name == currentSound) " selected" else ""
+            """<option value="${name.escapeHtml()}"$sel>${name.escapeHtml()}</option>"""
+        }
+        """<div class="sd-settings-block">
+           <h3 class="sd-settings-block-title">Уведомления</h3>
            <label class="sd-settings-checkbox"><input type="checkbox" id="sd-settings-sound-notifications" ${if (checked) "checked" else ""} /> Включить звук уведомлений</label>
-           $allowBtnHtml"""
+           <p style="margin-top:12px">Звук уведомлений:</p>
+           <select id="sd-settings-notification-sound" class="sd-input sd-settings-sound-select">$soundOptionsHtml</select>
+           <button type="button" id="sd-settings-sound-preview" class="sd-btn sd-btn-secondary" style="margin-top:8px">Прослушать</button>
+           $allowBtnHtml
+           </div>"""
     } else ""
     return """<h2>Настройки</h2>
        <label>ФИО</label><input type="text" id="sd-settings-fullName" class="sd-input" value="${user.fullName.escapeHtml()}" />
        <label>Телефон</label><input type="tel" id="sd-settings-phone" class="sd-input" value="${user.phone.escapeHtml()}" />
        <button type="button" id="sd-settings-save" class="sd-btn sd-btn-primary">Сохранить профиль</button>
+       $avatarSection
        $soundBlock
-       <p style="margin-top:16px">Сменить пароль:</p>
+       <div class="sd-settings-block"><p style="margin-top:16px">Сменить пароль:</p>
        <label>Новый пароль</label><input type="password" id="sd-settings-newpassword" class="sd-input" placeholder="мин. 6 символов" />
-       <button type="button" id="sd-settings-password" class="sd-btn sd-btn-secondary">Сменить пароль</button>"""
+       <button type="button" id="sd-settings-password" class="sd-btn sd-btn-secondary">Сменить пароль</button></div>"""
 }
 
 private fun renderBalanceTabContent(user: User): String {
@@ -2926,7 +3122,7 @@ private fun renderBalanceTabContent(user: User): String {
     val byDate = sortedHistory.groupBy { formatDateTimeEkaterinburg(it.timestampMillis).substringBefore(", ") }
     val historyRows = byDate.entries.joinToString("") { (dateStr, entries) ->
         val rows = entries.joinToString("") { b ->
-            val userName = users.find { it.id == b.userId }?.fullName ?: b.userId.take(8) + "…"
+            val userName = users.find { it.id == b.userId }?.fullName?.let { formatShortName(it) } ?: "—"
             val label = typeLabel(b.type)
             val tail = "${b.amount} ${ticketWord(b.amount)}"
             """<div class="sd-record-row"><span class="sd-balance-history-time">${formatDateTimeEkaterinburg(b.timestampMillis).substringAfter(", ").ifEmpty { "—" }}</span> — <strong>${userName.escapeHtml()}</strong>: $label $tail</div>"""
@@ -2942,6 +3138,37 @@ private fun renderBalanceTabContent(user: User): String {
         <div class="sd-block" id="sd-balance-cadets-block"><h3 class="sd-block-title">Курсанты (${cadets.size})</h3><div id="sd-balance-cadets-list" class="sd-balance-cards">$cadetRows</div></div>
         $selectedBlock
         $historyBlock"""
+}
+
+/** Счётчик для вкладки (бейдж, как в Android). */
+private fun getTabBadgeCount(tabName: String, user: User): Int {
+    return when (tabName) {
+        "Главная" -> when (user.role) {
+            "instructor" -> {
+                val sessions = appState.recordingSessions.filter { it.status == "scheduled" || it.status == "inProgress" || (it.status == "completed" && it.instructorRating == 0) }
+                sessions.count { s ->
+                    val bookedByCadet = s.openWindowId.isNotBlank()
+                    (bookedByCadet && !s.instructorConfirmed) || (s.status == "completed" && s.instructorRating == 0) || (s.status == "scheduled" && s.instructorConfirmed && s.startRequestedByInstructor)
+                }
+            }
+            "cadet" -> {
+                val sessions = appState.recordingSessions.filter { it.status == "scheduled" || it.status == "inProgress" }
+                sessions.count { s ->
+                    val needConfirm = !s.instructorConfirmed && s.openWindowId.isNotBlank()
+                    needConfirm || (s.status == "completed" && s.instructorRating > 0 && s.cadetRating == 0)
+                }
+            }
+            else -> 0
+        }
+        "Запись", "Запись на вождение" -> when (user.role) {
+            "instructor" -> appState.recordingSessions.count { it.status == "scheduled" || it.status == "inProgress" }
+            "cadet" -> appState.recordingSessions.count { it.cadetId == user.id && (it.status == "scheduled" || it.status == "inProgress") } + appState.recordingOpenWindows.count { it.status == "free" }
+            else -> 0
+        }
+        "Чат" -> appState.chatUnreadCounts.values.sum()
+        "История", "Баланс", "Билеты", "Настройки" -> 0
+        else -> 0
+    }
 }
 
 /** Возвращает (кнопки вкладок, контент вкладки) для текущего выбора. */
@@ -2960,7 +3187,9 @@ private fun getPanelTabButtonsAndContent(user: User, tabs: List<String>): Pair<S
     val tabButtons = tabs.mapIndexed { i, name ->
         val cls = if (i == selected) "sd-tab sd-active" else "sd-tab"
         val icon = tabIconMap[name] ?: """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>"""
-        """<button type="button" class="$cls" data-tab="$i"><span class="sd-tab-icon">$icon</span><span class="sd-tab-label">$name</span></button>"""
+        val badgeCount = if (i == selected) 0 else getTabBadgeCount(name, user)
+        val badgeHtml = if (badgeCount > 0) """<span class="sd-tab-badge">${if (badgeCount > 99) "99+" else badgeCount.toString()}</span>""" else ""
+        """<button type="button" class="$cls" data-tab="$i"><span class="sd-tab-icon">$icon</span><span class="sd-tab-label">$name</span>$badgeHtml</button>"""
     }.joinToString("")
     val tabName = tabs[selected]
     val tabContent = when (tabName) {
@@ -2982,8 +3211,16 @@ private fun getPanelTabButtonsAndContent(user: User, tabs: List<String>): Pair<S
     return Pair(tabButtons, tabContent)
 }
 
+private fun getNotificationButtonWrapHtml(): String {
+    val unreadCount = (appState.notifications.size - appState.notificationsReadCount).coerceAtLeast(0)
+    val showBadge = !appState.notificationsViewOpen && unreadCount > 0
+    val badgeHtml = if (showBadge) """<span class="sd-notif-badge">${if (unreadCount > 99) "99+" else unreadCount.toString()}</span>""" else ""
+    return """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>$badgeHtml"""
+}
+
 private fun renderPanel(user: User, roleTitle: String, tabs: List<String>): String {
     val (tabButtons, tabContent) = getPanelTabButtonsAndContent(user, tabs)
+    val notifWrapHtml = getNotificationButtonWrapHtml()
     return """
         <header class="sd-header sd-panel-header">
             <div class="sd-header-text">
@@ -2991,7 +3228,7 @@ private fun renderPanel(user: User, roleTitle: String, tabs: List<String>): Stri
                 <p>${formatShortName(user.fullName)} · ${user.email}</p>
             </div>
             <button type="button" id="sd-btn-notifications" class="sd-btn sd-btn-notifications" title="Уведомления" aria-label="Уведомления">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                <span class="sd-btn-notif-wrap">$notifWrapHtml</span>
             </button>
             <button type="button" id="sd-btn-signout" class="sd-btn sd-btn-signout" title="Выйти">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18">
@@ -3100,6 +3337,7 @@ private fun forceFullPanelRender(root: org.w3c.dom.Element, useExamContent: Bool
     }
     val (tabButtons, tabContentFromTabs) = getPanelTabButtonsAndContent(user, tabs)
     val tabContent = if (useExamContent) renderTicketsTabContent() else tabContentFromTabs
+    val notifWrapHtml = getNotificationButtonWrapHtml()
     val panelHtml = """
         <header class="sd-header sd-panel-header">
             <div class="sd-header-text">
@@ -3107,7 +3345,7 @@ private fun forceFullPanelRender(root: org.w3c.dom.Element, useExamContent: Bool
                 <p>${formatShortName(user.fullName)} · ${user.email}</p>
             </div>
             <button type="button" id="sd-btn-notifications" class="sd-btn sd-btn-notifications" title="Уведомления" aria-label="Уведомления">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                <span class="sd-btn-notif-wrap">$notifWrapHtml</span>
             </button>
             <button type="button" id="sd-btn-signout" class="sd-btn sd-btn-signout" title="Выйти">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18">
@@ -3163,6 +3401,7 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             } catch (_: Throwable) { null }
         }
         if (appState.user?.role == "instructor" || appState.user?.role == "cadet") {
+            unlockCadetNotificationAudio()
             val pddExamBack = closest(".sd-pdd-exam-back")
             if (pddExamBack != null) {
                 val examStartMs = appState.pddExamStartTimeMs ?: 0.0
@@ -3589,7 +3828,7 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
         }
         val tabBtn = closest(".sd-tab")
         if (tabBtn != null) {
-            if (appState.user?.role == "cadet") unlockCadetNotificationAudio()
+            if (appState.user?.role == "instructor" || appState.user?.role == "cadet") unlockCadetNotificationAudio()
             val idx = tabBtn.getAttribute("data-tab")?.toIntOrNull() ?: return@addEventListener
             var newbiesOpen = appState.adminNewbiesSectionOpen
             var instOpen = appState.adminInstructorsSectionOpen
@@ -3617,6 +3856,8 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                 saveChatScrollForCurrentContact()
                 updateState { selectedChatContactId = null; chatMessages = emptyList() }
                 unsubscribeChat()
+            } else {
+                unlockChatNotificationAudio()
             }
             val nOpen = newbiesOpen
             val iOpen = instOpen
@@ -3669,6 +3910,7 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                         window.clearTimeout(chatTid)
                         updateState { chatContacts = list; chatContactsLoading = false }
                         subscribeChatPresence(list.map { it.id })
+                        subscribeChatNotifications(user.id, list)
                     }
                 }
                 else -> { }
@@ -3785,9 +4027,16 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             val uid = appState.user?.id ?: return@addEventListener
             saveChatScrollForCurrentContact()
             updateState { selectedChatContactId = contactId; chatMessages = emptyList() }
+            clearChatUnread(uid, contactId)
             unsubscribeChat()
             subscribeMessages(chatRoomId(uid, contactId)) { list ->
+                val prevSize = appState.chatMessages.size
                 updateState { chatMessages = list }
+                val toMarkRead = list.filter { it.senderId == contactId }.map { it.id }
+                if (toMarkRead.isNotEmpty()) markMessagesAsRead(chatRoomId(uid, contactId), toMarkRead)
+                if (prevSize > 0 && list.size > prevSize && list.lastOrNull()?.senderId != uid) playChatMessageSound()
+                list.lastOrNull()?.timestamp?.let { ts -> setChatLastSeenMs(uid, contactId, ts) }
+                updateState { if (chatUnreadCounts.containsKey(contactId)) chatUnreadCounts = chatUnreadCounts - contactId }
                 window.setTimeout({ applyScrollForChat(contactId) }, 100)
             }
             e.preventDefault(); e.stopPropagation()
@@ -3799,9 +4048,16 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             val uid = appState.user?.id ?: return@addEventListener
             saveChatScrollForCurrentContact()
             updateState { selectedTabIndex = 2; selectedChatContactId = contactId; chatMessages = emptyList() }
+            clearChatUnread(uid, contactId)
             unsubscribeChat()
             subscribeMessages(chatRoomId(uid, contactId)) { list ->
+                val prevSize = appState.chatMessages.size
                 updateState { chatMessages = list }
+                val toMarkRead = list.filter { it.senderId == contactId }.map { it.id }
+                if (toMarkRead.isNotEmpty()) markMessagesAsRead(chatRoomId(uid, contactId), toMarkRead)
+                if (prevSize > 0 && list.size > prevSize && list.lastOrNull()?.senderId != uid) playChatMessageSound()
+                list.lastOrNull()?.timestamp?.let { ts -> setChatLastSeenMs(uid, contactId, ts) }
+                updateState { if (chatUnreadCounts.containsKey(contactId)) chatUnreadCounts = chatUnreadCounts - contactId }
                 window.setTimeout({ applyScrollForChat(contactId) }, 100)
             }
             e.preventDefault(); e.stopPropagation()
@@ -3813,9 +4069,16 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             val uid = appState.user?.id ?: return@addEventListener
             saveChatScrollForCurrentContact()
             updateState { selectedTabIndex = 2; selectedChatContactId = contactId; chatMessages = emptyList() }
+            clearChatUnread(uid, contactId)
             unsubscribeChat()
             subscribeMessages(chatRoomId(uid, contactId)) { list ->
+                val prevSize = appState.chatMessages.size
                 updateState { chatMessages = list }
+                val toMarkRead = list.filter { it.senderId == contactId }.map { it.id }
+                if (toMarkRead.isNotEmpty()) markMessagesAsRead(chatRoomId(uid, contactId), toMarkRead)
+                if (prevSize > 0 && list.size > prevSize && list.lastOrNull()?.senderId != uid) playChatMessageSound()
+                list.lastOrNull()?.timestamp?.let { ts -> setChatLastSeenMs(uid, contactId, ts) }
+                updateState { if (chatUnreadCounts.containsKey(contactId)) chatUnreadCounts = chatUnreadCounts - contactId }
                 window.setTimeout({ applyScrollForChat(contactId) }, 100)
             }
             e.preventDefault(); e.stopPropagation()
@@ -3839,12 +4102,21 @@ private fun attachListeners(root: org.w3c.dom.Element) {
     document.getElementById("sd-chat-stop-loading")?.addEventListener("click", {
         updateState { chatContactsLoading = false }
     })
+    document.getElementById("sd-chat-settings-btn")?.addEventListener("click", {
+        val tabs = when (appState.screen) {
+            AppScreen.Instructor, AppScreen.Cadet -> listOf("Главная", "Запись", "Чат", "Билеты", "История", "Настройки")
+            else -> return@addEventListener
+        }
+        val settingsIndex = tabs.indexOf("Настройки").coerceAtLeast(0)
+        updateState { selectedTabIndex = settingsIndex }
+    })
     document.getElementById("sd-chat-refresh")?.addEventListener("click", {
         val u = appState.user ?: return@addEventListener
         updateState { chatContacts = emptyList(); chatContactsLoading = true }
         getUsersForChat(u) { list ->
             updateState { chatContacts = list; chatContactsLoading = false }
             subscribeChatPresence(list.map { it.id })
+            subscribeChatNotifications(u.id, list)
         }
     })
     document.getElementById("sd-admin-home-load")?.addEventListener("click", {
@@ -4010,6 +4282,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                             window.clearTimeout(chatTid)
                             updateState { chatContacts = list; chatContactsLoading = false }
                             subscribeChatPresence(list.map { it.id })
+                            subscribeChatNotifications(uid, list)
                         }
                     }
                 }
@@ -4106,7 +4379,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                                 getBalanceHistory(usr.id) { hist ->
                                     window.clearTimeout(tid)
                                     updateState { historyUsers = list; historySessions = sess; historyBalance = hist; historyLoading = false }
-                                    notifyNewBalanceOpsForUser(usr.id, hist, list)
+                                    notifyNewBalanceOpsForCurrentUser(hist, list)
                                 }
                             }
                         }
@@ -4121,7 +4394,12 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                                 getBalanceHistory(usr.id) { hist ->
                                     window.clearTimeout(tid)
                                     updateState { historyUsers = list; historySessions = sess; historyBalance = hist; historyLoading = false }
-                                    notifyNewBalanceOpsForUser(usr.id, hist, list)
+                                    // Обновляем объект текущего пользователя, чтобы сразу подтянуть новый баланс
+                                    val self = list.find { it.id == usr.id }
+                                    if (self != null) {
+                                        updateState { user = self }
+                                    }
+                                    notifyNewBalanceOpsForCurrentUser(hist, list)
                                 }
                             }
                         }
@@ -4178,7 +4456,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                         val merged = (loaded + appState.notifications)
                             .distinctBy { "${it.dateTimeMs}_${it.text}" }
                             .sortedByDescending { it.dateTimeMs }
-                        updateState { notifications = merged; notificationsViewOpen = true }
+                        updateState { notifications = merged; notificationsViewOpen = true; notificationsReadCount = merged.size }
                     })
                 }
                 document.getElementById("sd-notif-back")?.addEventListener("click", {
@@ -4190,6 +4468,22 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     }
                 }
             if (usr.role == "instructor") {
+                val needInstructorRating = appState.recordingSessions.filter { it.status == "completed" && it.instructorRating == 0 }
+                if (needInstructorRating.isNotEmpty()) {
+                    val first = needInstructorRating.first()
+                    val cadetName = appState.instructorCadets.find { it.id == first.cadetId }?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "Курсант"
+                    window.setTimeout({
+                        document.getElementById("sd-instructor-rate-cadet-modal")?.let { modal ->
+                            modal.asDynamic().dataset["sessionId"] = first.id
+                            modal.classList.remove("sd-hidden")
+                        }
+                        document.getElementById("sd-instructor-rate-cadet-name")?.textContent = cadetName
+                        val rateInputs = root.querySelectorAll("input[name=sd-instructor-rate]")
+                        for (j in 0 until rateInputs.length) {
+                            (rateInputs.item(j) as? HTMLInputElement)?.checked = (j == 0)
+                        }
+                    }, 0)
+                }
                 val homeConfirmNodes = root.querySelectorAll(".sd-home-schedule-confirm")
                 for (k in 0 until homeConfirmNodes.length) {
                     val btn = homeConfirmNodes.item(k) as? org.w3c.dom.Element ?: continue
@@ -4320,6 +4614,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                                 getSessionsForInstructor(usr.id) { sess ->
                                     getBalanceHistory(usr.id) { hist ->
                                         updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                                        notifyNewBalanceOpsForCurrentUser(hist)
                                     }
                                 }
                             }
@@ -4399,6 +4694,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                                 getSessionsForInstructor(usr.id) { sess ->
                                     getBalanceHistory(usr.id) { hist ->
                                         updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                                        notifyNewBalanceOpsForCurrentUser(hist)
                                     }
                                 }
                             }
@@ -4442,6 +4738,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                                     getBalanceHistory(usr.id) { hist ->
                                         updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
                                         getCurrentUser { newUser, _ -> if (newUser != null) updateState { user = newUser } }
+                                        notifyNewBalanceOpsForCurrentUser(hist)
                                     }
                                 }
                             }
@@ -4645,6 +4942,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                             getSessionsForInstructor(usr.id) { sess ->
                                 getBalanceHistory(usr.id) { hist ->
                                     updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                                    notifyNewBalanceOpsForCurrentUser(hist)
                                 }
                             }
                         }
@@ -4823,6 +5121,163 @@ private fun attachListeners(root: org.w3c.dom.Element) {
             document.getElementById("sd-settings-sound-notifications")?.addEventListener("change", {
                 val cb = document.getElementById("sd-settings-sound-notifications") as? HTMLInputElement ?: return@addEventListener
                 setSoundNotificationsEnabled(cb.checked)
+            })
+            document.getElementById("sd-settings-notification-sound")?.addEventListener("change", {
+                val sel = document.getElementById("sd-settings-notification-sound") as? HTMLSelectElement ?: return@addEventListener
+                val name = sel.value
+                try { window.asDynamic().localStorage?.setItem(NOTIFICATION_SOUND_STORAGE_KEY, name) } catch (_: Throwable) { }
+            })
+            document.getElementById("sd-settings-sound-preview")?.addEventListener("click", {
+                val sel = document.getElementById("sd-settings-notification-sound") as? HTMLSelectElement
+                val name = sel?.value ?: getNotificationSoundFilename()
+                val audio = getOrCreateCadetNotificationAudio()
+                audio.src = getResourceBaseUrl() + "sounds/" + name + ".mp3"
+                audio.currentTime = 0.0
+                audio.play()?.catch { _: dynamic -> Unit }
+            })
+            val cropState = doubleArrayOf(0.0, 0.0, 1.0) /* offsetX, offsetY, scale */
+            val cropDataUrlHolder = mutableListOf<String?>(null)
+            val updateCropImgTransform = {
+                document.getElementById("sd-avatar-crop-img")?.unsafeCast<org.w3c.dom.HTMLElement>()?.style?.setProperty(
+                    "transform", "translate(-50%,-50%) translate(${cropState[0]}px,${cropState[1]}px) scale(${cropState[2]})"
+                )
+            }
+            document.getElementById("sd-settings-avatar-file")?.addEventListener("change", { ev: dynamic ->
+                val target = ev?.target?.unsafeCast<dynamic>()
+                val getFirstFile = js("(function(f){ return f && f[0]; })").unsafeCast<(dynamic) -> dynamic>()
+                val file = getFirstFile(target?.files)
+                if (file != null) {
+                val reader = js("new FileReader()").unsafeCast<dynamic>()
+                reader.onload = {
+                    val dataUrl = reader.result as? String
+                    if (dataUrl != null) {
+                    cropDataUrlHolder[0] = dataUrl
+                    val editor = document.getElementById("sd-avatar-crop-editor")?.unsafeCast<org.w3c.dom.HTMLElement>()
+                    val cropImg = document.getElementById("sd-avatar-crop-img")?.unsafeCast<org.w3c.dom.HTMLImageElement>()
+                    val frame = document.getElementById("sd-avatar-crop-frame")
+                    val scaleInput = document.getElementById("sd-avatar-crop-scale") as? HTMLInputElement
+                    if (editor != null && cropImg != null && frame != null) {
+                        editor.classList.remove("sd-hidden")
+                        cropImg.src = dataUrl
+                        cropImg.onload = {
+                            val nw = cropImg.naturalWidth.toDouble().coerceAtLeast(1.0)
+                            val nh = cropImg.naturalHeight.toDouble().coerceAtLeast(1.0)
+                            val coverScale = (200.0 / nw).coerceAtLeast(200.0 / nh)
+                            cropState[0] = 0.0
+                            cropState[1] = 0.0
+                            cropState[2] = coverScale
+                            scaleInput?.value = coverScale.toString()
+                            scaleInput?.setAttribute("value", coverScale.toString())
+                            updateCropImgTransform()
+                        }
+                    }
+                    }
+                }
+                reader.readAsDataURL(file)
+                }
+            })
+            document.getElementById("sd-avatar-crop-scale")?.addEventListener("input", {
+                val input = document.getElementById("sd-avatar-crop-scale") as? HTMLInputElement ?: return@addEventListener
+                val v = input.value.toDoubleOrNull() ?: 1.0
+                cropState[2] = v.coerceIn(0.5, 2.0)
+                updateCropImgTransform()
+            })
+            var cropDragStartX = 0.0
+            var cropDragStartY = 0.0
+            var cropDragOffsetStartX = 0.0
+            var cropDragOffsetStartY = 0.0
+            var cropDragging = false
+            fun getClientXY(e: dynamic): Pair<Double, Double> {
+                val tx = (e?.touches?.get(0) ?: e)?.clientX as? Number
+                val ty = (e?.touches?.get(0) ?: e)?.clientY as? Number
+                return Pair((tx?.toDouble() ?: (e?.clientX as? Number)?.toDouble() ?: 0.0), (ty?.toDouble() ?: (e?.clientY as? Number)?.toDouble() ?: 0.0))
+            }
+            document.getElementById("sd-avatar-crop-frame")?.addEventListener("mousedown", { e: dynamic ->
+                cropDragging = true
+                val (x, y) = getClientXY(e)
+                cropDragStartX = x
+                cropDragStartY = y
+                cropDragOffsetStartX = cropState[0]
+                cropDragOffsetStartY = cropState[1]
+                e?.preventDefault?.invoke()
+            })
+            document.getElementById("sd-avatar-crop-frame")?.addEventListener("touchstart", { e: dynamic ->
+                cropDragging = true
+                val (x, y) = getClientXY(e)
+                cropDragStartX = x
+                cropDragStartY = y
+                cropDragOffsetStartX = cropState[0]
+                cropDragOffsetStartY = cropState[1]
+                e?.preventDefault?.invoke()
+            })
+            root.addEventListener("mousemove", { e: dynamic ->
+                if (!cropDragging) return@addEventListener
+                val (x, y) = getClientXY(e)
+                cropState[0] = cropDragOffsetStartX + (x - cropDragStartX)
+                cropState[1] = cropDragOffsetStartY + (y - cropDragStartY)
+                updateCropImgTransform()
+            })
+            root.addEventListener("touchmove", { e: dynamic ->
+                if (!cropDragging) return@addEventListener
+                val (x, y) = getClientXY(e)
+                cropState[0] = cropDragOffsetStartX + (x - cropDragStartX)
+                cropState[1] = cropDragOffsetStartY + (y - cropDragStartY)
+                updateCropImgTransform()
+                e?.preventDefault?.invoke()
+            })
+            root.addEventListener("mouseup", { _: dynamic -> cropDragging = false })
+            root.addEventListener("touchend", { _: dynamic -> cropDragging = false })
+            document.getElementById("sd-avatar-crop-apply")?.addEventListener("click", {
+                val dataUrl = cropDataUrlHolder[0] ?: return@addEventListener
+                val cropImg = document.getElementById("sd-avatar-crop-img") as? org.w3c.dom.HTMLImageElement ?: return@addEventListener
+                if (cropImg.naturalWidth == 0) return@addEventListener
+                val canvas = document.createElement("canvas").unsafeCast<org.w3c.dom.HTMLCanvasElement>()
+                val size = 200
+                canvas.width = size
+                canvas.height = size
+                val ctx = canvas.getContext("2d")?.unsafeCast<dynamic>() ?: return@addEventListener
+                ctx.beginPath()
+                ctx.arc(size / 2.0, size / 2.0, size / 2.0, 0.0, 6.283185307179586)
+                ctx.closePath()
+                ctx.clip()
+                val scale = cropState[2]
+                val ox = cropState[0]
+                val oy = cropState[1]
+                ctx.translate(size / 2.0 + ox, size / 2.0 + oy)
+                ctx.scale(scale, scale)
+                ctx.drawImage(cropImg, -cropImg.naturalWidth / 2.0, -cropImg.naturalHeight / 2.0, cropImg.naturalWidth.toDouble(), cropImg.naturalHeight.toDouble())
+                val resultDataUrl = canvas.toDataURL("image/png")
+                setChatAvatarDataUrl(usr.id, resultDataUrl)
+                document.getElementById("sd-avatar-crop-editor")?.unsafeCast<org.w3c.dom.HTMLElement>()?.classList?.add("sd-hidden")
+                cropDataUrlHolder[0] = null
+                val preview = document.getElementById("sd-settings-avatar-preview") ?: return@addEventListener
+                preview.querySelector(".sd-settings-avatar-placeholder")?.remove()
+                var img = preview.querySelector(".sd-settings-avatar-img") as? org.w3c.dom.HTMLElement
+                if (img == null) {
+                    img = document.createElement("img").unsafeCast<org.w3c.dom.HTMLElement>()
+                    img.className = "sd-settings-avatar-img"
+                    img.setAttribute("alt", "")
+                    img.id = "sd-settings-avatar-img"
+                    preview.appendChild(img)
+                }
+                img.setAttribute("src", resultDataUrl)
+                updateState { }
+            })
+            document.getElementById("sd-avatar-crop-cancel")?.addEventListener("click", {
+                document.getElementById("sd-avatar-crop-editor")?.unsafeCast<org.w3c.dom.HTMLElement>()?.classList?.add("sd-hidden")
+                cropDataUrlHolder[0] = null
+                document.getElementById("sd-settings-avatar-file")?.let { it.unsafeCast<dynamic>().value = "" }
+            })
+            document.getElementById("sd-settings-avatar-remove")?.addEventListener("click", {
+                setChatAvatarDataUrl(usr.id, null)
+                val preview = document.getElementById("sd-settings-avatar-preview") ?: return@addEventListener
+                preview.querySelector(".sd-settings-avatar-img")?.remove()
+                val placeholder = document.createElement("span").unsafeCast<org.w3c.dom.HTMLElement>()
+                placeholder.className = "sd-settings-avatar-placeholder"
+                placeholder.id = "sd-settings-avatar-placeholder"
+                placeholder.textContent = usr.fullName.split(" ").filter { it.isNotBlank() }.take(2).joinToString("") { it.first().uppercase() }.ifBlank { "?" }
+                preview.appendChild(placeholder)
+                updateState { }
             })
             }
         }

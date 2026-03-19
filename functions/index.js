@@ -1,11 +1,16 @@
 const { onValueCreated } = require("firebase-functions/v2/database");
 const { onDocumentUpdated, onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
+const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
+const { getStorage } = require("firebase-admin/storage");
 
 initializeApp();
+
+const STORAGE_BUCKET = "startdrive-573fa.firebasestorage.app";
+const AVATAR_PATH = (uid) => `users/${uid}/chat_avatar.png`;
 
 const AUTO_START_WAIT_MS = 5 * 60 * 1000;
 
@@ -201,5 +206,79 @@ exports.onBalanceHistoryCreated = onDocumentCreated(
         notification: { sound: "default", channelId: "startdrive_balance" },
       },
     });
+  }
+);
+
+// ——— Один раз: установить CORS для Storage (чтобы загрузка аватара с веба работала)
+const STORAGE_CORS = [
+  {
+    origin: ["*"],
+    method: ["GET", "HEAD", "PUT", "POST", "OPTIONS", "DELETE"],
+    responseHeader: ["Content-Type", "Content-Length", "x-goog-resumable", "x-goog-meta-*"],
+    maxAgeSeconds: 3600,
+  },
+];
+
+exports.setStorageCors = onRequest(
+  { region: "europe-west1" },
+  async (req, res) => {
+    try {
+      const bucket = getStorage().bucket();
+      await bucket.setCorsConfiguration(STORAGE_CORS);
+      res.status(200).json({ ok: true, message: "CORS для Storage установлен." });
+    } catch (err) {
+      console.error("setStorageCors:", err);
+      res.status(500).json({ ok: false, error: (err && err.message) || "Ошибка" });
+    }
+  }
+);
+
+// Загрузка аватара через Callable — обходит CORS (браузер обращается к функции, не к Storage).
+exports.uploadChatAvatar = onCall(
+  {
+    region: "europe-west1",
+    cors: true, // разрешить вызов с localhost и любого origin (Callable с авторизацией)
+  },
+  async (request) => {
+    if (!request.auth || !request.auth.uid) {
+      throw new HttpsError("unauthenticated", "Войдите в аккаунт");
+    }
+    const uid = request.data?.uid;
+    const dataUrl = request.data?.dataUrl;
+    if (!uid || uid !== request.auth.uid || typeof dataUrl !== "string" || !dataUrl.startsWith("data:image")) {
+      throw new HttpsError("invalid-argument", "Неверные данные");
+    }
+    try {
+      const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, "");
+      const buffer = Buffer.from(base64, "base64");
+      const bucket = getStorage().bucket(STORAGE_BUCKET);
+      const file = bucket.file(AVATAR_PATH(uid));
+      await file.save(buffer, { metadata: { contentType: "image/png" } });
+
+      let url;
+      try {
+        const [signedUrl] = await file.getSignedUrl({
+          action: "read",
+          expires: Date.now() + 10 * 365 * 24 * 60 * 60 * 1000,
+        });
+        url = signedUrl;
+      } catch (signErr) {
+        // getSignedUrl часто падает без роли "Service Account Token Creator" в IAM
+        const msg = (signErr && signErr.message) || "";
+        if (signErr.code === 403 || /permission|sign|credentials/i.test(msg)) {
+          await file.makePublic();
+          url = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(file.name)}?alt=media`;
+        } else {
+          throw signErr;
+        }
+      }
+
+      const firestore = getFirestore();
+      await firestore.collection("users").doc(uid).update({ chatAvatarUrl: url });
+      return { url };
+    } catch (err) {
+      console.error("uploadChatAvatar:", err);
+      throw new HttpsError("internal", (err && err.message) || "Ошибка загрузки");
+    }
   }
 );

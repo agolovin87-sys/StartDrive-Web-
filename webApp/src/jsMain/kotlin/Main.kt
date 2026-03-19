@@ -107,6 +107,16 @@ private fun subscribeChatPresence(contactIds: List<String>) {
     }
 }
 
+/** Преобразует сырое сообщение об ошибке (например "Failed to fetch") в понятное пользователю. */
+fun friendlyNetworkError(raw: String?): String {
+    if (raw == null) return ""
+    return when {
+        raw.contains("Failed to fetch", ignoreCase = true) || raw.contains("NetworkError", ignoreCase = true) ->
+            "Нет соединения с интернетом. Проверьте подключение и повторите."
+        else -> raw
+    }
+}
+
 fun main() {
     window.onload = onload@ { _: Event ->
         val root = document.getElementById("root") ?: return@onload
@@ -117,7 +127,8 @@ fun main() {
         fun render() {
             val state = appState
             val networkBanner = state.networkError?.let { msg ->
-                """<div class="sd-network-error" id="sd-network-error"><span>$msg</span> <button type="button" id="sd-dismiss-network-error" class="sd-btn-inline">Закрыть</button></div>"""
+                val friendly = friendlyNetworkError(msg)
+                """<div class="sd-network-error" id="sd-network-error"><span>$friendly</span> <button type="button" id="sd-network-retry" class="sd-btn-inline sd-btn-inline-primary">Повторить</button> <button type="button" id="sd-dismiss-network-error" class="sd-btn-inline">Закрыть</button></div>"""
             } ?: ""
             val loadingOverlay = if (state.loading) """<div class="sd-loading-overlay" id="sd-loading-overlay"><div class="sd-spinner"></div><p>Загрузка…</p></div>""" else ""
             val panelScreen = state.screen == AppScreen.Admin || state.screen == AppScreen.Instructor || state.screen == AppScreen.Cadet
@@ -215,6 +226,7 @@ fun main() {
                     error = null
                     networkError = null
                     notifications = loadedNotifications
+                    notificationsReadCount = loadedNotifications.size
                     screen = when (user.role) {
                         "admin" -> AppScreen.Admin
                         "instructor" -> if (user.isActive) AppScreen.Instructor else AppScreen.PendingApproval
@@ -447,8 +459,15 @@ private fun renderChatTabContent(currentUser: User): String {
             val s = sec % 60
             return "$m:${s.toString().padStart(2, '0')}"
         }
-        val myAvatarDataUrl = getChatAvatarDataUrl(myId)
-        val myAvatarHtml = if (myAvatarDataUrl != null) """<div class="sd-msg-my-avatar"><img src="${myAvatarDataUrl.escapeHtml()}" alt="" class="sd-msg-avatar-img" /></div>""" else ""
+        val myAvatarUrl = appState.user?.chatAvatarUrl?.takeIf { it.isNotBlank() } ?: getChatAvatarDataUrl(myId)
+        val myInitials = appState.user?.let { it.initials().ifEmpty { "?" }.escapeHtml() } ?: "?"
+        val myAvatarBg = avatarColorForId(myId).escapeHtml()
+        val myAvatarHtml = if (myAvatarUrl != null) """<div class="sd-msg-my-avatar sd-avatar-wrap" data-initials="$myInitials" data-bg="$myAvatarBg"><img src="${myAvatarUrl.escapeHtml()}" alt="" class="sd-msg-avatar-img sd-avatar-img" decoding="async" /></div>""" else ""
+        val otherAvatarHtml = run {
+            val url = contact.chatAvatarUrl?.takeIf { it.isNotBlank() }
+            if (url != null) """<div class="sd-msg-them-avatar sd-avatar-wrap" data-initials="$contactInitials" data-bg="${contactAvatarBg}"><img src="${url.escapeHtml()}" alt="" class="sd-msg-avatar-img sd-avatar-img" decoding="async" /></div>"""
+            else """<div class="sd-msg-them-avatar" style="background:$contactAvatarBg"><span class="sd-msg-them-avatar-initials">$contactInitials</span></div>"""
+        }
         val msgsHtml = messages.joinToString("") { msg ->
             val isMe = msg.senderId == myId
             val cls = if (isMe) "sd-msg sd-msg-me" else "sd-msg sd-msg-them"
@@ -469,6 +488,7 @@ private fun renderChatTabContent(currentUser: User): String {
                 val progressPct = (progress * 100).toInt()
                 val currentStr = formatVoiceDuration((currentMs / 1000).coerceAtLeast(0).coerceAtMost(dur)).escapeHtml()
                 """<div class="$cls sd-msg-voice" data-voice-id="${msg.id.escapeHtml()}" data-voice-url="${msg.voiceUrl.escapeHtml()}" data-voice-duration="$dur">
+                    ${if (isMe) "" else otherAvatarHtml}
                     <div class="sd-msg-bubble-wrap">
                     <div class="sd-voice-player">
                         <button type="button" class="sd-voice-play-btn" title="${if (isPlaying) "Пауза" else "Воспроизвести"}" aria-label="${if (isPlaying) "Пауза" else "Воспроизвести"}">${if (isPlaying) iconPauseSvg else iconPlaySvg}</button>
@@ -483,7 +503,7 @@ private fun renderChatTabContent(currentUser: User): String {
                     ${if (isMe) myAvatarHtml else ""}
                 </div>"""
             } else {
-                """<div class="$cls"><div class="sd-msg-bubble-wrap"><span class="sd-msg-text">${msg.text.escapeHtml()}</span><div class="sd-msg-footer">$timeRow$statusHtml</div></div>${if (isMe) myAvatarHtml else ""}</div>"""
+                """<div class="$cls">${if (isMe) "" else otherAvatarHtml}<div class="sd-msg-bubble-wrap"><span class="sd-msg-text">${msg.text.escapeHtml()}</span><div class="sd-msg-footer">$timeRow$statusHtml</div></div>${if (isMe) myAvatarHtml else ""}</div>"""
             }
         }
         val recording = appState.chatVoiceRecording
@@ -506,7 +526,7 @@ private fun renderChatTabContent(currentUser: User): String {
             <div class="sd-chat-conversation">
                 <div class="sd-chat-header">
                     <button type="button" id="sd-chat-back" class="sd-chat-back-btn" title="Назад" aria-label="Назад">$iconBackSvg</button>
-                    <div class="sd-chat-header-avatar" style="background:$contactAvatarBg">$contactInitials</div>
+                    ${contact.chatAvatarUrl?.takeIf { it.isNotBlank() }?.let { url -> """<div class="sd-chat-header-avatar sd-avatar-wrap" data-initials="$contactInitials" data-bg="${contactAvatarBg}"><img src="${url.escapeHtml()}" alt="" class="sd-avatar-img" decoding="async" /></div>""" } ?: """<div class="sd-chat-header-avatar" style="background:$contactAvatarBg">$contactInitials</div>"""}
                     <span class="sd-chat-contact-name">${formatShortName(contact.fullName).escapeHtml()}</span>
                 </div>
                 <div class="sd-chat-messages" id="sd-chat-messages">$msgsHtml</div>
@@ -520,6 +540,9 @@ private fun renderChatTabContent(currentUser: User): String {
     fun contactRow(c: User) = run {
         val initials = c.initials().ifEmpty { "?" }.escapeHtml()
         val avatarBg = avatarColorForId(c.id).escapeHtml()
+        val contactAvatarHtml = c.chatAvatarUrl?.takeIf { it.isNotBlank() }?.let { url ->
+            """<span class="sd-chat-contact-avatar sd-avatar-wrap" data-initials="$initials" data-bg="$avatarBg"><img src="${url.escapeHtml()}" alt="" class="sd-avatar-img" decoding="async" /></span>"""
+        } ?: """<span class="sd-chat-contact-avatar" style="background:$avatarBg">$initials</span>"""
         val isOnline = appState.chatContactOnlineIds.contains(c.id)
         val onlineDot = if (isOnline) """<span class="sd-chat-contact-dot sd-chat-contact-dot-online"></span>""" else """<span class="sd-chat-contact-dot sd-chat-contact-dot-offline"></span>"""
         val roleLabel = when (c.role) { "instructor" -> "Инструктор" "cadet" -> "Курсант" "admin" -> "Администратор" else -> c.role }.escapeHtml()
@@ -529,7 +552,7 @@ private fun renderChatTabContent(currentUser: User): String {
         val unreadBadge = if (unread > 0) """<span class="sd-chat-contact-unread">${if (unread > 99) "99+" else unread.toString()}</span>""" else ""
         """<button type="button" class="sd-chat-contact" data-contact-id="${c.id.escapeHtml()}">
             <div class="sd-chat-contact-avatar-wrap">
-                <span class="sd-chat-contact-avatar" style="background:$avatarBg">$initials</span>
+                $contactAvatarHtml
                 $onlineDot
             </div>
             <span class="sd-chat-contact-info">
@@ -608,12 +631,16 @@ private fun notifyNewBalanceOpsForUser(userId: String, entries: List<BalanceHist
 /** Удобный помощник: уведомления о новых операциях по балансу для текущего пользователя. */
 private fun notifyNewBalanceOpsForCurrentUser(entries: List<BalanceHistoryEntry>, users: List<User>? = null) {
     val uid = appState.user?.id ?: return
-    val userList = when {
+    val baseList = when {
         users != null && users.isNotEmpty() -> users
         appState.historyUsers.isNotEmpty() -> appState.historyUsers
         appState.user != null -> listOf(appState.user!!)
         else -> emptyList()
     }
+    val userList = if (appState.user?.role == "instructor" && appState.instructorCadets.isNotEmpty())
+        (baseList + appState.instructorCadets).distinctBy { it.id }
+    else
+        baseList
     notifyNewBalanceOpsForUser(uid, entries, userList)
 }
 
@@ -1440,7 +1467,10 @@ private fun saveNotificationsToStorage(userId: String, list: List<AppNotificatio
 private fun showNotification(text: String) {
     val now = js("Date.now()").unsafeCast<Double>().toLong()
     val newList = appState.notifications + AppNotification(dateTimeMs = now, text = text)
-    updateState { notifications = newList }
+    updateState {
+        notifications = newList
+        if (notificationsViewOpen) notificationsReadCount = newList.size
+    }
     appState.user?.id?.let { uid ->
         saveNotificationsToStorage(uid, newList)
     }
@@ -1467,17 +1497,13 @@ private fun getNotificationSoundFilename(): String =
 private fun getCadetNotificationSoundUrl(): String =
     getResourceBaseUrl() + "sounds/" + getNotificationSoundFilename() + ".mp3"
 
-/** URL звука входящего сообщения в чате (WhatsApp-style). */
-private fun getChatMessageSoundUrl(): String =
-    getResourceBaseUrl() + "sounds/chat_message.mp3"
-
-/** Один общий Audio для звука входящего сообщения в чате; разблокируется по первому клику. */
+/** Один общий Audio для звука входящего сообщения в чате; разблокируется по первому клику. Использует выбранный в настройках звук уведомлений. */
 private fun getOrCreateChatMessageAudio(): dynamic {
     if (chatMessageAudio != null && chatMessageAudio != js("undefined")) return chatMessageAudio
     val audio = document.createElement("audio").asDynamic()
     audio.preload = "auto"
     audio.volume = 0.7
-    audio.src = getChatMessageSoundUrl()
+    audio.src = getCadetNotificationSoundUrl()
     chatMessageAudio = audio
     return audio
 }
@@ -1529,11 +1555,11 @@ private fun unlockChatNotificationAudio() {
     } catch (_: Throwable) { }
 }
 
-/** Звук нового сообщения в чате: WhatsApp-style (chat_message.mp3). */
+/** Звук нового сообщения в чате: выбранный в настройках звук уведомлений. */
 private fun playChatMessageSound() {
     try {
         val audio = getOrCreateChatMessageAudio()
-        audio.src = getChatMessageSoundUrl()
+        audio.src = getCadetNotificationSoundUrl()
         audio.currentTime = 0.0
         audio.volume = 0.7
         audio.play()?.catch { _: dynamic -> Unit }
@@ -1722,13 +1748,13 @@ private fun renderAdminHomeContent(): String {
     }
     val instCards = instructors.joinToString("") { u ->
         val assignedCadets = cadets.filter { it.assignedInstructorId == u.id }.sortedBy { it.fullName }
-        val initials = u.fullName.split(" ").take(2).mapNotNull { it.firstOrNull()?.uppercase() }.joinToString("")
+        val instAvatarHtml = avatarBlockHtml("sd-ucard-avatar sd-ucard-avatar-blue", u, appState.user?.id)
         val phoneHrefInst = if (u.phone.isNotBlank()) "tel:${u.phone.escapeHtml()}" else "#"
         val phoneDisabled = if (u.phone.isBlank()) " sd-ucard-icon-btn-disabled" else ""
         """<div class="sd-ucard sd-ucard-instructor">
             <div class="sd-ucard-accent-bar"></div>
             <div class="sd-ucard-top">
-                <div class="sd-ucard-avatar sd-ucard-avatar-blue">$initials</div>
+                $instAvatarHtml
                 <div class="sd-ucard-head">
                     <p class="sd-ucard-name">${formatShortName(u.fullName).escapeHtml()}</p>
                     <span class="sd-ucard-badge sd-ucard-badge-blue">Инструктор</span>
@@ -1757,7 +1783,7 @@ private fun renderAdminHomeContent(): String {
         val displayInstText = if (instId != null) instName.escapeHtml() else "Не назначен"
         val phoneHrefCadet = if (u.phone.isNotBlank()) "tel:${u.phone.escapeHtml()}" else "#"
         val phoneDisabledCadet = if (u.phone.isBlank()) " sd-ucard-icon-btn-disabled" else ""
-        val initials = u.fullName.split(" ").take(2).mapNotNull { it.firstOrNull()?.uppercase() }.joinToString("")
+        val cadetAvatarHtml = avatarBlockHtml("sd-ucard-avatar sd-ucard-avatar-teal", u, appState.user?.id)
         val unlinkOrAssign = if (instId != null)
             """<button type="button" class="sd-ucard-tag-btn sd-ucard-tag-btn-warn sd-admin-unlink-right" data-admin-unlink-instructor="${instId.escapeHtml()}" data-admin-unlink-cadet="${u.id.escapeHtml()}" title="Отвязать инструктора">$iconUnlinkSvg</button>"""
         else
@@ -1765,7 +1791,7 @@ private fun renderAdminHomeContent(): String {
         """<div class="sd-ucard sd-ucard-cadet">
             <div class="sd-ucard-accent-bar"></div>
             <div class="sd-ucard-top">
-                <div class="sd-ucard-avatar sd-ucard-avatar-teal">$initials</div>
+                $cadetAvatarHtml
                 <div class="sd-ucard-head">
                     <p class="sd-ucard-name">${formatShortName(u.fullName).escapeHtml()}</p>
                     <span class="sd-ucard-badge sd-ucard-badge-teal">Курсант</span>
@@ -1819,10 +1845,11 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
         val svgCar = """<svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" style="opacity:0.6;flex-shrink:0"><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/></svg>"""
         val svgTicket = """<svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" style="opacity:0.6;flex-shrink:0"><path d="M22 10V6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v4c1.1 0 2 .9 2 2s-.9 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2s.9-2 2-2zm-2-1.46c-1.19.69-2 1.99-2 3.46s.81 2.77 2 3.46V18H4v-2.54c1.19-.69 2-1.99 2-3.46 0-1.48-.8-2.77-2-3.46L4 6h16v2.54z"/></svg>"""
         val phoneDisabled = if (c.phone.isBlank()) " sd-cadet-icon-btn-disabled" else ""
+        val cadetAvatarHtml = avatarBlockHtml("sd-cadet-avatar", c, user.id)
         """<div class="sd-cadet-card">
             <div class="sd-cadet-accent-bar"></div>
             <div class="sd-cadet-top">
-                <div class="sd-cadet-avatar">$initials</div>
+                $cadetAvatarHtml
                 <div class="sd-cadet-head">
                     <p class="sd-cadet-name">${(c.fullName.ifBlank { "—" }).escapeHtml()}</p>
                     <span class="sd-cadet-badge">Курсант</span>
@@ -1865,6 +1892,8 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
                     else -> "Подтверждён ($cadetNameEsc)"
                 }
                 val avatarLetter = cadetName.trim().split(" ").filter { it.isNotBlank() }.mapNotNull { it.firstOrNull()?.uppercaseChar() }.take(2).joinToString("")
+                val schCadet = cadets.find { it.id == s.cadetId }
+                val schAvatarHtml = avatarBlockHtml("sd-sch-avatar", schCadet, user.id, avatarLetter.ifBlank { "?" })
                 val showConfirm = bookedByCadet && !s.instructorConfirmed && s.status != "completed"
                 val showStart = s.status == "scheduled" && s.instructorConfirmed && !s.startRequestedByInstructor
                 val nowMs = js("Date.now()").unsafeCast<Double>().toLong()
@@ -1905,7 +1934,7 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
                     </div>"""
                 } else ""
                 """<div class="sd-schedule-card" data-session-id="${s.id.escapeHtml()}" data-start-ms="$startMs">
-                    <div class="sd-sch-avatar">${avatarLetter.escapeHtml()}</div>
+                    $schAvatarHtml
                     <div class="sd-sch-body">
                         <div class="sd-sch-name">${cadetName.escapeHtml()}</div>
                         <div class="sd-sch-dt">
@@ -1932,12 +1961,13 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
     val svgEmail = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>"""
     val svgPhoneP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>"""
     val svgTicketP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M22 10V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2s.9-2 2-2zm-2-1.46c-1.19.69-2 1.99-2 3.46s.81 2.77 2 3.46V18H4v-2.54c1.19-.69 2-1.99 2-3.46 0-1.48-.8-2.77-1.99-3.46L4 6h16v2.54z"/></svg>"""
+    val instrProfileAvatarHtml = avatarBlockHtml("sd-profile-avatar", user, user.id)
     val profileCard = """
         <div class="sd-profile-card">
             <div class="sd-profile-accent-bar"></div>
             <div class="sd-profile-card-shimmer" aria-hidden="true"></div>
             <div class="sd-profile-hero">
-                <div class="sd-profile-avatar" style="background:$instrAvatarBg">$instrInitials</div>
+                $instrProfileAvatarHtml
                 <div class="sd-profile-hero-info">
                     <p class="sd-profile-fullname">${(user.fullName.ifBlank { "—" }).escapeHtml()}</p>
                     <span class="sd-profile-role-badge">Инструктор</span>
@@ -1974,12 +2004,13 @@ private fun renderCadetHomeContent(user: User, version: String): String {
     val svgInstructor = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>"""
     val svgDriving = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/></svg>"""
     val completedDrivingsCount = (appState.recordingSessions + appState.historySessions).distinctBy { it.id }.count { it.status == "completed" }
+    val cadetProfileAvatarHtml = avatarBlockHtml("sd-profile-avatar", user, user.id)
     val profileCard = """
         <div class="sd-profile-card">
             <div class="sd-profile-accent-bar"></div>
             <div class="sd-profile-card-shimmer" aria-hidden="true"></div>
             <div class="sd-profile-hero">
-                <div class="sd-profile-avatar" style="background:$cadetAvatarBg">$cadetInitials</div>
+                $cadetProfileAvatarHtml
                 <div class="sd-profile-hero-info">
                     <p class="sd-profile-fullname">${(user.fullName.ifBlank { "—" }).escapeHtml()}</p>
                     <span class="sd-profile-role-badge">Курсант</span>
@@ -1993,6 +2024,33 @@ private fun renderCadetHomeContent(user: User, version: String): String {
                 <div class="sd-profile-info-row sd-profile-info-row-balance"><span class="sd-profile-info-icon">$svgTicketP</span><span class="sd-profile-info-label">Талоны</span><span class="sd-balance-badge">${user.balance}</span></div>
             </div>
         </div>"""
+    val instructorBlockHtml = when {
+        inst != null -> {
+            val instAvatarHtml = avatarBlockHtml("sd-cadet-avatar", inst, user.id)
+            val svgChat = """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>"""
+            val svgPhone = """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.6 1.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.77a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.02z"/></svg>"""
+            val phoneHref = if (inst.phone.isNotBlank()) "tel:${inst.phone.escapeHtml()}" else "#"
+            val phoneDisabled = if (inst.phone.isBlank()) " sd-cadet-icon-btn-disabled" else ""
+            """<div class="sd-block sd-details-block"><h3 class="sd-block-title">Мой инструктор</h3><div class="sd-cadet-cards">
+                <div class="sd-cadet-card sd-cadet-card-instructor">
+                    <div class="sd-cadet-accent-bar"></div>
+                    <div class="sd-cadet-top">
+                        $instAvatarHtml
+                        <div class="sd-cadet-head">
+                            <p class="sd-cadet-name">${(inst.fullName.ifBlank { "—" }).escapeHtml()}</p>
+                            <span class="sd-cadet-badge sd-instructor-badge">Инструктор</span>
+                        </div>
+                        <div class="sd-cadet-quick">
+                            <button type="button" class="sd-cadet-icon-btn sd-cadet-chat-btn" data-contact-id="${inst.id.escapeHtml()}" title="Чат">$svgChat</button>
+                            <a href="$phoneHref" class="sd-cadet-icon-btn$phoneDisabled" title="Позвонить">$svgPhone</a>
+                        </div>
+                    </div>
+                </div>
+            </div></div>"""
+        }
+        user.assignedInstructorId != null -> """<div class="sd-block sd-details-block"><h3 class="sd-block-title">Мой инструктор</h3><p class="sd-loading-text">Загрузка…</p></div>"""
+        else -> """<div class="sd-block sd-details-block"><h3 class="sd-block-title">Мой инструктор</h3><p class="sd-muted">Инструктор не назначен</p></div>"""
+    }
     val loading = appState.recordingLoading
     val sessions = appState.recordingSessions.filter { it.status == "scheduled" || it.status == "inProgress" }.take(20)
     val loadingLine = if (loading) """<p class="sd-loading-text">Загрузка…</p>""" else ""
@@ -2027,6 +2085,7 @@ private fun renderCadetHomeContent(user: User, version: String): String {
     val cadetRateInstructorModalHtml = """<div class="sd-modal-overlay sd-hidden" id="sd-cadet-rate-instructor-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вождение завершено, поставьте оценку инструктору</h3><div class="sd-rate-stars" id="sd-cadet-rate-stars" data-selected="0"><span class="sd-star" data-value="1" aria-label="1">★</span><span class="sd-star" data-value="2" aria-label="2">★</span><span class="sd-star" data-value="3" aria-label="3">★</span><span class="sd-star" data-value="4" aria-label="4">★</span><span class="sd-star" data-value="5" aria-label="5">★</span></div><p class="sd-modal-actions"><button type="button" id="sd-cadet-rate-instructor-confirm" class="sd-btn sd-btn-primary">Подтвердить</button></p></div></div>"""
     return """<h2>Главная</h2>
         $profileCard
+        $instructorBlockHtml
         $loadingLine
         <div class="sd-block sd-block-schedule"><h3 class="sd-block-title">Моё вождение</h3><div class="sd-record-list">$sessList</div></div>
         $cadetRateInstructorModalHtml
@@ -2059,6 +2118,8 @@ private fun renderRecordingTabContent(user: User): String {
                     val cadetName = cadets.find { it.id == s.cadetId }?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "Курсант"
                     val cadetNameEsc = cadetName.escapeHtml()
                     val avatarLetter = cadetName.firstOrNull()?.uppercaseChar()?.toString() ?: "К"
+                    val recCadet = cadets.find { it.id == s.cadetId }
+                    val recAvatarHtml = avatarBlockHtml("sd-rec-scard-avatar", recCadet, user.id, avatarLetter)
                     val dateStr = formatDateOnly(s.startTimeMillis)
                     val timeStr = formatTimeOnly(s.startTimeMillis)
                     val bookedByCadet = s.openWindowId.isNotBlank()
@@ -2075,7 +2136,7 @@ private fun renderRecordingTabContent(user: User): String {
                     val showConfirm = bookedByCadet && !s.instructorConfirmed
                     val confirmBtn = if (showConfirm) """<button type="button" class="sd-rec-confirm-btn sd-recording-confirm-session" data-session-id="${s.id.escapeHtml()}">$recCheckIco Подтвердить</button>""" else ""
                     """<div class="sd-rec-session-card">
-                        <div class="sd-rec-scard-avatar">${avatarLetter.escapeHtml()}</div>
+                        $recAvatarHtml
                         <div class="sd-rec-scard-body">
                             <div class="sd-rec-scard-name">${cadetName.escapeHtml()}</div>
                             <div class="sd-rec-scard-dt">
@@ -2445,7 +2506,7 @@ private fun renderHistoryTabContent(user: User): String {
                 <div class="sd-history-card-icon sd-history-icon-credit">$SD_ICON_CREDIT_SVG</div>
                 <div class="sd-history-card-body">
                     <div class="sd-history-balance-head"><span class="sd-history-balance-type">Зачисление</span><span class="sd-history-balance-badge">+${b.amount} талонов</span></div>
-                    <div class="sd-history-balance-row">Кем: ${performedByName(b.performedBy).escapeHtml()}</div>
+                    <div class="sd-history-balance-row">Кем: Администратор</div>
                     <div class="sd-history-balance-row">Дата и время: $dt</div>
                 </div>
             </div>"""
@@ -2956,9 +3017,10 @@ private fun renderNotificationsTabContent(user: User): String {
         val dt = formatMessageDateTime(n.dateTimeMs).replaceFirst(" ", ", ")
         """<div class="sd-notif-item"><span class="sd-notif-icon" aria-hidden="true">$SD_ICON_NOTIFICATION_SVG</span><div class="sd-notif-body"><div class="sd-notif-dt">$dt</div><div class="sd-notif-text">${n.text.escapeHtml()}</div></div></div>"""
     }
+    val countStr = if (list.isNotEmpty()) " (${list.size})" else ""
     return """<div class="sd-notif-screen">
         <div class="sd-notif-header">
-            <h2 class="sd-notif-title">Уведомления</h2>
+            <h2 class="sd-notif-title">Уведомления$countStr</h2>
             <button type="button" id="sd-notif-clear" class="sd-btn sd-btn-icon sd-notif-clear-btn" title="Очистить" aria-label="Очистить"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>
         </div>
         <div class="sd-notif-list">$listHtml</div>
@@ -2981,6 +3043,7 @@ private fun attachNotifDropdownListeners(dropdownEl: org.w3c.dom.Element) {
     })
 }
 
+/** Fallback: данные аватара из localStorage (для старых сессий). Основной источник — Firestore chatAvatarUrl (URL файла в Firebase Storage). */
 private fun getChatAvatarDataUrl(userId: String): String? =
     (window.asDynamic().localStorage?.getItem(CHAT_AVATAR_STORAGE_KEY_PREFIX + userId) as? String)?.takeIf { it.startsWith("data:") }
 
@@ -2991,8 +3054,23 @@ private fun setChatAvatarDataUrl(userId: String, dataUrl: String?) {
     } catch (_: Throwable) { }
 }
 
+/** Как в Android: аватар из Firestore (chatAvatarUrl → Storage). Инициалы при отсутствии или ошибке загрузки. */
+private fun avatarBlockHtml(wrapperClass: String, u: User?, currentUserId: String?, initialsFallback: String = "?"): String {
+    val initials = u?.fullName?.split(" ")?.filter { it.isNotBlank() }?.take(2)?.joinToString("") { it.first().uppercase() }?.ifBlank { null } ?: initialsFallback
+    val bg = if (u != null) avatarColorForId(u.id) else "hsl(0,0%,40%)"
+    val url = when {
+        u == null -> null
+        else -> u.chatAvatarUrl?.takeIf { it.isNotBlank() } ?: getChatAvatarDataUrl(u.id)
+    }
+    val initialsEsc = initials.escapeHtml()
+    return if (url != null)
+        """<div class="$wrapperClass sd-avatar-wrap" data-initials="$initialsEsc" data-bg="${bg.escapeHtml()}"><img src="${url.escapeHtml()}" alt="" class="sd-avatar-img" decoding="async" /></div>"""
+    else
+        """<div class="$wrapperClass" style="background:$bg">$initialsEsc</div>"""
+}
+
 private fun renderSettingsTabContent(user: User): String {
-    val avatarDataUrl = getChatAvatarDataUrl(user.id)
+    val avatarDataUrl = user.chatAvatarUrl?.takeIf { it.isNotBlank() } ?: getChatAvatarDataUrl(user.id)
     val avatarSection = """<div class="sd-settings-block">
        <h3 class="sd-settings-block-title">Аватар в чате</h3>
        <div class="sd-settings-avatar-wrap">
@@ -3004,20 +3082,24 @@ private fun renderSettingsTabContent(user: User): String {
          <button type="button" id="sd-settings-avatar-remove" class="sd-btn sd-btn-secondary sd-settings-avatar-remove">Удалить аватар</button>
        </div>
        <div class="sd-avatar-crop-editor sd-hidden" id="sd-avatar-crop-editor">
-         <p class="sd-settings-hint" style="margin-bottom:8px">Перетащите фото и измените масштаб. Круг — область обрезки.</p>
-         <div class="sd-avatar-crop-frame" id="sd-avatar-crop-frame">
-           <img id="sd-avatar-crop-img" class="sd-avatar-crop-img" alt="" draggable="false" />
+         <p class="sd-avatar-crop-hint">Перетащите фото и измените масштаб. В круге будет виден аватар.</p>
+         <div class="sd-avatar-crop-stage">
+           <div class="sd-avatar-crop-overlay" id="sd-avatar-crop-overlay" aria-hidden="true"></div>
+           <div class="sd-avatar-crop-frame" id="sd-avatar-crop-frame">
+             <img id="sd-avatar-crop-img" class="sd-avatar-crop-img" alt="" draggable="false" />
+           </div>
          </div>
          <div class="sd-avatar-crop-controls">
-           <label class="sd-avatar-crop-scale-label">Масштаб</label>
-           <input type="range" id="sd-avatar-crop-scale" class="sd-avatar-crop-scale" min="0.5" max="2" step="0.05" value="1" />
+           <div class="sd-avatar-crop-scale-row">
+             <span class="sd-avatar-crop-scale-label">Масштаб</span>
+             <input type="range" id="sd-avatar-crop-scale" class="sd-avatar-crop-scale" min="0.5" max="2" step="0.05" value="1" title="Масштаб" />
+           </div>
            <div class="sd-avatar-crop-buttons">
-             <button type="button" id="sd-avatar-crop-apply" class="sd-btn sd-btn-primary">Применить</button>
              <button type="button" id="sd-avatar-crop-cancel" class="sd-btn sd-btn-secondary">Отмена</button>
+             <button type="button" id="sd-avatar-crop-apply" class="sd-btn sd-btn-primary">Готово</button>
            </div>
          </div>
        </div>
-       <p class="sd-settings-hint">Круглая обрезка, как в приложении. Отображается в чате.</p>
        </div>"""
     val soundBlock = if (user.role in listOf("cadet", "instructor", "admin")) {
         val checked = getSoundNotificationsEnabled() == true
@@ -3033,19 +3115,13 @@ private fun renderSettingsTabContent(user: User): String {
            <label class="sd-settings-checkbox"><input type="checkbox" id="sd-settings-sound-notifications" ${if (checked) "checked" else ""} /> Включить звук уведомлений</label>
            <p style="margin-top:12px">Звук уведомлений:</p>
            <select id="sd-settings-notification-sound" class="sd-input sd-settings-sound-select">$soundOptionsHtml</select>
-           <button type="button" id="sd-settings-sound-preview" class="sd-btn sd-btn-secondary" style="margin-top:8px">Прослушать</button>
+           <button type="button" id="sd-settings-sound-preview" class="sd-btn sd-btn-icon sd-settings-sound-preview-btn" title="Прослушать" aria-label="Прослушать" style="margin-top:8px">$iconPlaySvg</button>
            $allowBtnHtml
            </div>"""
     } else ""
     return """<h2>Настройки</h2>
-       <label>ФИО</label><input type="text" id="sd-settings-fullName" class="sd-input" value="${user.fullName.escapeHtml()}" />
-       <label>Телефон</label><input type="tel" id="sd-settings-phone" class="sd-input" value="${user.phone.escapeHtml()}" />
-       <button type="button" id="sd-settings-save" class="sd-btn sd-btn-primary">Сохранить профиль</button>
        $avatarSection
-       $soundBlock
-       <div class="sd-settings-block"><p style="margin-top:16px">Сменить пароль:</p>
-       <label>Новый пароль</label><input type="password" id="sd-settings-newpassword" class="sd-input" placeholder="мин. 6 символов" />
-       <button type="button" id="sd-settings-password" class="sd-btn sd-btn-secondary">Сменить пароль</button></div>"""
+       $soundBlock"""
 }
 
 private fun renderBalanceTabContent(user: User): String {
@@ -3058,12 +3134,12 @@ private fun renderBalanceTabContent(user: User): String {
     val instructors = users.filter { it.role == "instructor" }
     val cadets = users.filter { it.role == "cadet" }
     val balanceCardHtml = { u: User ->
-        val initials = u.fullName.split(" ").take(2).mapNotNull { it.firstOrNull()?.uppercase() }.joinToString("")
         val roleClass = if (u.role == "instructor") "sd-bcard-instructor" else "sd-bcard-cadet"
         val avatarClass = if (u.role == "instructor") "sd-ucard-avatar-blue" else "sd-ucard-avatar-teal"
         val selectedClass = if (u.id == selectedId) " sd-bcard-selected" else ""
+        val bcardAvatarHtml = avatarBlockHtml("sd-ucard-avatar $avatarClass", u, appState.user?.id)
         """<div class="sd-bcard $roleClass$selectedClass">
-            <div class="sd-ucard-avatar $avatarClass">$initials</div>
+            $bcardAvatarHtml
             <div class="sd-bcard-info">
                 <p class="sd-bcard-name">${formatShortName(u.fullName).escapeHtml()}</p>
                 <span class="sd-bcard-balance">$iconTicketSvg ${u.balance} талонов</span>
@@ -3078,7 +3154,7 @@ private fun renderBalanceTabContent(user: User): String {
         val cardCls = if (isInst) "sd-balance-sel-instructor" else "sd-balance-sel-cadet"
         val avatarCls = if (isInst) "sd-ucard-avatar-blue" else "sd-ucard-avatar-teal"
         val roleLabel = if (isInst) "Инструктор" else "Курсант"
-        val initials = selectedUser.fullName.split(" ").take(2).mapNotNull { it.firstOrNull()?.uppercase() }.joinToString("")
+        val selAvatarHtml = avatarBlockHtml("sd-ucard-avatar $avatarCls", selectedUser, appState.user?.id)
         val shortName = formatShortName(selectedUser.fullName).escapeHtml()
         val bal = selectedUser.balance
         fun ticketWord(n: Int) = when {
@@ -3089,7 +3165,7 @@ private fun renderBalanceTabContent(user: User): String {
         }
         """<div class="sd-balance-sel $cardCls" id="sd-balance-selected-block">
             <div class="sd-balance-sel-top">
-                <div class="sd-ucard-avatar $avatarCls">$initials</div>
+                $selAvatarHtml
                 <div class="sd-balance-sel-info">
                     <p class="sd-balance-sel-name">$shortName</p>
                     <span class="sd-balance-sel-role">$roleLabel</span>
@@ -3160,10 +3236,13 @@ private fun getTabBadgeCount(tabName: String, user: User): Int {
             }
             else -> 0
         }
-        "Запись", "Запись на вождение" -> when (user.role) {
-            "instructor" -> appState.recordingSessions.count { it.status == "scheduled" || it.status == "inProgress" }
-            "cadet" -> appState.recordingSessions.count { it.cadetId == user.id && (it.status == "scheduled" || it.status == "inProgress") } + appState.recordingOpenWindows.count { it.status == "free" }
-            else -> 0
+        "Запись", "Запись на вождение" -> {
+            val raw = when (user.role) {
+                "instructor" -> appState.recordingSessions.count { it.status == "scheduled" || it.status == "inProgress" }
+                "cadet" -> appState.recordingSessions.count { it.cadetId == user.id && (it.status == "scheduled" || it.status == "inProgress") } + appState.recordingOpenWindows.count { it.status == "free" }
+                else -> 0
+            }
+            (raw - appState.recordingTabBadgeBaseline).coerceAtLeast(0)
         }
         "Чат" -> appState.chatUnreadCounts.values.sum()
         "История", "Баланс", "Билеты", "Настройки" -> 0
@@ -3181,7 +3260,7 @@ private fun getPanelTabButtonsAndContent(user: User, tabs: List<String>): Pair<S
         "Чат"      to """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>""",
         "История"  to """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>""",
         "Запись"   to """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>""",
-        "Билеты"   to """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>""",
+        "Билеты"   to """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2"/><path d="M13 17v2"/><path d="M13 11v2"/></svg>""",
         "Настройки" to """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>"""
     )
     val tabButtons = tabs.mapIndexed { i, name ->
@@ -3321,7 +3400,8 @@ private fun runPddExam(examCat: String, root: org.w3c.dom.Element) {
 private fun forceFullPanelRender(root: org.w3c.dom.Element, useExamContent: Boolean = false) {
     val user = appState.user ?: return
     val networkBanner = appState.networkError?.let { msg ->
-        """<div class="sd-network-error" id="sd-network-error"><span>$msg</span> <button type="button" id="sd-dismiss-network-error" class="sd-btn-inline">Закрыть</button></div>"""
+        val friendly = friendlyNetworkError(msg)
+        """<div class="sd-network-error" id="sd-network-error"><span>$friendly</span> <button type="button" id="sd-network-retry" class="sd-btn-inline sd-btn-inline-primary">Повторить</button> <button type="button" id="sd-dismiss-network-error" class="sd-btn-inline">Закрыть</button></div>"""
     } ?: ""
     val loadingOverlay = if (appState.loading) """<div class="sd-loading-overlay" id="sd-loading-overlay"><div class="sd-spinner"></div><p>Загрузка…</p></div>""" else ""
     val roleTitle = when (appState.screen) {
@@ -3863,6 +3943,13 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             val iOpen = instOpen
             val cOpen = cadetsOpen
             val myCadetsOpenVal = instructorMyCadetsOpen
+            val recordingBaseline = if (idx == 1 && (appState.user?.role == "instructor" || appState.user?.role == "cadet")) {
+                when (appState.user?.role) {
+                    "instructor" -> appState.recordingSessions.count { it.status == "scheduled" || it.status == "inProgress" }
+                    "cadet" -> appState.recordingSessions.count { it.cadetId == appState.user?.id && (it.status == "scheduled" || it.status == "inProgress") } + appState.recordingOpenWindows.count { it.status == "free" }
+                    else -> 0
+                }
+            } else null
             updateState {
                 selectedTabIndex = idx
                 notificationsViewOpen = false
@@ -3871,6 +3958,7 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                 balanceAdminLoading = false
                 chatContactsLoading = false
                 adminHomeLoading = false
+                if (recordingBaseline != null) recordingTabBadgeBaseline = recordingBaseline
                 if (appState.user?.role == "admin" && idx != 0) {
                     adminNewbiesSectionOpen = nOpen
                     adminInstructorsSectionOpen = iOpen
@@ -3903,7 +3991,11 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                         }
                     }
                 }
-                2 -> if (appState.chatContacts.isEmpty() && !appState.chatContactsLoading) {
+                2 -> {
+                    getAppConfigChatShowOtherAvatars { showOther ->
+                        updateState { chatShowOtherAvatars = showOther }
+                    }
+                    // Всегда обновляем контакты при открытии вкладки Чат, чтобы подтянуть актуальные аватары (инструктор/курсант)
                     updateState { chatContactsLoading = true }
                     val chatTid = window.setTimeout({ updateState { chatContactsLoading = false } }, 5000)
                     getUsersForChat(user) { list ->
@@ -3914,6 +4006,13 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                     }
                 }
                 else -> { }
+            }
+            // При открытии Главная/Запись всегда обновляем список пользователей (курсанты у инструктора, инструктор у курсанта), чтобы отображались загруженные аватары
+            if ((idx == 0 || idx == 1) && user.role == "instructor") {
+                getUsers { list -> updateState { instructorCadets = list.filter { user.assignedCadets.contains(it.id) } } }
+            }
+            if ((idx == 0 || idx == 1) && user.role == "cadet") {
+                user.assignedInstructorId?.let { id -> getUserById(id) { inst -> updateState { cadetInstructor = inst } } }
             }
             if ((idx == 0 || idx == 1) && (user.role == "instructor" || user.role == "cadet") && !appState.recordingLoading) {
                 updateState { recordingLoading = true }
@@ -4087,8 +4186,36 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
 }
 
 private fun attachListeners(root: org.w3c.dom.Element) {
-            document.getElementById("sd-dismiss-network-error")?.addEventListener("click", {
+    // Один раз: при ошибке загрузки аватара показываем инициалы (как в Android)
+    if (window.asDynamic().__sdAvatarErrorBound != true) {
+        window.asDynamic().__sdAvatarErrorBound = true
+        document.body?.addEventListener("error", { e: dynamic ->
+            val target = e?.target
+            if (target != null && (target as? org.w3c.dom.Element)?.classList?.contains("sd-avatar-img") == true) {
+                val img = target.unsafeCast<org.w3c.dom.Element>()
+                val wrap = img.closest(".sd-avatar-wrap") as? org.w3c.dom.Element
+                if (wrap != null) {
+                    val initials = wrap.getAttribute("data-initials") ?: "?"
+                    val bg = wrap.getAttribute("data-bg") ?: "hsl(0,0%,40%)"
+                    wrap.setAttribute("style", "background:$bg")
+                    wrap.innerHTML = initials
+                    wrap.classList.remove("sd-avatar-wrap")
+                }
+            }
+        }, true)
+    }
+    document.getElementById("sd-dismiss-network-error")?.addEventListener("click", {
         updateState { networkError = null }
+    })
+    document.getElementById("sd-network-retry")?.addEventListener("click", {
+        updateState { networkError = null }
+        val uid = appState.user?.id
+        if (uid != null) {
+            getCurrentUser { newUser, err ->
+                if (newUser != null) updateState { user = newUser }
+                if (err != null) updateState { networkError = friendlyNetworkError(err) }
+            }
+        }
     })
     document.getElementById("sd-stop-loading")?.addEventListener("click", {
         updateState { recordingLoading = false }
@@ -4591,12 +4718,44 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     val sessionId = btn.getAttribute("data-session-id") ?: continue
                     btn.addEventListener("click", {
                         document.getElementById("sd-instructor-cancel-reason-modal")?.let { modal ->
+                            val session = appState.recordingSessions.find { it.id == sessionId }
+                            val cadetConfirmed = session?.instructorConfirmed == true
+                            val now = js("Date.now()").unsafeCast<Double>().toLong()
+                            val timeReached = session?.startTimeMillis == null || now >= (session.startTimeMillis ?: 0L)
+                            val allowCadetNoShow = cadetConfirmed && timeReached
                             modal.asDynamic().dataset["sessionId"] = sessionId
-                            root.querySelector("input[name=sd-cancel-reason]")?.unsafeCast<HTMLInputElement>()?.checked = true
+                            root.querySelectorAll("input[name=sd-cancel-reason]").let { radios ->
+                                for (i in 0 until radios.length) {
+                                    val radio = radios.item(i) as? HTMLInputElement ?: continue
+                                    val isCadetNoShow = (radio.value == "Курсант не явился")
+                                    radio.unsafeCast<dynamic>().disabled = !allowCadetNoShow && isCadetNoShow
+                                    radio.checked = (allowCadetNoShow && isCadetNoShow) || (!allowCadetNoShow && radio.value == "ТС на ремонте")
+                                }
+                            }
                             modal.classList.remove("sd-hidden")
                         }
                     })
                 }
+                root.querySelector("#sd-instructor-cancel-reason-modal")?.addEventListener("change", { ev ->
+                    val target = ev.target as? HTMLInputElement ?: return@addEventListener
+                    if (target.name != "sd-cancel-reason" || target.value != "Курсант не явился") return@addEventListener
+                    val modal = document.getElementById("sd-instructor-cancel-reason-modal") ?: return@addEventListener
+                    val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
+                    val session = appState.recordingSessions.find { it.id == sessionId } ?: return@addEventListener
+                    val now = js("Date.now()").unsafeCast<Double>().toLong()
+                    val startMs = session.startTimeMillis ?: 0L
+                    val timeNotReached = startMs > 0 && now < startMs
+                    if (timeNotReached) {
+                        showNotification("Выбрать причину не возможно, еще не настало время вождения!")
+                        root.querySelector("input[name=sd-cancel-reason][value=\"ТС на ремонте\"]")?.unsafeCast<HTMLInputElement>()?.let { it.checked = true }
+                        return@addEventListener
+                    }
+                    if (session.instructorConfirmed != true) {
+                        showNotification("Выбрать причину не возможно, курсант не подтвердил вождение!")
+                        root.querySelector("input[name=sd-cancel-reason][value=\"ТС на ремонте\"]")?.unsafeCast<HTMLInputElement>()?.let { it.checked = true }
+                        return@addEventListener
+                    }
+                })
                 document.getElementById("sd-instructor-cancel-reason-confirm")?.addEventListener("click", {
                     val modal = document.getElementById("sd-instructor-cancel-reason-modal") ?: return@addEventListener
                     val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
@@ -5162,12 +5321,16 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                         cropImg.onload = {
                             val nw = cropImg.naturalWidth.toDouble().coerceAtLeast(1.0)
                             val nh = cropImg.naturalHeight.toDouble().coerceAtLeast(1.0)
-                            val coverScale = (200.0 / nw).coerceAtLeast(200.0 / nh)
+                            // В круге сразу видно всё фото целиком (contain); масштаб не больше 1 — без размытия
+                            val containScale = (200.0 / nw).coerceAtMost(200.0 / nh).coerceAtMost(1.0)
+                            cropImg.style.setProperty("width", cropImg.naturalWidth.toString() + "px")
+                            cropImg.style.setProperty("height", cropImg.naturalHeight.toString() + "px")
+                            cropImg.style.setProperty("object-fit", "none")
                             cropState[0] = 0.0
                             cropState[1] = 0.0
-                            cropState[2] = coverScale
-                            scaleInput?.value = coverScale.toString()
-                            scaleInput?.setAttribute("value", coverScale.toString())
+                            cropState[2] = containScale
+                            scaleInput?.value = containScale.toString()
+                            scaleInput?.setAttribute("value", containScale.toString())
                             updateCropImgTransform()
                         }
                     }
@@ -5176,6 +5339,9 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 reader.readAsDataURL(file)
                 }
             })
+            fun syncCropScaleSlider() {
+                (document.getElementById("sd-avatar-crop-scale") as? HTMLInputElement)?.let { it.value = cropState[2].toString(); it.setAttribute("value", cropState[2].toString()) }
+            }
             document.getElementById("sd-avatar-crop-scale")?.addEventListener("input", {
                 val input = document.getElementById("sd-avatar-crop-scale") as? HTMLInputElement ?: return@addEventListener
                 val v = input.value.toDoubleOrNull() ?: 1.0
@@ -5187,28 +5353,50 @@ private fun attachListeners(root: org.w3c.dom.Element) {
             var cropDragOffsetStartX = 0.0
             var cropDragOffsetStartY = 0.0
             var cropDragging = false
+            var cropPinching = false
+            var cropPinchStartDist = 0.0
+            var cropPinchStartScale = 0.0
             fun getClientXY(e: dynamic): Pair<Double, Double> {
                 val tx = (e?.touches?.get(0) ?: e)?.clientX as? Number
                 val ty = (e?.touches?.get(0) ?: e)?.clientY as? Number
                 return Pair((tx?.toDouble() ?: (e?.clientX as? Number)?.toDouble() ?: 0.0), (ty?.toDouble() ?: (e?.clientY as? Number)?.toDouble() ?: 0.0))
             }
+            fun getTouchDistance(e: dynamic): Double {
+                val t = e?.touches
+                if (t == null || (t.asDynamic().length as Int) < 2) return 0.0
+                val x1 = (t.asDynamic()[0].clientX as Number).toDouble()
+                val y1 = (t.asDynamic()[0].clientY as Number).toDouble()
+                val x2 = (t.asDynamic()[1].clientX as Number).toDouble()
+                val y2 = (t.asDynamic()[1].clientY as Number).toDouble()
+                return kotlin.math.sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1))
+            }
             document.getElementById("sd-avatar-crop-frame")?.addEventListener("mousedown", { e: dynamic ->
                 cropDragging = true
+                cropPinching = false
                 val (x, y) = getClientXY(e)
                 cropDragStartX = x
                 cropDragStartY = y
                 cropDragOffsetStartX = cropState[0]
                 cropDragOffsetStartY = cropState[1]
-                e?.preventDefault?.invoke()
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
             })
             document.getElementById("sd-avatar-crop-frame")?.addEventListener("touchstart", { e: dynamic ->
-                cropDragging = true
-                val (x, y) = getClientXY(e)
-                cropDragStartX = x
-                cropDragStartY = y
-                cropDragOffsetStartX = cropState[0]
-                cropDragOffsetStartY = cropState[1]
-                e?.preventDefault?.invoke()
+                val touchCount = (e?.touches?.asDynamic()?.length as? Int) ?: 0
+                if (touchCount >= 2) {
+                    cropPinching = true
+                    cropDragging = false
+                    cropPinchStartDist = getTouchDistance(e).coerceAtLeast(1.0)
+                    cropPinchStartScale = cropState[2]
+                } else {
+                    cropDragging = true
+                    cropPinching = false
+                    val (x, y) = getClientXY(e)
+                    cropDragStartX = x
+                    cropDragStartY = y
+                    cropDragOffsetStartX = cropState[0]
+                    cropDragOffsetStartY = cropState[1]
+                }
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
             })
             root.addEventListener("mousemove", { e: dynamic ->
                 if (!cropDragging) return@addEventListener
@@ -5218,15 +5406,28 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 updateCropImgTransform()
             })
             root.addEventListener("touchmove", { e: dynamic ->
-                if (!cropDragging) return@addEventListener
-                val (x, y) = getClientXY(e)
-                cropState[0] = cropDragOffsetStartX + (x - cropDragStartX)
-                cropState[1] = cropDragOffsetStartY + (y - cropDragStartY)
-                updateCropImgTransform()
-                e?.preventDefault?.invoke()
+                val touchCount = (e?.touches?.asDynamic()?.length as? Int) ?: 0
+                if (cropPinching && touchCount >= 2) {
+                    val d = getTouchDistance(e).coerceAtLeast(1.0)
+                    val newScale = (cropPinchStartScale * d / cropPinchStartDist).coerceIn(0.5, 2.0)
+                    cropState[2] = newScale
+                    syncCropScaleSlider()
+                    updateCropImgTransform()
+                    (e as? org.w3c.dom.events.Event)?.preventDefault()
+                } else if (cropDragging && touchCount >= 1) {
+                    val (x, y) = getClientXY(e)
+                    cropState[0] = cropDragOffsetStartX + (x - cropDragStartX)
+                    cropState[1] = cropDragOffsetStartY + (y - cropDragStartY)
+                    updateCropImgTransform()
+                    (e as? org.w3c.dom.events.Event)?.preventDefault()
+                }
             })
             root.addEventListener("mouseup", { _: dynamic -> cropDragging = false })
-            root.addEventListener("touchend", { _: dynamic -> cropDragging = false })
+            root.addEventListener("touchend", { e: dynamic ->
+                cropDragging = false
+                val touchCount = (e?.touches?.asDynamic()?.length as? Int) ?: 0
+                if (touchCount < 2) cropPinching = false
+            })
             document.getElementById("sd-avatar-crop-apply")?.addEventListener("click", {
                 val dataUrl = cropDataUrlHolder[0] ?: return@addEventListener
                 val cropImg = document.getElementById("sd-avatar-crop-img") as? org.w3c.dom.HTMLImageElement ?: return@addEventListener
@@ -5247,7 +5448,6 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 ctx.scale(scale, scale)
                 ctx.drawImage(cropImg, -cropImg.naturalWidth / 2.0, -cropImg.naturalHeight / 2.0, cropImg.naturalWidth.toDouble(), cropImg.naturalHeight.toDouble())
                 val resultDataUrl = canvas.toDataURL("image/png")
-                setChatAvatarDataUrl(usr.id, resultDataUrl)
                 document.getElementById("sd-avatar-crop-editor")?.unsafeCast<org.w3c.dom.HTMLElement>()?.classList?.add("sd-hidden")
                 cropDataUrlHolder[0] = null
                 val preview = document.getElementById("sd-settings-avatar-preview") ?: return@addEventListener
@@ -5261,6 +5461,21 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     preview.appendChild(img)
                 }
                 img.setAttribute("src", resultDataUrl)
+                // Аватар хранится только в Firebase Storage; URL — в Firestore (chatAvatarUrl). localStorage не используем.
+                uploadChatAvatar(usr.id, resultDataUrl) { err ->
+                    if (err != null) {
+                        updateState { networkError = err }
+                    } else {
+                        getCurrentUser { newUser, _ ->
+                            if (newUser != null) {
+                                updateState { user = newUser }
+                                newUser.chatAvatarUrl?.takeIf { it.isNotBlank() }?.let { url ->
+                                    img.setAttribute("src", url)
+                                }
+                            }
+                        }
+                    }
+                }
                 updateState { }
             })
             document.getElementById("sd-avatar-crop-cancel")?.addEventListener("click", {
@@ -5270,6 +5485,10 @@ private fun attachListeners(root: org.w3c.dom.Element) {
             })
             document.getElementById("sd-settings-avatar-remove")?.addEventListener("click", {
                 setChatAvatarDataUrl(usr.id, null)
+                removeChatAvatar(usr.id) { err ->
+                    if (err != null) updateState { networkError = err }
+                    else getCurrentUser { newUser, _ -> if (newUser != null) updateState { user = newUser } }
+                }
                 val preview = document.getElementById("sd-settings-avatar-preview") ?: return@addEventListener
                 preview.querySelector(".sd-settings-avatar-img")?.remove()
                 val placeholder = document.createElement("span").unsafeCast<org.w3c.dom.HTMLElement>()

@@ -31,6 +31,7 @@ fun getFirebaseConfig(): dynamic {
 
 private var databaseInstance: dynamic = null
 private var storageInstance: dynamic = null
+private var functionsInstance: dynamic = null
 
 fun initFirebase() {
     if (authInstance != null) return
@@ -39,6 +40,7 @@ fun initFirebase() {
     js("require('firebase/compat/firestore')")
     js("require('firebase/compat/database')")
     js("require('firebase/compat/storage')")
+    js("require('firebase/compat/functions')")
     firebaseCompat = firebase
     val config = getFirebaseConfig()
     val app = firebase.initializeApp(config)
@@ -46,6 +48,13 @@ fun initFirebase() {
     firestoreInstance = firebase.firestore(app)
     databaseInstance = firebase.database(app)
     storageInstance = firebase.storage(app)
+    // Регион europe-west1 — Callable uploadChatAvatar задеплоена там. Compat app.functions(region) может игнорировать регион, используем модульный getFunctions.
+    functionsInstance = try {
+        val getFunctionsModular = js("require('firebase/functions').getFunctions")
+        (getFunctionsModular as (dynamic, String) -> dynamic)(app, "europe-west1")
+    } catch (_: Throwable) {
+        (app.asDynamic()).functions("europe-west1")
+    }
 }
 
 /** Текущее время как Firestore Timestamp (через firebase.firestore.Timestamp). */
@@ -66,6 +75,7 @@ fun getAuth(): dynamic = authInstance
 fun getFirestore(): dynamic = firestoreInstance
 fun getDatabase(): dynamic = databaseInstance
 fun getStorage(): dynamic = storageInstance
+fun getFunctions(): dynamic? = functionsInstance
 
 /** Плейсхолдер времени сервера для Realtime Database (подставить в timestamp при записи). */
 fun getDatabaseServerTimestamp(): dynamic =
@@ -129,17 +139,19 @@ fun changePassword(newPassword: String): Promise<Unit> {
 }
 
 private fun parseUserFromDoc(doc: dynamic, d: dynamic): User {
+    val data = d?.unsafeCast<dynamic>() ?: js("{}")
     val id = doc.id as String
-    val fullName = (d?.fullName as? String) ?: ""
-    val email = (d?.email as? String) ?: ""
-    val phone = (d?.phone as? String) ?: ""
-    val role = (d?.role as? String) ?: ""
-    val balance = (d?.balance as? Number)?.toInt() ?: 0
-    val isActive = d?.isActive as? Boolean ?: false
-    val assignedInstructorId = d?.assignedInstructorId as? String
-    val assignedCadetsRaw = d?.assignedCadets
+    val fullName = (data.fullName as? String) ?: ""
+    val email = (data.email as? String) ?: ""
+    val phone = (data.phone as? String) ?: ""
+    val role = (data.role as? String) ?: ""
+    val balance = (data.balance as? Number)?.toInt() ?: 0
+    val isActive = data.isActive as? Boolean ?: false
+    val assignedInstructorId = data.assignedInstructorId as? String
+    val assignedCadetsRaw = data.assignedCadets
     val assignedCadets = (assignedCadetsRaw as? Array<*>)?.mapNotNull { it?.toString() } ?: emptyList<String>()
-    val chatAvatarUrl = d?.chatAvatarUrl as? String
+    @Suppress("UNCHECKED_CAST_TO_NATIVE_INTERFACE")
+    val chatAvatarUrl = (data["chatAvatarUrl"] as? String) ?: (data.chatAvatarUrl as? String)
     return User(
         id = id,
         fullName = fullName,
@@ -286,6 +298,88 @@ fun deleteUser(userId: String, callback: (String?) -> Unit) {
         .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
 }
 
+/** Путь к аватару пользователя в Firebase Storage (правила: storage.rules). */
+private fun chatAvatarStoragePath(uid: String): String = "users/$uid/chat_avatar.png"
+
+/** Загружает аватар: сначала через Callable (без CORS), при ошибке — напрямую в Storage. */
+fun uploadChatAvatar(uid: String, dataUrl: String, callback: (String?) -> Unit) {
+    fun friendlyMessage(msg: String): String = when {
+        msg.contains("Failed to fetch", ignoreCase = true) || msg.contains("NetworkError", ignoreCase = true) ->
+            "Нет соединения с интернетом. Проверьте сеть и повторите."
+        msg.contains("unauthenticated", ignoreCase = true) -> "Войдите в аккаунт и повторите."
+        msg.contains("invalid-argument", ignoreCase = true) -> "Неверные данные. Попробуйте другую фотографию."
+        else -> msg
+    }
+    val functions = getFunctions()
+    // Модульный getFunctions() не имеет .httpsCallable — используем модульный httpsCallable из firebase/functions
+    val callable = if (functions != null) {
+        val httpsCallableFn = js("require('firebase/functions').httpsCallable")
+        (httpsCallableFn as (dynamic, String) -> dynamic)(functions, "uploadChatAvatar")
+    } else null
+    if (callable != null) {
+        js("if(typeof console!=='undefined'&&console.log)console.log('StartDrive: загрузка аватара через Callable')")
+        val payload = kotlin.js.json("uid" to uid, "dataUrl" to dataUrl)
+        (callable as (dynamic) -> dynamic)(payload).then { _: dynamic ->
+            callback(null)
+        }.catch { e: dynamic ->
+            val code = (e?.code as? String) ?: ""
+            val msg = (e?.message as? String) ?: "Ошибка загрузки"
+            js("if(typeof console!=='undefined'&&console.error)console.error('StartDrive uploadChatAvatar callable error:', msg, e)")
+            // Не переходим на прямую загрузку — показываем реальную ошибку пользователю
+            callback(friendlyMessage("$code $msg".trim()))
+        }
+    } else {
+        js("if(typeof console!=='undefined'&&console.log)console.log('StartDrive: Callable недоступен, загрузка напрямую в Storage')")
+        uploadChatAvatarDirect(uid, dataUrl, callback)
+    }
+}
+
+/** Конвертирует data URL в Blob без fetch (чтобы не нарушать CSP connect-src). */
+private fun dataUrlToBlob(dataUrl: String): dynamic =
+    js("(function(dataUrl){ var base64 = dataUrl.replace(/^data:image\\/\\w+;base64,/, ''); var binary = atob(base64); var len = binary.length; var arr = new Uint8Array(len); for(var i=0;i<len;i++) arr[i]=binary.charCodeAt(i); return new Blob([arr], { type: 'image/png' }); })").unsafeCast<(String) -> dynamic>()(dataUrl)
+
+private fun uploadChatAvatarDirect(uid: String, dataUrl: String, callback: (String?) -> Unit) {
+    val storage = getStorage() ?: run { callback("Storage не доступен"); return }
+    val firestore = getFirestore()
+    val path = chatAvatarStoragePath(uid)
+    val storageRef = storage.ref(path)
+    val blob = dataUrlToBlob(dataUrl)
+    storageRef.put(blob, kotlin.js.json("contentType" to "image/png")).then { _: dynamic ->
+        storageRef.getDownloadURL()
+    }.then { url: dynamic ->
+        firestore.collection(FirebasePaths.USERS).doc(uid).update(kotlin.js.json("chatAvatarUrl" to (url as String)))
+    }.then { callback(null) }.catch { e: dynamic ->
+        val msg = (e?.message as? String) ?: "Ошибка загрузки аватара"
+        js("if(typeof console!=='undefined'&&console.error)console.error('StartDrive avatar upload error:', msg)")
+        val friendly = when {
+            msg.contains("Failed to fetch", ignoreCase = true) || msg.contains("NetworkError", ignoreCase = true) ->
+                "Нет соединения с интернетом. Проверьте сеть и повторите."
+            else -> msg
+        }
+        callback(friendly)
+    }
+}
+
+/** Удаляет аватар: обнуляет chatAvatarUrl в Firestore и удаляет файл из Firebase Storage.
+ * 404 при DELETE — нормально (файла могло не быть). Ошибку delete не пробрасываем. */
+fun removeChatAvatar(uid: String, callback: (String?) -> Unit) {
+    val firestore = getFirestore()
+    firestore.collection(FirebasePaths.USERS).doc(uid).update(kotlin.js.json("chatAvatarUrl" to ""))
+        .then {
+            val storage = getStorage()
+            if (storage != null) {
+                val ref = storage.ref(chatAvatarStoragePath(uid))
+                ref.delete().catch { _: dynamic -> js("undefined") }
+            } else
+                js("undefined")
+        }
+        .then { callback(null) }
+        .catch { e: Throwable ->
+            val msg = (e.asDynamic().message as? String) ?: "Ошибка"
+            callback(if (msg.contains("Failed to fetch", ignoreCase = true)) "Нет соединения с интернетом." else msg)
+        }
+}
+
 /** Подписка на статус «в сети» пользователя. Возвращает функцию отписки. */
 fun subscribePresence(userId: String, callback: (Boolean) -> Unit): () -> Unit {
     val db = getDatabase() ?: return { }
@@ -311,6 +405,18 @@ fun setPresence(userId: String, online: Boolean) {
     } else {
         ref.set(js("({ status: 'offline', lastSeen: Date.now() })"))
     }
+}
+
+/** Путь в Realtime Database для настроек приложения (чат: показывать аватары других пользователей). */
+const val APP_CONFIG_CHAT_SHOW_OTHER_AVATARS = "app_config/chat_show_other_avatars"
+
+/** Читает настройку «показывать аватары других пользователей в чате». По умолчанию true. */
+fun getAppConfigChatShowOtherAvatars(callback: (Boolean) -> Unit) {
+    val db = getDatabase() ?: run { callback(true); return }
+    db.ref(APP_CONFIG_CHAT_SHOW_OTHER_AVATARS).once("value").then { snap: dynamic ->
+        val v = snap?.`val`()
+        callback(v != false && v != "false")
+    }.catch { _: Throwable -> callback(true) }
 }
 
 fun getUsersForChat(currentUser: User, callback: (List<User>) -> Unit) {

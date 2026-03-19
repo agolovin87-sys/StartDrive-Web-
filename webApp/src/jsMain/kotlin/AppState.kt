@@ -58,6 +58,8 @@ data class AppState(
     var selectedChatContactId: String? = null,
     var chatMessages: List<ChatMessage> = emptyList(),
     var chatUnreadCounts: Map<String, Int> = emptyMap(),
+    /** Показывать аватары других пользователей в чате (настройка из Firebase: app_config/chat_show_other_avatars). */
+    var chatShowOtherAvatars: Boolean = true,
     var recordingOpenWindows: List<InstructorOpenWindow> = emptyList(),
     var recordingSessions: List<DrivingSession> = emptyList(),
     var recordingLoading: Boolean = false,
@@ -123,6 +125,8 @@ data class AppState(
     var notificationsReadCount: Int = 0,
     /** Открыт ли полноэкранный экран уведомлений по кнопке в шапке. */
     var notificationsViewOpen: Boolean = false,
+    /** Количество пунктов «Запись» (сессии/окна) при последнем входе во вкладку — бейдж вкладки обнуляется при входе. */
+    var recordingTabBadgeBaseline: Int = 0,
     /** Показать ли окно настроек звуковых уведомлений (при первом запуске курсанта). */
     var showSoundSettingsModal: Boolean = false,
     /** Пользователь дал согласие на воспроизведение звука (нажал «Разрешить звук» или «Включить» в настройках). */

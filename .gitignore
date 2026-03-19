@@ -20,3 +20,7 @@ local.properties
 kotlin-js-store/
 shared/build/
 webApp/build/
+
+# Service account key (для скрипта set-storage-cors.js)
+functions/service-account-key.json
+service-account-key.json

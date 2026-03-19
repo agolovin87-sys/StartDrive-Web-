@@ -1,6 +1,20 @@
 // Правила Storage для StartDrive (аватарки в чате и т.д.).
 // Развернуть: firebase deploy --only storage
 // Или скопировать в Firebase Console → Storage → вкладка Rules → Вставить → Опубликовать.
+//
+// ВАЖНО: загрузка аватара с веб-приложения требует CORS для бакета.
+// Иначе будет ошибка «Нет соединения с интернетом» при загрузке.
+//
+// Способ 1 — через Cloud Function (после деплоя один раз открыть URL в браузере):
+//   1. В Google Cloud Console включите API: Firebase Extensions API.
+//   2. В корне проекта: firebase deploy --only functions:setStorageCors
+//   3. Откройте в браузере URL функции (europe-west1-startdrive-573fa.cloudfunctions.net/setStorageCors).
+//
+// Способ 2 — локальный скрипт (нужны учётные данные: gcloud auth application-default login):
+//   cd functions && node scripts/set-storage-cors.js
+//
+// Способ 3 — gcloud CLI:
+//   gcloud storage buckets update gs://startdrive-573fa.appspot.com --cors-file=storage.cors.json
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {

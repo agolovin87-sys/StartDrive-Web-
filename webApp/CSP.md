@@ -13,7 +13,7 @@
 | script-src  | 'self' 'unsafe-eval' https://*.firebasedatabase.app | Свои скрипты + Firebase Realtime Database (long-polling) |
 | style-src   | 'self' 'unsafe-inline' | Свои стили + инлайн-стили в разметке |
 | img-src     | 'self' data: https: | Картинки: свои, data-URI, Firebase Storage и др. |
-| connect-src | 'self' + Firebase-домены | fetch/XHR/WebSocket: приложение и Firebase (Auth, Firestore, Realtime DB, Storage) |
+| connect-src | 'self' + Firebase + https://*.cloudfunctions.net https://*.run.app | fetch/XHR/WebSocket: приложение, Firebase (Auth, Firestore, Realtime DB, Storage), Cloud Functions (Callable) |
 | frame-src   | 'self' + firebaseapp.com, google.com | iframe для Firebase Auth и т.п. |
 
 ## Проверка

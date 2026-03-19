@@ -513,8 +513,38 @@ fun cancelByInstructor(sessionId: String, reason: String, callback: (String?) ->
                 "cancelledAt" to getFirestoreTimestampNow(),
                 "cancelReason" to reasonText
             ))
-        }.then { callback(null) }
-         .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
+        }.then {
+            // Только при причине «Курсант не явился» — списать 1 талон с курсанта и начислить инструктору. При «ТС на ремонте» и др. — просто отмена без списания.
+            val shouldTransfer = reasonText.trim() == "Курсант не явился"
+            val cadetId = session.cadetId
+            val instructorId = session.instructorId
+            if (!shouldTransfer || cadetId.isBlank() || instructorId.isBlank()) {
+                callback(null)
+                return@then js("undefined")
+            }
+            firestore.collection(FirebasePaths.USERS).doc(cadetId).get().then { doc: dynamic ->
+                val d = (doc.unsafeCast<dynamic>()).data()
+                val bal = (d?.balance as? Number)?.toInt() ?: 0
+                if (bal < 1) {
+                    // Сессию отменяем в любом случае; если талонов нет — перевод пропускаем.
+                    callback(null)
+                    return@then js("undefined")
+                }
+                updateBalance(cadetId, "debit", 1, instructorId) { err1 ->
+                    if (err1 != null) {
+                        callback(err1)
+                        return@updateBalance
+                    }
+                    updateBalance(instructorId, "credit", 1, cadetId) { err2 ->
+                        callback(err2)
+                    }
+                }
+                js("undefined")
+            }.catch { _: dynamic ->
+                callback(null)
+                js("undefined")
+            }
+        }.catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
     }
 }
 

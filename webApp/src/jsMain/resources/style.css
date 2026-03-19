@@ -365,6 +365,7 @@ body {
     height: 64px;
     min-width: 64px;
     border-radius: 50%;
+    overflow: hidden;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -375,6 +376,17 @@ body {
     box-shadow: 0 4px 14px rgba(0,0,0,0.30);
     letter-spacing: 0.5px;
     text-shadow: 0 1px 4px rgba(0,0,0,0.4);
+}
+.sd-profile-avatar .sd-avatar-img,
+.sd-cadet-avatar .sd-avatar-img,
+.sd-sch-avatar .sd-avatar-img,
+.sd-rec-scard-avatar .sd-avatar-img,
+.sd-chat-contact-avatar .sd-avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+    display: block;
 }
 .sd-profile-hero-info {
     flex: 1;
@@ -529,6 +541,7 @@ body {
     height: 46px;
     min-width: 46px;
     border-radius: 50%;
+    overflow: hidden;
     background: linear-gradient(135deg, #059669 0%, #34D399 100%);
     box-shadow: 0 0 14px rgba(52,211,153,0.5);
     color: #fff;
@@ -567,6 +580,15 @@ body {
     background: rgba(52,211,153,0.2);
     color: #6EE7B7;
     border: 1px solid rgba(52,211,153,0.35);
+}
+.sd-cadet-card-instructor .sd-cadet-accent-bar {
+    background: linear-gradient(90deg, #2563eb 0%, #3b82f6 50%, #60a5fa 100%);
+    box-shadow: 0 0 10px rgba(37,99,235,0.5);
+}
+.sd-cadet-card-instructor .sd-cadet-badge.sd-instructor-badge {
+    background: rgba(59,130,246,0.25);
+    color: #93c5fd;
+    border-color: rgba(59,130,246,0.4);
 }
 
 /* Кнопки-иконки в правом углу */
@@ -1754,7 +1776,7 @@ a.sd-cadet-icon-btn:active {
 }
 .sd-rec-session-card:hover { box-shadow: 0 4px 18px rgba(25,118,210,0.13); }
 .sd-rec-scard-avatar {
-    width: 44px; height: 44px; border-radius: 50%;
+    width: 44px; height: 44px; border-radius: 50%; overflow: hidden;
     background: linear-gradient(135deg, #42A5F5, #1565C0);
     color: #fff; font-size: 1.2rem; font-weight: 800;
     display: flex; align-items: center; justify-content: center; flex-shrink: 0;
@@ -2179,7 +2201,7 @@ a.sd-cadet-icon-btn:active {
 .sd-schedule-card:hover { box-shadow: 0 4px 18px rgba(25,118,210,0.15); }
 
 .sd-sch-avatar {
-    width: 44px; height: 44px; border-radius: 50%; flex-shrink: 0;
+    width: 44px; height: 44px; border-radius: 50%; flex-shrink: 0; overflow: hidden;
     background: linear-gradient(135deg, #42A5F5 0%, #1565C0 100%);
     color: #fff; font-size: 1rem; font-weight: 800;
     display: flex; align-items: center; justify-content: center;
@@ -2893,7 +2915,10 @@ a.sd-cadet-icon-btn:active {
 .sd-settings-avatar-img {
     width: 100%;
     height: 100%;
+    max-width: 100%;
+    max-height: 100%;
     object-fit: cover;
+    display: block;
 }
 .sd-settings-avatar-placeholder {
     font-size: 2rem;
@@ -2913,26 +2938,59 @@ a.sd-cadet-icon-btn:active {
     margin: 0;
 }
 
-/* Редактор обрезки аватара по кругу (как в Android) */
+/* Редактор обрезки аватара по кругу (как в WhatsApp) */
 .sd-avatar-crop-editor {
-    margin-top: 16px;
-    padding: 12px 0;
+    margin-top: 20px;
+    padding: 16px 0;
     border-top: 1px solid rgba(0,0,0,0.08);
 }
 .sd-avatar-crop-editor.sd-hidden {
     display: none !important;
 }
+.sd-avatar-crop-hint {
+    font-size: 0.9rem;
+    color: var(--sd-text-secondary, #666);
+    margin: 0 0 16px 0;
+    text-align: center;
+    line-height: 1.4;
+}
+/* Область с кругом и затемнением снаружи */
+.sd-avatar-crop-stage {
+    position: relative;
+    width: 280px;
+    height: 280px;
+    margin: 0 auto 20px;
+    flex-shrink: 0;
+}
+/* Затемнение вне круга (как в WhatsApp) */
+.sd-avatar-crop-overlay {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(circle at 50% 50%, transparent 100px, rgba(0,0,0,0.55) 100px);
+    pointer-events: none;
+    z-index: 1;
+}
 .sd-avatar-crop-frame {
+    position: absolute;
+    left: 50%;
+    top: 50%;
     width: 200px;
     height: 200px;
+    margin-left: -100px;
+    margin-top: -100px;
     border-radius: 50%;
     overflow: hidden;
-    position: relative;
-    background: #333;
-    margin: 0 auto 12px;
-    cursor: move;
+    background: #1a1a1a;
+    cursor: grab;
     touch-action: none;
     user-select: none;
+    z-index: 0;
+}
+.sd-avatar-crop-frame:active {
+    cursor: grabbing;
 }
 .sd-avatar-crop-img {
     position: absolute;
@@ -2943,25 +3001,40 @@ a.sd-cadet-icon-btn:active {
     object-fit: cover;
     transform-origin: center center;
     pointer-events: none;
+    -webkit-user-drag: none;
+    user-select: none;
 }
 .sd-avatar-crop-controls {
-    max-width: 280px;
+    max-width: 320px;
+    margin: 0 auto;
+}
+.sd-avatar-crop-scale-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
 }
 .sd-avatar-crop-scale-label {
-    display: block;
     font-size: 0.9rem;
-    margin-bottom: 4px;
     color: var(--sd-text-secondary, #666);
+    flex-shrink: 0;
+    min-width: 70px;
 }
 .sd-avatar-crop-scale {
-    width: 100%;
-    margin-bottom: 12px;
+    flex: 1;
+    min-width: 0;
+    height: 32px;
     accent-color: var(--sd-primary, #1976d2);
+    cursor: pointer;
 }
 .sd-avatar-crop-buttons {
     display: flex;
-    gap: 8px;
+    gap: 12px;
     flex-wrap: wrap;
+    justify-content: flex-end;
+}
+.sd-avatar-crop-buttons .sd-btn-primary {
+    min-width: 100px;
 }
 
 .sd-settings-sound-select {
@@ -3921,6 +3994,13 @@ a.sd-cadet-icon-btn:active {
 .sd-btn-inline:hover {
     background: rgba(255,255,255,0.35);
 }
+.sd-btn-inline-primary {
+    background: rgba(255,255,255,0.4);
+    font-weight: 600;
+}
+.sd-btn-inline-primary:hover {
+    background: rgba(255,255,255,0.55);
+}
 
 /* Всплывающее уведомление (toast) */
 .sd-toast {
@@ -4050,6 +4130,18 @@ a.sd-cadet-icon-btn:active {
     .sd-chat-header {
         padding-top: max(10px, env(safe-area-inset-top));
         flex-shrink: 0;
+    }
+    .sd-chat-settings-btn {
+        width: 44px;
+        height: 44px;
+        min-width: 44px;
+        min-height: 44px;
+    }
+    .sd-chat-settings-btn svg {
+        width: 22px;
+        height: 22px;
+        min-width: 22px;
+        min-height: 22px;
     }
     .sd-chat-messages {
         flex: 1 1 0;
@@ -4316,6 +4408,7 @@ a.sd-cadet-icon-btn:active {
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-shrink: 0;
 }
 
 .sd-chat-settings-btn {
@@ -4324,13 +4417,27 @@ a.sd-cadet-icon-btn:active {
     justify-content: center;
     width: 36px;
     height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+    flex-shrink: 0;
     padding: 0;
+    box-sizing: border-box;
+    aspect-ratio: 1;
     background: rgba(255,255,255,0.08);
     border: 1px solid rgba(255,255,255,0.14);
     border-radius: 50%;
     color: rgba(255,255,255,0.85);
     cursor: pointer;
     font-family: inherit;
+    touch-action: manipulation;
+}
+.sd-chat-settings-btn svg {
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    min-height: 20px;
+    flex-shrink: 0;
+    display: block;
 }
 .sd-chat-settings-btn:hover {
     background: rgba(255,255,255,0.15);
@@ -4541,6 +4648,12 @@ a.sd-cadet-icon-btn:active {
     justify-content: center;
     flex-shrink: 0;
 }
+.sd-chat-header-avatar .sd-avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
 
 .sd-chat-contact-name {
     font-size: 0.95rem;
@@ -4604,13 +4717,42 @@ a.sd-cadet-icon-btn:active {
 .sd-msg-avatar-img {
     width: 100%;
     height: 100%;
+    max-width: 100%;
+    max-height: 100%;
     object-fit: cover;
+    display: block;
 }
 .sd-msg-them {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-end;
+    gap: 6px;
     align-self: flex-start;
+    background: transparent;
+    border-radius: 0;
+    max-width: none;
+    padding: 0;
+}
+.sd-msg-them .sd-msg-bubble-wrap {
     background: #fff;
     border-radius: 14px 14px 14px 4px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+.sd-msg-them-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    overflow: hidden;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.sd-msg-them-avatar-initials {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #fff;
+    text-shadow: 0 1px 1px rgba(0,0,0,0.3);
 }
 .sd-msg-text {
     font-size: 0.93rem;

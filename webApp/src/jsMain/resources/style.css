@@ -377,11 +377,24 @@ body {
     letter-spacing: 0.5px;
     text-shadow: 0 1px 4px rgba(0,0,0,0.4);
 }
+/* Все аватары с фото: круг, обрезка по кругу */
+.sd-avatar-wrap {
+    border-radius: 50%;
+    overflow: hidden;
+}
+.sd-avatar-wrap .sd-avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    vertical-align: middle;
+}
 .sd-profile-avatar .sd-avatar-img,
 .sd-cadet-avatar .sd-avatar-img,
 .sd-sch-avatar .sd-avatar-img,
 .sd-rec-scard-avatar .sd-avatar-img,
-.sd-chat-contact-avatar .sd-avatar-img {
+.sd-chat-contact-avatar .sd-avatar-img,
+.sd-bcard .sd-avatar-wrap .sd-avatar-img {
     width: 100%;
     height: 100%;
     object-fit: cover;
@@ -2911,12 +2924,13 @@ a.sd-cadet-icon-btn:active {
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
+    position: relative;
 }
 .sd-settings-avatar-img {
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
-    max-width: 100%;
-    max-height: 100%;
     object-fit: cover;
     display: block;
 }
@@ -2988,6 +3002,9 @@ a.sd-cadet-icon-btn:active {
     touch-action: none;
     user-select: none;
     z-index: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 .sd-avatar-crop-frame:active {
     cursor: grabbing;
@@ -2996,10 +3013,9 @@ a.sd-cadet-icon-btn:active {
     position: absolute;
     left: 50%;
     top: 50%;
-    width: 200px;
-    height: 200px;
-    object-fit: cover;
-    transform-origin: center center;
+    min-width: 200px;
+    min-height: 200px;
+    transform-origin: 50% 50%;
     pointer-events: none;
     -webkit-user-drag: none;
     user-select: none;
@@ -4648,6 +4664,10 @@ a.sd-cadet-icon-btn:active {
     justify-content: center;
     flex-shrink: 0;
 }
+.sd-chat-header-avatar {
+    border-radius: 50%;
+    overflow: hidden;
+}
 .sd-chat-header-avatar .sd-avatar-img {
     width: 100%;
     height: 100%;
@@ -4734,6 +4754,10 @@ a.sd-cadet-icon-btn:active {
     padding: 0;
 }
 .sd-msg-them .sd-msg-bubble-wrap {
+    display: flex;
+    flex-direction: column;
+    max-width: 82%;
+    padding: 7px 11px 5px;
     background: #fff;
     border-radius: 14px 14px 14px 4px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);

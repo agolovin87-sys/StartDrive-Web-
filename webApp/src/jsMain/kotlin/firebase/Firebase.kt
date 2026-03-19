@@ -301,6 +301,23 @@ fun deleteUser(userId: String, callback: (String?) -> Unit) {
 /** Путь к аватару пользователя в Firebase Storage (правила: storage.rules). */
 private fun chatAvatarStoragePath(uid: String): String = "users/$uid/chat_avatar.png"
 
+/** После загрузки в Storage записывает chatAvatarUrl в Firestore, чтобы аватар видели другие пользователи. */
+private fun syncChatAvatarUrlToFirestore(uid: String, onDone: (String?) -> Unit) {
+    val storage = getStorage() ?: run { onDone(null); return }
+    val firestore = getFirestore()
+    val path = chatAvatarStoragePath(uid)
+    storage.ref(path).getDownloadURL()
+        .then { url: dynamic ->
+            firestore.collection(FirebasePaths.USERS).doc(uid).update(kotlin.js.json("chatAvatarUrl" to (url as String)))
+        }
+        .then { onDone(null) }
+        .catch { e: dynamic ->
+            val msg = (e?.message as? String) ?: "Ошибка записи URL аватара"
+            js("if(typeof console!=='undefined'&&console.error)console.error('StartDrive syncChatAvatarUrlToFirestore:', msg)")
+            onDone(null)
+        }
+}
+
 /** Загружает аватар: сначала через Callable (без CORS), при ошибке — напрямую в Storage. */
 fun uploadChatAvatar(uid: String, dataUrl: String, callback: (String?) -> Unit) {
     fun friendlyMessage(msg: String): String = when {
@@ -320,7 +337,7 @@ fun uploadChatAvatar(uid: String, dataUrl: String, callback: (String?) -> Unit) 
         js("if(typeof console!=='undefined'&&console.log)console.log('StartDrive: загрузка аватара через Callable')")
         val payload = kotlin.js.json("uid" to uid, "dataUrl" to dataUrl)
         (callable as (dynamic) -> dynamic)(payload).then { _: dynamic ->
-            callback(null)
+            syncChatAvatarUrlToFirestore(uid, callback)
         }.catch { e: dynamic ->
             val code = (e?.code as? String) ?: ""
             val msg = (e?.message as? String) ?: "Ошибка загрузки"

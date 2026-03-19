@@ -47,8 +47,17 @@ private fun applyScrollForChat(contactId: String) {
                 }
             }
         } else {
-            (document.getElementById("sd-chat-messages")?.lastElementChild?.unsafeCast<dynamic>())?.scrollIntoView(js("({ block: 'end', behavior: 'smooth' })"))
+            scrollChatToBottom()
         }
+    }
+}
+
+/** Прокручивает окно чата к последнему сообщению мгновенно (без анимации). */
+private fun scrollChatToBottom() {
+    val c = document.getElementById("sd-chat-messages")?.asDynamic()
+    if (c != null) {
+        val maxScroll = ((c.scrollHeight as Number).toDouble() - (c.clientHeight as Number).toDouble()).toInt().coerceAtLeast(0)
+        c.scrollTop = maxScroll
     }
 }
 
@@ -162,6 +171,13 @@ fun main() {
                     else -> tabContent
                 }
                 sdCard.innerHTML = cardContent
+                if (state.selectedTabIndex == 2 && state.selectedChatContactId != null) {
+                    val chatContainer = document.getElementById("sd-chat-messages")?.asDynamic()
+                    if (chatContainer != null) {
+                        val maxScroll = ((chatContainer.scrollHeight as Number).toDouble() - (chatContainer.clientHeight as Number).toDouble()).toInt().coerceAtLeast(0)
+                        chatContainer.scrollTop = maxScroll
+                    }
+                }
                 if (state.pddScrollToSignDetail && state.pddCategoryId == "signs" && state.pddSelectedSign != null) {
                     (sdCard.querySelector("#sd-pdd-sign-detail-scroll") as? org.w3c.dom.Element)?.let { el ->
                         el.unsafeCast<dynamic>().scrollIntoView(js("({ block: 'start', behavior: 'smooth' })"))
@@ -462,10 +478,10 @@ private fun renderChatTabContent(currentUser: User): String {
         val myAvatarUrl = appState.user?.chatAvatarUrl?.takeIf { it.isNotBlank() } ?: getChatAvatarDataUrl(myId)
         val myInitials = appState.user?.let { it.initials().ifEmpty { "?" }.escapeHtml() } ?: "?"
         val myAvatarBg = avatarColorForId(myId).escapeHtml()
-        val myAvatarHtml = if (myAvatarUrl != null) """<div class="sd-msg-my-avatar sd-avatar-wrap" data-initials="$myInitials" data-bg="$myAvatarBg"><img src="${myAvatarUrl.escapeHtml()}" alt="" class="sd-msg-avatar-img sd-avatar-img" decoding="async" /></div>""" else ""
+        val myAvatarHtml = if (myAvatarUrl != null) """<div class="sd-msg-my-avatar sd-avatar-wrap" data-initials="$myInitials" data-bg="$myAvatarBg"><img src="${myAvatarUrl.escapeHtml()}" alt="" class="sd-msg-avatar-img sd-avatar-img" decoding="async" data-user-id="${myId.escapeHtml()}" /></div>""" else ""
         val otherAvatarHtml = run {
             val url = contact.chatAvatarUrl?.takeIf { it.isNotBlank() }
-            if (url != null) """<div class="sd-msg-them-avatar sd-avatar-wrap" data-initials="$contactInitials" data-bg="${contactAvatarBg}"><img src="${url.escapeHtml()}" alt="" class="sd-msg-avatar-img sd-avatar-img" decoding="async" /></div>"""
+            if (url != null) """<div class="sd-msg-them-avatar sd-avatar-wrap" data-initials="$contactInitials" data-bg="${contactAvatarBg}"><img src="${url.escapeHtml()}" alt="" class="sd-msg-avatar-img sd-avatar-img" decoding="async" data-user-id="${contact.id.escapeHtml()}" /></div>"""
             else """<div class="sd-msg-them-avatar" style="background:$contactAvatarBg"><span class="sd-msg-them-avatar-initials">$contactInitials</span></div>"""
         }
         val msgsHtml = messages.joinToString("") { msg ->
@@ -526,7 +542,7 @@ private fun renderChatTabContent(currentUser: User): String {
             <div class="sd-chat-conversation">
                 <div class="sd-chat-header">
                     <button type="button" id="sd-chat-back" class="sd-chat-back-btn" title="Назад" aria-label="Назад">$iconBackSvg</button>
-                    ${contact.chatAvatarUrl?.takeIf { it.isNotBlank() }?.let { url -> """<div class="sd-chat-header-avatar sd-avatar-wrap" data-initials="$contactInitials" data-bg="${contactAvatarBg}"><img src="${url.escapeHtml()}" alt="" class="sd-avatar-img" decoding="async" /></div>""" } ?: """<div class="sd-chat-header-avatar" style="background:$contactAvatarBg">$contactInitials</div>"""}
+                    ${contact.chatAvatarUrl?.takeIf { it.isNotBlank() }?.let { url -> """<div class="sd-chat-header-avatar sd-avatar-wrap" data-initials="$contactInitials" data-bg="${contactAvatarBg}"><img src="${url.escapeHtml()}" alt="" class="sd-avatar-img" decoding="async" data-user-id="${contact.id.escapeHtml()}" /></div>""" } ?: """<div class="sd-chat-header-avatar" style="background:$contactAvatarBg">$contactInitials</div>"""}
                     <span class="sd-chat-contact-name">${formatShortName(contact.fullName).escapeHtml()}</span>
                 </div>
                 <div class="sd-chat-messages" id="sd-chat-messages">$msgsHtml</div>
@@ -541,7 +557,7 @@ private fun renderChatTabContent(currentUser: User): String {
         val initials = c.initials().ifEmpty { "?" }.escapeHtml()
         val avatarBg = avatarColorForId(c.id).escapeHtml()
         val contactAvatarHtml = c.chatAvatarUrl?.takeIf { it.isNotBlank() }?.let { url ->
-            """<span class="sd-chat-contact-avatar sd-avatar-wrap" data-initials="$initials" data-bg="$avatarBg"><img src="${url.escapeHtml()}" alt="" class="sd-avatar-img" decoding="async" /></span>"""
+            """<span class="sd-chat-contact-avatar sd-avatar-wrap" data-initials="$initials" data-bg="$avatarBg"><img src="${url.escapeHtml()}" alt="" class="sd-avatar-img" decoding="async" data-user-id="${c.id.escapeHtml()}" /></span>"""
         } ?: """<span class="sd-chat-contact-avatar" style="background:$avatarBg">$initials</span>"""
         val isOnline = appState.chatContactOnlineIds.contains(c.id)
         val onlineDot = if (isOnline) """<span class="sd-chat-contact-dot sd-chat-contact-dot-online"></span>""" else """<span class="sd-chat-contact-dot sd-chat-contact-dot-offline"></span>"""
@@ -597,6 +613,13 @@ private fun formatMessageDateTime(timestampMs: Long): String {
 
 private const val LAST_BALANCE_TS_KEY_PREFIX = "sd_last_balance_ts_"
 
+/** Склонение «талон»: 1 талон, 2 талона, 5 талонов. */
+private fun ticketWord(n: Int): String {
+    val a = n % 100
+    if (a in 11..14) return "талонов"
+    return when (n % 10) { 1 -> "талон"; 2, 3, 4 -> "талона"; else -> "талонов" }
+}
+
 /** Показывает тосты о новых операциях по балансу для указанного пользователя (зачисление/списание/установка). Один раз на операцию: сразу помечаем последнее время, чтобы повторный вызов не дублировал уведомления. */
 private fun notifyNewBalanceOpsForUser(userId: String, entries: List<BalanceHistoryEntry>, users: List<User>) {
     if (entries.isEmpty()) return
@@ -611,15 +634,26 @@ private fun notifyNewBalanceOpsForUser(userId: String, entries: List<BalanceHist
     for (e in sorted) {
         val ts = e.timestampMillis ?: 0L
         if (ts <= lastSeen) continue
-        val whoName = users.find { it.id == e.performedBy }?.fullName
-            ?.takeIf { it.isNotBlank() }
-            ?.let { formatShortName(it) }
-            ?: "Пользователь"
+        val performer = users.find { it.id == e.performedBy }
+        val performerShortName = performer?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) }
+        val performerRole = performer?.role ?: ""
+        val creditFrom = if (performerRole == "admin") "администратор" else (performerShortName ?: "Пользователь")
+        val debitBy = when (performerRole) {
+            "instructor" -> "инструктором ${performerShortName ?: "—"}"
+            "admin" -> "администратором ${performerShortName ?: "—"}"
+            else -> performerShortName?.let { "пользователем $it" } ?: "пользователем"
+        }
+        val setBy = when (performerRole) {
+            "admin" -> "администратором"
+            "instructor" -> "инструктором ${performerShortName ?: "—"}"
+            else -> performerShortName?.let { "пользователем $it" } ?: "пользователем"
+        }
         val dt = if (ts > 0L) formatMessageDateTime(ts) else ""
+        val tw = ticketWord(e.amount)
         val msg = when (e.type) {
-            "credit" -> "Вам зачислено ${e.amount} талонов от $whoName. Дата и время: $dt"
-            "debit" -> "У вас списано ${e.amount} талонов администратором $whoName. Дата и время: $dt"
-            "set" -> "Ваш баланс установлен на ${e.amount} талонов администратором $whoName. Дата и время: $dt"
+            "credit" -> "Вам зачислено ${e.amount} $tw от $creditFrom. Дата и время: $dt"
+            "debit" -> "У вас списано ${e.amount} $tw $debitBy. Дата и время: $dt"
+            "set" -> "Ваш баланс установлен на ${e.amount} $tw $setBy. Дата и время: $dt"
             else -> null
         }
         if (msg != null) {
@@ -2434,7 +2468,7 @@ private fun renderHistoryTabContent(user: User): String {
         val completedCardsHtml = if (completedSessions.isEmpty()) """<p class="sd-history-empty">Нет завершённых занятий</p>""" else completedSessions.joinToString("") { s ->
             val drivingDt = (s.startTimeMillis?.takeIf { it > 0 }?.let { formatMessageDateTime(it) }) ?: "—"
             val completedDt = (s.completedAtMillis?.takeIf { it > 0 }?.let { formatMessageDateTime(it) }) ?: "—"
-            val ratingRow = if (s.instructorRating in 3..5) """<div class="sd-history-session-row"><strong>Оценка курсанта:</strong> ${s.instructorRating} <span class="sd-history-rating-star" aria-hidden="true">★</span></div>""" else ""
+            val ratingRow = if (s.instructorRating in 3..5) """<div class="sd-history-session-row"><strong>Оценка курсанту:</strong> ${s.instructorRating}</div>""" else ""
             """<div class="sd-history-session-card sd-history-completed-card">
                 <div class="sd-history-card-icon sd-history-icon-check">$SD_ICON_CHECK_SVG</div>
                 <div class="sd-history-card-body">
@@ -3063,8 +3097,9 @@ private fun avatarBlockHtml(wrapperClass: String, u: User?, currentUserId: Strin
         else -> u.chatAvatarUrl?.takeIf { it.isNotBlank() } ?: getChatAvatarDataUrl(u.id)
     }
     val initialsEsc = initials.escapeHtml()
+    val userIdEsc = u?.id?.escapeHtml() ?: ""
     return if (url != null)
-        """<div class="$wrapperClass sd-avatar-wrap" data-initials="$initialsEsc" data-bg="${bg.escapeHtml()}"><img src="${url.escapeHtml()}" alt="" class="sd-avatar-img" decoding="async" /></div>"""
+        """<div class="$wrapperClass sd-avatar-wrap" data-initials="$initialsEsc" data-bg="${bg.escapeHtml()}"><img src="${url.escapeHtml()}" alt="" class="sd-avatar-img" decoding="async" data-user-id="$userIdEsc" /></div>"""
     else
         """<div class="$wrapperClass" style="background:$bg">$initialsEsc</div>"""
 }
@@ -3075,7 +3110,7 @@ private fun renderSettingsTabContent(user: User): String {
        <h3 class="sd-settings-block-title">Аватар в чате</h3>
        <div class="sd-settings-avatar-wrap">
          <div class="sd-settings-avatar-preview" id="sd-settings-avatar-preview">
-           ${if (avatarDataUrl != null) """<img src="${avatarDataUrl.escapeHtml()}" alt="" id="sd-settings-avatar-img" class="sd-settings-avatar-img" />""" else """<span class="sd-settings-avatar-placeholder" id="sd-settings-avatar-placeholder">${user.fullName.split(" ").filter { it.isNotBlank() }.take(2).joinToString("") { it.first().uppercase() }.ifBlank { "?" }.escapeHtml()}</span>"""}
+           ${if (avatarDataUrl != null) """<img src="${avatarDataUrl.escapeHtml()}" alt="" id="sd-settings-avatar-img" class="sd-settings-avatar-img sd-avatar-img" data-user-id="${user.id.escapeHtml()}" />""" else """<span class="sd-settings-avatar-placeholder" id="sd-settings-avatar-placeholder">${user.fullName.split(" ").filter { it.isNotBlank() }.take(2).joinToString("") { it.first().uppercase() }.ifBlank { "?" }.escapeHtml()}</span>"""}
          </div>
          <input type="file" id="sd-settings-avatar-file" class="sd-settings-avatar-file" accept="image/*" />
          <label for="sd-settings-avatar-file" class="sd-btn sd-btn-secondary sd-settings-avatar-label">Выбрать фото</label>
@@ -4136,7 +4171,7 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                 if (prevSize > 0 && list.size > prevSize && list.lastOrNull()?.senderId != uid) playChatMessageSound()
                 list.lastOrNull()?.timestamp?.let { ts -> setChatLastSeenMs(uid, contactId, ts) }
                 updateState { if (chatUnreadCounts.containsKey(contactId)) chatUnreadCounts = chatUnreadCounts - contactId }
-                window.setTimeout({ applyScrollForChat(contactId) }, 100)
+                window.setTimeout({ scrollChatToBottom() }, 50)
             }
             e.preventDefault(); e.stopPropagation()
             return@addEventListener
@@ -4157,7 +4192,7 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                 if (prevSize > 0 && list.size > prevSize && list.lastOrNull()?.senderId != uid) playChatMessageSound()
                 list.lastOrNull()?.timestamp?.let { ts -> setChatLastSeenMs(uid, contactId, ts) }
                 updateState { if (chatUnreadCounts.containsKey(contactId)) chatUnreadCounts = chatUnreadCounts - contactId }
-                window.setTimeout({ applyScrollForChat(contactId) }, 100)
+                window.setTimeout({ scrollChatToBottom() }, 50)
             }
             e.preventDefault(); e.stopPropagation()
             return@addEventListener
@@ -4178,7 +4213,7 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                 if (prevSize > 0 && list.size > prevSize && list.lastOrNull()?.senderId != uid) playChatMessageSound()
                 list.lastOrNull()?.timestamp?.let { ts -> setChatLastSeenMs(uid, contactId, ts) }
                 updateState { if (chatUnreadCounts.containsKey(contactId)) chatUnreadCounts = chatUnreadCounts - contactId }
-                window.setTimeout({ applyScrollForChat(contactId) }, 100)
+                window.setTimeout({ scrollChatToBottom() }, 50)
             }
             e.preventDefault(); e.stopPropagation()
         }
@@ -4192,7 +4227,15 @@ private fun attachListeners(root: org.w3c.dom.Element) {
         document.body?.addEventListener("error", { e: dynamic ->
             val target = e?.target
             if (target != null && (target as? org.w3c.dom.Element)?.classList?.contains("sd-avatar-img") == true) {
-                val img = target.unsafeCast<org.w3c.dom.Element>()
+                val img = target.unsafeCast<org.w3c.dom.HTMLElement>()
+                val userId = img.getAttribute("data-user-id")
+                val fallback = if (userId != null && userId.isNotBlank()) getChatAvatarDataUrl(userId) else null
+                if (fallback != null) {
+                    img.setAttribute("src", fallback)
+                    (e as? org.w3c.dom.events.Event)?.preventDefault()
+                    (e as? org.w3c.dom.events.Event)?.stopPropagation()
+                    return@addEventListener
+                }
                 val wrap = img.closest(".sd-avatar-wrap") as? org.w3c.dom.Element
                 if (wrap != null) {
                     val initials = wrap.getAttribute("data-initials") ?: "?"
@@ -4202,6 +4245,22 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     wrap.classList.remove("sd-avatar-wrap")
                 }
             }
+        }, true)
+    }
+    // Один раз: делегирование клика по кнопке воспроизведения голосовых сообщений (на document.body, чтобы работало при любой вкладке)
+    if (window.asDynamic().__sdVoicePlayDelegation != true) {
+        window.asDynamic().__sdVoicePlayDelegation = true
+        document.body?.addEventListener("click", { e: dynamic ->
+            val target = (e?.target as? org.w3c.dom.Element) ?: return@addEventListener
+            val btn = (target.asDynamic().closest(".sd-voice-play-btn")) as? org.w3c.dom.Element ?: return@addEventListener
+            val msgEl = (btn.asDynamic().closest(".sd-msg-voice")) as? org.w3c.dom.Element ?: return@addEventListener
+            val msgId = msgEl.getAttribute("data-voice-id") ?: return@addEventListener
+            val voiceUrl = msgEl.getAttribute("data-voice-url") ?: return@addEventListener
+            val durationSec = (msgEl.getAttribute("data-voice-duration") ?: "0").toIntOrNull() ?: 0
+            (e as? org.w3c.dom.events.Event)?.preventDefault()
+            (e as? org.w3c.dom.events.Event)?.stopPropagation()
+            val audioEl = msgEl.querySelector(".sd-voice-audio")?.asDynamic()
+            toggleVoicePlay(audioEl, msgId, voiceUrl, durationSec)
         }, true)
     }
     document.getElementById("sd-dismiss-network-error")?.addEventListener("click", {
@@ -4938,20 +4997,6 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     if (start > 0) updateState { chatVoiceRecordElapsedSec = ((js("Date.now()").unsafeCast<Double>() - start) / 1000.0).toInt().coerceAtLeast(0) }
                 }, 1000).unsafeCast<Int>()
             }
-            val playBtns = root.querySelectorAll(".sd-voice-play-btn")
-            for (i in 0 until playBtns.length) {
-                val btn = playBtns.item(i) as? org.w3c.dom.Element ?: continue
-                val msgEl = (btn.asDynamic().closest(".sd-msg-voice")) as? org.w3c.dom.Element ?: continue
-                val msgId = msgEl.getAttribute("data-voice-id") ?: continue
-                val voiceUrl = msgEl.getAttribute("data-voice-url") ?: continue
-                val durationSec = (msgEl.getAttribute("data-voice-duration") ?: "0").toIntOrNull() ?: 0
-                val audioEl = document.getElementById("sd-voice-audio-$msgId")
-                if (audioEl != null) {
-                    btn.addEventListener("click", {
-                        toggleVoicePlay(audioEl.asDynamic(), msgId, voiceUrl, durationSec)
-                    })
-                }
-            }
             val progressWraps = root.querySelectorAll(".sd-voice-progress-wrap")
             for (i in 0 until progressWraps.length) {
                 val wrap = progressWraps.item(i) as? org.w3c.dom.Element ?: continue
@@ -5249,8 +5294,8 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                             val nowTs = js("Date.now()").unsafeCast<Double>().toLong()
                             val dt = formatMessageDateTime(nowTs)
                             when (type) {
-                                "credit" -> showNotification("Зачислено $amount талонов. От: $fromShort. Кому: $targetNameShort. Дата и время: $dt")
-                                "debit" -> showNotification("Списано $amount талонов. От: $fromShort. У кого: $targetNameShort. Дата и время: $dt")
+                                "credit" -> showNotification("Зачислено $amount ${ticketWord(amount)}. От: $fromShort. Кому: $targetNameShort. Дата и время: $dt")
+                                "debit" -> showNotification("Списано $amount ${ticketWord(amount)}. От: $fromShort. У кого: $targetNameShort. Дата и время: $dt")
                                 "set" -> showNotification("Баланс установлен. От: $fromShort. Пользователь: $targetNameShort. Дата и время: $dt")
                             }
                         }
@@ -5429,54 +5474,82 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 if (touchCount < 2) cropPinching = false
             })
             document.getElementById("sd-avatar-crop-apply")?.addEventListener("click", {
+                fun uploadAndRefreshAvatar(usr: User, img: org.w3c.dom.HTMLElement, resultDataUrl: String) {
+                    uploadChatAvatar(usr.id, resultDataUrl) { err ->
+                        if (err != null) {
+                            updateState { networkError = err }
+                        } else {
+                            // Обновляем state только когда пришёл chatAvatarUrl, иначе перерисовка заменит превью на пустое → моргание и белый круг
+                            fun tryRefresh(attempt: Int) {
+                                val maxAttempts = 8
+                                val delayMs = 400
+                                getCurrentUser { newUser, _ ->
+                                    val url = newUser?.chatAvatarUrl?.takeIf { it.isNotBlank() }
+                                    if (url != null && newUser != null) {
+                                        img.setAttribute("src", url)
+                                        // localStorage не очищаем — при ошибке загрузки URL (CORS и т.д.) fallback в onerror подставит data URL
+                                        updateState { user = newUser }
+                                        getUsersForChat(usr) { list ->
+                                            updateState { chatContacts = list }
+                                        }
+                                    } else if (attempt < maxAttempts) {
+                                        window.setTimeout({ tryRefresh(attempt + 1) }, delayMs)
+                                    } else if (newUser != null) {
+                                        updateState { user = newUser }
+                                        getUsersForChat(usr) { list ->
+                                            updateState { chatContacts = list }
+                                        }
+                                    }
+                                }
+                            }
+                            window.setTimeout({ tryRefresh(0) }, 600)
+                        }
+                    }
+                }
                 val dataUrl = cropDataUrlHolder[0] ?: return@addEventListener
                 val cropImg = document.getElementById("sd-avatar-crop-img") as? org.w3c.dom.HTMLImageElement ?: return@addEventListener
                 if (cropImg.naturalWidth == 0) return@addEventListener
+                val scale = cropState[2]
+                val ox = cropState[0]
+                val oy = cropState[1]
+                val nw = cropImg.naturalWidth.toDouble()
+                val nh = cropImg.naturalHeight.toDouble()
                 val canvas = document.createElement("canvas").unsafeCast<org.w3c.dom.HTMLCanvasElement>()
                 val size = 200
                 canvas.width = size
                 canvas.height = size
                 val ctx = canvas.getContext("2d")?.unsafeCast<dynamic>() ?: return@addEventListener
+                ctx.save()
+                // Фон как у превью, чтобы без прозрачности не было белого в круге
+                ctx.fillStyle = "rgba(0,0,0,0.06)"
+                ctx.fillRect(0.0, 0.0, size.toDouble(), size.toDouble())
                 ctx.beginPath()
                 ctx.arc(size / 2.0, size / 2.0, size / 2.0, 0.0, 6.283185307179586)
                 ctx.closePath()
                 ctx.clip()
-                val scale = cropState[2]
-                val ox = cropState[0]
-                val oy = cropState[1]
                 ctx.translate(size / 2.0 + ox, size / 2.0 + oy)
                 ctx.scale(scale, scale)
-                ctx.drawImage(cropImg, -cropImg.naturalWidth / 2.0, -cropImg.naturalHeight / 2.0, cropImg.naturalWidth.toDouble(), cropImg.naturalHeight.toDouble())
-                val resultDataUrl = canvas.toDataURL("image/png")
+                ctx.drawImage(cropImg, -nw / 2.0, -nh / 2.0, nw, nh)
+                ctx.restore()
+                val resultDataUrl = try { canvas.toDataURL("image/png") } catch (_: Throwable) { "" }
+                val finalDataUrl = if (resultDataUrl.isNotEmpty()) resultDataUrl else dataUrl
                 document.getElementById("sd-avatar-crop-editor")?.unsafeCast<org.w3c.dom.HTMLElement>()?.classList?.add("sd-hidden")
                 cropDataUrlHolder[0] = null
+                setChatAvatarDataUrl(usr.id, finalDataUrl)
                 val preview = document.getElementById("sd-settings-avatar-preview") ?: return@addEventListener
                 preview.querySelector(".sd-settings-avatar-placeholder")?.remove()
                 var img = preview.querySelector(".sd-settings-avatar-img") as? org.w3c.dom.HTMLElement
                 if (img == null) {
                     img = document.createElement("img").unsafeCast<org.w3c.dom.HTMLElement>()
-                    img.className = "sd-settings-avatar-img"
+                    img.className = "sd-settings-avatar-img sd-avatar-img"
                     img.setAttribute("alt", "")
                     img.id = "sd-settings-avatar-img"
+                    img.setAttribute("data-user-id", usr.id)
                     preview.appendChild(img)
                 }
-                img.setAttribute("src", resultDataUrl)
-                // Аватар хранится только в Firebase Storage; URL — в Firestore (chatAvatarUrl). localStorage не используем.
-                uploadChatAvatar(usr.id, resultDataUrl) { err ->
-                    if (err != null) {
-                        updateState { networkError = err }
-                    } else {
-                        getCurrentUser { newUser, _ ->
-                            if (newUser != null) {
-                                updateState { user = newUser }
-                                newUser.chatAvatarUrl?.takeIf { it.isNotBlank() }?.let { url ->
-                                    img.setAttribute("src", url)
-                                }
-                            }
-                        }
-                    }
-                }
+                img.setAttribute("src", finalDataUrl)
                 updateState { }
+                uploadAndRefreshAvatar(usr, img, finalDataUrl)
             })
             document.getElementById("sd-avatar-crop-cancel")?.addEventListener("click", {
                 document.getElementById("sd-avatar-crop-editor")?.unsafeCast<org.w3c.dom.HTMLElement>()?.classList?.add("sd-hidden")
@@ -5577,9 +5650,7 @@ private fun startVoiceRecording(uid: String?) {
                 sendVoiceMessage(roomId, uid, blob, durationSec)
                     .then {
                         subscribeMessages(roomId) { list -> updateState { chatMessages = list } }
-                        window.setTimeout({
-                            (document.getElementById("sd-chat-messages")?.lastElementChild?.unsafeCast<dynamic>())?.scrollIntoView(js("({ block: 'end', behavior: 'smooth' })"))
-                        }, 100)
+                        window.setTimeout({ scrollChatToBottom() }, 50)
                     }
                     .catch { e: dynamic ->
                         updateState { networkError = "Не удалось отправить голосовое: ${(e?.message as? String) ?: "ошибка"}" }
@@ -5609,7 +5680,9 @@ private fun getOrCreateGlobalVoiceAudio(): dynamic {
         el = document.createElement("audio")
         el.id = "sd-global-voice-audio"
         el.setAttribute("class", "sd-voice-audio")
-        el.setAttribute("preload", "metadata")
+        el.setAttribute("preload", "auto")
+        el.asDynamic().crossOrigin = "anonymous"
+        el.asDynamic().muted = false
         document.body?.appendChild(el)
     }
     return el.asDynamic()
@@ -5631,15 +5704,15 @@ private fun toggleVoicePlay(audioEl: dynamic, msgId: String, voiceUrl: String, d
         if (voicePlayInterval != 0) { window.clearInterval(voicePlayInterval); voicePlayInterval = 0 }
     }
     if (voiceUrl.isBlank() || (!voiceUrl.startsWith("http") && !voiceUrl.startsWith("data:"))) return
+    appState.chatPlayingVoiceId = msgId
+    appState.chatPlayingVoiceCurrentMs = 0
+    patchVoicePlayerDOM()
     globalAudio.src = voiceUrl
     globalAudio.currentTime = 0.0
     val playPromise = globalAudio.play()
     if (playPromise != null) {
-        js("(function(p){ if(p&&typeof p.catch==='function') p.catch(function(){}); })").unsafeCast<(dynamic) -> Unit>().invoke(playPromise)
+        js("(function(p){ if(p&&typeof p.catch==='function') p.catch(function(){ }); })").unsafeCast<(dynamic) -> Unit>().invoke(playPromise)
     }
-    appState.chatPlayingVoiceId = msgId
-    appState.chatPlayingVoiceCurrentMs = 0
-    patchVoicePlayerDOM()
     globalAudio.onended = {
         if (voicePlayInterval != 0) { window.clearInterval(voicePlayInterval); voicePlayInterval = 0 }
         appState.chatPlayingVoiceId = null

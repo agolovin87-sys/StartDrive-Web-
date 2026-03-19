@@ -110,10 +110,12 @@ fun sendVoiceMessage(roomId: String, senderId: String, audioBlob: dynamic, durat
     val messagesRef = db.ref("${FirebasePaths.CHATS}/$roomId/${FirebasePaths.MESSAGES}")
     val ref = messagesRef.push()
     val messageId = ref.key ?: return kotlin.js.Promise.reject(js("Error('No message id')"))
-    val storagePath = "chats/voice/$roomId/${messageId}.m4a"
+    val contentType = (audioBlob?.type as? String)?.takeIf { it.isNotBlank() } ?: "audio/webm"
+    val ext = if (contentType.contains("webm")) "webm" else "m4a"
+    val storagePath = "chats/voice/$roomId/${messageId}.$ext"
     val storageRef = storage.ref(storagePath)
     val serverTimestamp = getDatabaseServerTimestamp()
-    return storageRef.put(audioBlob).then { _: dynamic ->
+    return storageRef.put(audioBlob, kotlin.js.json("contentType" to contentType)).then { _: dynamic ->
         storageRef.getDownloadURL()
     }.then { url: dynamic ->
         val voiceUrl = url as String

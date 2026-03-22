@@ -270,7 +270,7 @@ fun subscribeCurrentUserDocument(onUpdate: (User) -> Unit): () -> Unit {
  * Лента для администратора: документы пишут только Cloud Functions ([FirebasePaths.ADMIN_EVENTS]).
  * Нужна, чтобы веб-админка получала те же уведомления, что и FCM на устройстве (без токена в браузере).
  */
-fun subscribeAdminEventsFeed(onMessage: (String) -> Unit): () -> Unit {
+fun subscribeAdminEventsFeed(onMessage: (text: String, eventId: String) -> Unit): () -> Unit {
     val q = getFirestore().collection(FirebasePaths.ADMIN_EVENTS)
         .orderBy("createdAt", "desc")
         .limit(40)
@@ -301,7 +301,7 @@ fun subscribeAdminEventsFeed(onMessage: (String) -> Unit): () -> Unit {
             val title = (dd.title as? String) ?: ""
             val body = (dd.body as? String) ?: ""
             val text = if (title.isNotBlank()) "$title: $body" else body
-            if (text.isNotBlank()) onMessage(text)
+            if (text.isNotBlank()) onMessage(text, id)
         }
     }) { err: dynamic ->
         val msg = (err?.message as? String) ?: "$err"
@@ -333,7 +333,8 @@ private fun adminEventCreatedAtToMillis(ts: dynamic): Long {
 /**
  * Одна выгрузка последних событий (для экрана «Уведомления» и подстраховки, если live-подписка не успела).
  */
-fun fetchAdminEventsForNotifications(callback: (List<Pair<Long, String>>) -> Unit) {
+/** [Triple] = createdAt ms, текст, id документа. */
+fun fetchAdminEventsForNotifications(callback: (List<Triple<Long, String, String>>) -> Unit) {
     getFirestore().collection(FirebasePaths.ADMIN_EVENTS)
         .orderBy("createdAt", "desc")
         .limit(50)
@@ -342,9 +343,10 @@ fun fetchAdminEventsForNotifications(callback: (List<Pair<Long, String>>) -> Uni
             try {
                 val docs = snap?.docs ?: js("[]")
                 val len = (docs.length as? Int) ?: 0
-                val list = mutableListOf<Pair<Long, String>>()
+                val list = mutableListOf<Triple<Long, String, String>>()
                 for (i in 0 until len) {
                     val doc = docs[i].unsafeCast<dynamic>()
+                    val docId = doc.id as? String ?: continue
                     val dataFn = doc.data
                     val d = dataFn.unsafeCast<dynamic>().call(doc) ?: continue
                     val dd = d.unsafeCast<dynamic>()
@@ -352,7 +354,7 @@ fun fetchAdminEventsForNotifications(callback: (List<Pair<Long, String>>) -> Uni
                     val body = (dd.body as? String) ?: ""
                     val text = if (title.isNotBlank()) "$title: $body" else body
                     val ms = adminEventCreatedAtToMillis(dd.createdAt)
-                    if (text.isNotBlank()) list.add(Pair(ms, text))
+                    if (text.isNotBlank()) list.add(Triple(ms, text, docId))
                 }
                 callback(list)
             } catch (_: Throwable) {

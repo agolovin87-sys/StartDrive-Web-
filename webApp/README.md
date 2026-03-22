@@ -10,13 +10,35 @@
 ./gradlew :webApp:jsBrowserDevelopmentRun
 ```
 
-Или только сборка:
+Проверка компиляции Kotlin/JS (без webpack, удобно для CI):
+
+```bash
+./gradlew :webApp:compileKotlinJs
+```
+
+Только сборка фронта:
 
 ```bash
 ./gradlew :webApp:jsBrowserDevelopmentWebpack
 ```
 
 Артефакты: `webApp/build/dist/js/productionRun/` (или `developmentRun`).
+
+### Билеты ПДД
+
+Перед компиляцией Gradle генерирует встроенный бандл ПДД (`generatePddEmbedded`). Исходные данные билетов — в репозитории; при изменении контента пересоберите проект.
+
+### PWA
+
+В `index.html` подключены `manifest.webmanifest` и `theme-color` — при необходимости добавьте иконки в манифест для «Установить приложение».
+
+### Деплой (Firebase Hosting)
+
+Соберите production и задеплойте каталог с `index.html`, `webApp.js`, `style.css`, `manifest.webmanifest`, `firebase-config.js`, `pdd-tickets-bundle.js` и ресурсами (см. `firebase.json` в корне проекта, если настроен).
+
+## Ручная проверка
+
+См. `docs/QA_CHECKLIST.md` в корне репозитория.
 
 ## Настройка Firebase
 

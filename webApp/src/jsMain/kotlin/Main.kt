@@ -11,6 +11,7 @@ import org.w3c.dom.HTMLSelectElement
 import org.w3c.dom.Element
 import org.w3c.dom.events.Event
 import org.w3c.dom.events.EventListener
+import org.w3c.dom.events.KeyboardEvent
 
 private var presenceUnsubscribes: MutableList<() -> Unit> = mutableListOf()
 private var voiceRecorderChunks: dynamic = null
@@ -442,8 +443,8 @@ fun main() {
                 } catch (_: Throwable) { }
                 adminEventsUnsubscribe = null
                 if (user.role == "admin") {
-                    adminEventsUnsubscribe = subscribeAdminEventsFeed { text ->
-                        showNotification(text)
+                    adminEventsUnsubscribe = subscribeAdminEventsFeed { text, eventId ->
+                        showNotification(text, eventId)
                     }
                 }
             }
@@ -2393,7 +2394,8 @@ private fun loadNotificationsFromStorage(userId: String): List<AppNotification> 
                 else -> (v as? String)?.toLongOrNull() ?: return@mapNotNull null
             }
             val t = (o.text as? String) ?: ""
-            AppNotification(dateTimeMs = ms, text = t)
+            val sid = (o.sourceId as? String)?.takeIf { it.isNotBlank() }
+            AppNotification(dateTimeMs = ms, text = t, sourceId = sid)
         }
     } catch (_: Throwable) { emptyList() }
 }
@@ -2411,7 +2413,8 @@ private fun saveNotificationsToStorage(userId: String, list: List<AppNotificatio
     try {
         val key = NOTIFICATIONS_STORAGE_KEY_PREFIX + userId
         val json = "[" + list.joinToString(",") { n ->
-            """{"dateTimeMs":${n.dateTimeMs},"text":"${escapeJsonString(n.text)}"}"""
+            val sidPart = n.sourceId?.let { ",\"sourceId\":\"${escapeJsonString(it)}\"" } ?: ""
+            """{"dateTimeMs":${n.dateTimeMs},"text":"${escapeJsonString(n.text)}"$sidPart}"""
         } + "]"
         window.asDynamic().localStorage?.setItem(key, json)
     } catch (_: Throwable) { }
@@ -2439,27 +2442,35 @@ private fun saveCadetInstructorBookingNotifiedSessionIds(userId: String, ids: Mu
 }
 
 /**
- * Одна строка на одинаковый текст (оставляем запись с более поздним временем).
+ * Одна строка на один [sourceId] (если задан) или на одинаковый текст — оставляем запись с более поздним временем.
  * Убирает дубли: live admin_events + загрузка из Firestore с другим dateTimeMs и т.п.
  */
+private fun notificationDedupeKey(n: AppNotification): String =
+    n.sourceId?.takeIf { it.isNotBlank() } ?: "text:${n.text.trim()}"
+
 private fun dedupeNotificationsByTextKeepNewest(items: List<AppNotification>): List<AppNotification> {
     if (items.isEmpty()) return emptyList()
     return items
-        .groupBy { it.text.trim() }
+        .groupBy { notificationDedupeKey(it) }
         .values
         .map { group -> group.maxBy { it.dateTimeMs } }
         .sortedByDescending { it.dateTimeMs }
 }
 
 /** Показать уведомление снизу экрана и сохранить в список уведомлений (и в localStorage). */
-private fun showNotification(text: String) {
+private fun showNotification(text: String, sourceId: String? = null) {
     val now = js("Date.now()").unsafeCast<Double>().toLong()
     val trimmed = text.trim()
     val before = appState.notifications
-    val newList = dedupeNotificationsByTextKeepNewest(before + AppNotification(dateTimeMs = now, text = text))
+    val newList = dedupeNotificationsByTextKeepNewest(
+        before + AppNotification(dateTimeMs = now, text = text, sourceId = sourceId?.takeIf { it.isNotBlank() }),
+    )
     if (newList == before) return
-    val sameTextAlready = before.any { it.text.trim() == trimmed }
-    val duplicateTextOnly = sameTextAlready && newList.size == before.size
+    val duplicateContent = when {
+        !sourceId.isNullOrBlank() -> before.any { it.sourceId == sourceId }
+        else -> before.any { it.text.trim() == trimmed }
+    }
+    val duplicateTextOnly = duplicateContent && newList.size == before.size
     updateState {
         notifications = newList
         if (notificationsViewOpen) notificationsReadCount = newList.size
@@ -2768,7 +2779,7 @@ private fun notifyCadetNewInstructorScheduledSessions(userId: String, sessions: 
     var list = appState.notifications
     newSessions.forEachIndexed { idx, s ->
         val text = "Инструктор записал вас на вождение" + formatDayTimeShort(s.startTimeMillis)
-        list = list + AppNotification(dateTimeMs = now + idx, text = text)
+        list = list + AppNotification(dateTimeMs = now + idx, text = text, sourceId = "instructorSession:${s.id}")
         known.add(s.id)
     }
     saveCadetInstructorBookingNotifiedSessionIds(userId, known)
@@ -5603,7 +5614,7 @@ private fun renderTicketsTabContent(): String {
             val disabledAttr = if (answered) " disabled" else ""
             """<button type="button" class="$cls" data-pdd-answer-index="$idx" data-pdd-question-index="$currentIdx"$disabledAttr>${(idx + 1).toString().escapeHtml()}. ${a.answerText.escapeHtml()}</button>"""
         }.joinToString("")
-        val savedResults = if (catId != null && ticketName != null) getPddTicketSavedResults(catId, ticketName) else emptyMap()
+        val savedResults = getPddTicketSavedResults(catId, ticketName)
         val questionNavHtml = questions.indices.joinToString("") { idx ->
             val selIdx = userSelections[idx]
             val savedCorrect = savedResults[idx]
@@ -5618,9 +5629,12 @@ private fun renderTicketsTabContent(): String {
             val navCls = buildString {
                 append("sd-pdd-question-nav-item")
                 if (isCurrent) append(" sd-pdd-question-nav-current")
-                if (answeredHere && isCorrectHere != null) {
-                    if (isCorrectHere) append(" sd-pdd-question-nav-correct")
-                    else append(" sd-pdd-question-nav-wrong")
+                if (answeredHere) {
+                    when (isCorrectHere) {
+                        true -> append(" sd-pdd-question-nav-correct")
+                        false -> append(" sd-pdd-question-nav-wrong")
+                        else -> { }
+                    }
                 }
             }
             """<button type="button" class="$navCls" data-pdd-go-question="$idx" title="Вопрос ${idx + 1}">${idx + 1}</button>"""
@@ -8212,7 +8226,31 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
     }, true)
 }
 
+// ── Esc закрывает верхний видимый модальный оверлей (.sd-modal-overlay) ──
+private fun installGlobalModalEscapeListenerOnce() {
+    if (window.asDynamic().__sdModalEscInstalled == true) return
+    window.asDynamic().__sdModalEscInstalled = true
+    document.addEventListener("keydown", { ev: Event ->
+        val key = (ev as? KeyboardEvent)?.key ?: return@addEventListener
+        if (key != "Escape") return@addEventListener
+        val overlays = document.querySelectorAll(".sd-modal-overlay:not(.sd-hidden)")
+        val len = (overlays.length as? Int) ?: 0
+        if (len == 0) return@addEventListener
+        val last = overlays.item(len - 1) as? org.w3c.dom.HTMLElement ?: return@addEventListener
+        val cancel = last.querySelector(".sd-modal-actions button.sd-btn-secondary") as? org.w3c.dom.HTMLElement
+            ?: last.querySelector("button.sd-btn-secondary") as? org.w3c.dom.HTMLElement
+        if (cancel != null) cancel.click()
+        else {
+            last.classList.add("sd-hidden")
+            last.setAttribute("aria-hidden", "true")
+        }
+        ev.preventDefault()
+        ev.stopPropagation()
+    }, true)
+}
+
 private fun attachListeners(root: org.w3c.dom.Element) {
+    installGlobalModalEscapeListenerOnce()
     ensureInstructorProfileEarnedCalcDelegation()
     setupInstructorRecordingSubmitButtonsDelegationOnce()
     // Один раз: черновик формы «Запись» у инструктора (курсант + даты) — иначе при каждом attachListeners дублировались change
@@ -9030,7 +9068,9 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                         }
                         if (appState.user?.role == "admin") {
                             fetchAdminEventsForNotifications { pairs ->
-                                val extra = pairs.map { AppNotification(dateTimeMs = it.first, text = it.second) }
+                                val extra = pairs.map {
+                                    AppNotification(dateTimeMs = it.first, text = it.second, sourceId = it.third)
+                                }
                                 openWithMerged(extra)
                             }
                         } else {
@@ -9807,7 +9847,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                                 val delayMs = 400
                                 getCurrentUser { newUser, _ ->
                                     val url = newUser?.chatAvatarUrl?.takeIf { it.isNotBlank() }
-                                    if (url != null && newUser != null) {
+                                    if (url != null) {
                                         img.setAttribute("src", url)
                                         // localStorage не очищаем — при ошибке загрузки URL (CORS и т.д.) fallback в onerror подставит data URL
                                         updateState { user = newUser }

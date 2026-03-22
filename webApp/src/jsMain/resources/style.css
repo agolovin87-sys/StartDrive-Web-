@@ -7160,137 +7160,6 @@ a.sd-cadet-icon-btn:active {
     background: #8b0015;
 }
 
-@media (max-width: 400px) {
-    .sd-header h1 {
-        font-size: 0.97rem;
-    }
-    .sd-header p {
-        font-size: 0.72rem;
-    }
-    .sd-content {
-        padding: 8px 10px;
-        padding-bottom: calc(68px + max(0px, env(safe-area-inset-bottom)));
-    }
-    .sd-card {
-        padding: 12px;
-        border-radius: 10px;
-    }
-    .sd-card h2 {
-        font-size: 0.97rem;
-    }
-    .sd-card p {
-        font-size: 0.83rem;
-    }
-    .sd-block-title {
-        font-size: 0.83rem;
-        padding: 8px 10px;
-    }
-    .sd-home-card {
-        font-size: 0.83rem;
-        padding: 8px 10px;
-    }
-    .sd-ucard-top {
-        padding: 10px 10px 6px;
-        gap: 8px;
-    }
-    .sd-ucard-avatar {
-        width: 38px;
-        height: 38px;
-        font-size: 0.82rem;
-    }
-    .sd-ucard-name {
-        font-size: 0.8rem;
-    }
-    .sd-ucard-rows {
-        padding: 0 10px 6px;
-    }
-    .sd-ucard-row {
-        font-size: 0.75rem;
-        padding: 4px 6px;
-    }
-    .sd-ucard-footer {
-        padding: 6px 8px;
-    }
-    .sd-ucard-foot-btn {
-        min-height: 34px;
-        font-size: 0.73rem;
-    }
-    .sd-bcard {
-        padding: 8px 10px;
-        gap: 8px;
-    }
-    .sd-bcard-name {
-        font-size: 0.78rem;
-    }
-    .sd-balance-sel-count {
-        font-size: 1.75rem;
-    }
-    .sd-btn {
-        padding: 10px 14px;
-        font-size: 0.88rem;
-    }
-    .sd-balance-btn {
-        padding: 8px 10px;
-        font-size: 0.8rem;
-    }
-    .sd-chat-tab {
-        margin-left: -8px;
-        margin-right: -8px;
-    }
-    .sd-msg {
-        max-width: 95%;
-    }
-    .sd-msg-text {
-        font-size: 0.85rem;
-    }
-    .sd-chat-input {
-        font-size: 15px;
-    }
-    .sd-history-row {
-        font-size: 0.78rem;
-        padding: 6px 8px;
-    }
-    .sd-history-day-header {
-        font-size: 0.7rem;
-    }
-    .sd-history-balance-card,
-    .sd-history-session-card {
-        padding: 10px 12px;
-        gap: 10px;
-        border-radius: 10px;
-    }
-    .sd-history-card-icon {
-        width: 28px;
-        height: 28px;
-    }
-    .sd-history-card-icon svg {
-        width: 20px;
-        height: 20px;
-    }
-    .sd-history-balance-type { font-size: 0.88rem; }
-    .sd-history-balance-badge { font-size: 0.82rem; padding: 3px 10px; }
-    .sd-history-balance-row,
-    .sd-history-session-row { font-size: 0.82rem; }
-    .sd-history-summary,
-    .sd-history-sub-title { gap: 8px; font-size: 0.9rem; }
-    .sd-history-section-icon { width: 22px; height: 22px; }
-    .sd-history-sub-list,
-    .sd-history-session-list { gap: 8px; margin-top: 8px; }
-    .sd-header {
-        padding: 8px 10px 8px 14px;
-        padding-left: max(14px, env(safe-area-inset-left));
-        padding-right: max(10px, env(safe-area-inset-right));
-        padding-top: max(8px, env(safe-area-inset-top));
-        gap: 8px;
-    }
-    .sd-btn-signout {
-        width: 40px;
-        height: 40px;
-        min-width: 40px;
-        border-radius: 10px;
-    }
-}
-
 /* ── Чат: полноэкранный оверлей на мобильных (после базовых стилей) ── */
 @media (max-width: 640px) {
     .sd-chat-conversation {
@@ -7551,6 +7420,134 @@ a.sd-cadet-icon-btn:active {
 }
 
 @media (max-width: 400px) {
+    .sd-header h1 {
+        font-size: 0.97rem;
+    }
+    .sd-header p {
+        font-size: 0.72rem;
+    }
+    .sd-content {
+        padding: 8px 10px;
+        padding-bottom: calc(68px + max(0px, env(safe-area-inset-bottom)));
+    }
+    .sd-card {
+        padding: 12px;
+        border-radius: 10px;
+    }
+    .sd-card h2 {
+        font-size: 0.97rem;
+    }
+    .sd-card p {
+        font-size: 0.83rem;
+    }
+    .sd-block-title {
+        font-size: 0.83rem;
+        padding: 8px 10px;
+    }
+    .sd-home-card {
+        font-size: 0.83rem;
+        padding: 8px 10px;
+    }
+    .sd-ucard-top {
+        padding: 10px 10px 6px;
+        gap: 8px;
+    }
+    .sd-ucard-avatar {
+        width: 38px;
+        height: 38px;
+        font-size: 0.82rem;
+    }
+    .sd-ucard-name {
+        font-size: 0.8rem;
+    }
+    .sd-ucard-rows {
+        padding: 0 10px 6px;
+    }
+    .sd-ucard-row {
+        font-size: 0.75rem;
+        padding: 4px 6px;
+    }
+    .sd-ucard-footer {
+        padding: 6px 8px;
+    }
+    .sd-ucard-foot-btn {
+        min-height: 34px;
+        font-size: 0.73rem;
+    }
+    .sd-bcard {
+        padding: 8px 10px;
+        gap: 8px;
+    }
+    .sd-bcard-name {
+        font-size: 0.78rem;
+    }
+    .sd-balance-sel-count {
+        font-size: 1.75rem;
+    }
+    .sd-btn {
+        padding: 10px 14px;
+        font-size: 0.88rem;
+    }
+    .sd-balance-btn {
+        padding: 8px 10px;
+        font-size: 0.8rem;
+    }
+    .sd-chat-tab {
+        margin-left: -8px;
+        margin-right: -8px;
+    }
+    .sd-msg {
+        max-width: 95%;
+    }
+    .sd-msg-text {
+        font-size: 0.85rem;
+    }
+    .sd-chat-input {
+        font-size: 15px;
+    }
+    .sd-history-row {
+        font-size: 0.78rem;
+        padding: 6px 8px;
+    }
+    .sd-history-day-header {
+        font-size: 0.7rem;
+    }
+    .sd-history-balance-card,
+    .sd-history-session-card {
+        padding: 10px 12px;
+        gap: 10px;
+        border-radius: 10px;
+    }
+    .sd-history-card-icon {
+        width: 28px;
+        height: 28px;
+    }
+    .sd-history-card-icon svg {
+        width: 20px;
+        height: 20px;
+    }
+    .sd-history-balance-type { font-size: 0.88rem; }
+    .sd-history-balance-badge { font-size: 0.82rem; padding: 3px 10px; }
+    .sd-history-balance-row,
+    .sd-history-session-row { font-size: 0.82rem; }
+    .sd-history-summary,
+    .sd-history-sub-title { gap: 8px; font-size: 0.9rem; }
+    .sd-history-section-icon { width: 22px; height: 22px; }
+    .sd-history-sub-list,
+    .sd-history-session-list { gap: 8px; margin-top: 8px; }
+    .sd-header {
+        padding: 8px 10px 8px 14px;
+        padding-left: max(14px, env(safe-area-inset-left));
+        padding-right: max(10px, env(safe-area-inset-right));
+        padding-top: max(8px, env(safe-area-inset-top));
+        gap: 8px;
+    }
+    .sd-btn-signout {
+        width: 40px;
+        height: 40px;
+        min-width: 40px;
+        border-radius: 10px;
+    }
     .sd-tab {
         min-width: 54px;
         max-width: 86px;

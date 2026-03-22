@@ -38,11 +38,21 @@
 
 ## Сборка
 
+**Android:**
+
 ```bash
 ./gradlew assembleDebug
 ```
 
 Или откройте проект в Android Studio и запустите на устройстве/эмуляторе.
+
+**Веб-клиент (Kotlin/JS):** модуль `webApp` — см. [webApp/README.md](webApp/README.md). Быстрая проверка компиляции:
+
+```bash
+./gradlew :webApp:compileKotlinJs
+```
+
+CI (GitHub Actions): при push/PR в `main`/`master` выполняется `:webApp:compileKotlinJs`.
 
 ## Структура БД (кратко)
 

@@ -1,0 +1,10 @@
+{
+  "name": "StartDrive",
+  "short_name": "StartDrive",
+  "description": "Автошкола: админ, инструктор, курсант",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0b1c38",
+  "theme_color": "#0b1c38",
+  "lang": "ru"
+}

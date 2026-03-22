@@ -243,10 +243,11 @@ data class AppState(
     var chatStorageBucketError: String? = null,
 )
 
-/** Одно уведомление: дата, время, текст. */
+/** Одно уведомление: дата, время, текст; [sourceId] — id документа Firestore (например admin_events) для дедупликации. */
 data class AppNotification(
     val dateTimeMs: Long,
     val text: String,
+    val sourceId: String? = null,
 )
 
 var appState = AppState()

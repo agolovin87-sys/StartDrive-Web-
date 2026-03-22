@@ -20,6 +20,8 @@ data class User(
     val isActive: Boolean = false,
     val createdAtMillis: Long? = null,
     val chatAvatarUrl: String? = null,
+    /** Id документа в [FirebasePaths.CADET_GROUPS] (только для role=cadet). */
+    val cadetGroupId: String? = null,
 ) {
     fun initials(): String =
         fullName.split(" ").take(2).mapNotNull { it.firstOrNull()?.uppercase() }.joinToString("")

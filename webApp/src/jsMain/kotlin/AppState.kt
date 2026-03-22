@@ -3,6 +3,18 @@ import firebase.ChatMessage
 import firebase.DrivingSession
 import firebase.InstructorOpenWindow
 import firebase.BalanceHistoryEntry
+import firebase.CadetGroup
+import firebase.ChatGroup
+
+/** Статистика Storage для группового чата (Firestore id chat_groups). */
+data class ChatGroupStorageStats(
+    val groupId: String,
+    val voiceFileCount: Int,
+    val voiceTotalBytes: Long,
+    val chatFileCount: Int,
+    val chatFileTotalBytes: Long,
+    val avatarBytes: Long,
+)
 
 /** Вопрос билета ПДД (как в Android PddQuestion). */
 data class PddQuestion(
@@ -45,6 +57,30 @@ enum class AppScreen {
     Cadet,
 }
 
+/** Статистика Firebase Storage для контакта (личный чат с админом). */
+data class ChatContactStorageStats(
+    val userId: String,
+    val voiceFileCount: Int,
+    val voiceTotalBytes: Long,
+    /** Вложения админа в личном чате (Storage: chats/files/{roomId}/). */
+    val chatFileCount: Int,
+    val chatFileTotalBytes: Long,
+    val avatarBytes: Long,
+)
+
+/** Разбивка объёма бакета: инструктор, курсант, групповой чат (Storage), прочее. */
+data class StorageBucketUsageBreakdown(
+    val totalBytes: Long,
+    val instructorBytes: Long,
+    val cadetBytes: Long,
+    /** Папка `users/{uid}/` для учётных записей с ролью admin. */
+    val adminBytes: Long,
+    /** Голосовые/файлы в комнатах `group_*`, аватары `chats/group_avatars/`. */
+    val groupBytes: Long,
+    /** Прочее (не instructor/cadet/admin users, не группы). */
+    val otherBytes: Long,
+)
+
 data class AppState(
     var screen: AppScreen = AppScreen.Login,
     var user: User? = null,
@@ -52,11 +88,29 @@ data class AppState(
     var loading: Boolean = false,
     var networkError: String? = null,
     var selectedTabIndex: Int = 0,
+    /** Экран настроек открыт из чата (внизу вкладки «Настройки» нет). */
+    var chatSettingsOpen: Boolean = false,
     var chatContacts: List<User> = emptyList(),
     var chatContactOnlineIds: Set<String> = emptySet(),
     var chatContactsLoading: Boolean = false,
     var selectedChatContactId: String? = null,
+    /** Открыт групповой чат (Firestore id документа chat_groups). */
+    var selectedChatGroupId: String? = null,
+    /** Групповые чаты, в которых состоит пользователь. */
+    var chatGroups: List<ChatGroup> = emptyList(),
+    /** Модалка создания группы (только админ). */
+    var adminChatGroupModalOpen: Boolean = false,
+    /** Редактирование группы: id документа; null — режим создания. */
+    var adminChatGroupEditId: String? = null,
+    /** Подтверждение удаления группы (id). */
+    var adminChatGroupDeleteConfirmId: String? = null,
+    /** Черновик модалки группы чата (название и участники). */
+    var adminChatGroupDraftName: String = "",
+    var adminChatGroupDraftMemberIds: List<String> = emptyList(),
     var chatMessages: List<ChatMessage> = emptyList(),
+    /** Текущее сообщение, на которое отвечает пользователь в чате. */
+    var chatReplyToMessageId: String? = null,
+    var chatReplyToText: String? = null,
     var chatUnreadCounts: Map<String, Int> = emptyMap(),
     /** Показывать аватары других пользователей в чате (настройка из Firebase: app_config/chat_show_other_avatars). */
     var chatShowOtherAvatars: Boolean = true,
@@ -72,7 +126,14 @@ data class AppState(
     var balanceAdminLoading: Boolean = false,
     var balanceAdminSelectedUserId: String? = null,
     var adminHomeUsers: List<User> = emptyList(),
+    /** Курсант id → число завершённых вождений (главная админки). */
+    var adminCadetCompletedDriveCounts: Map<String, Int> = emptyMap(),
     var adminHomeLoading: Boolean = false,
+    /** Вкладка «Расписание» (админ): сессии по id инструктора. */
+    var adminScheduleSessionsByInstructorId: Map<String, List<DrivingSession>> = emptyMap(),
+    /** Последняя «просмотренная» сигнатура расписания (бейдж на вкладке «Расписание»). */
+    var adminScheduleSeenSignature: String = "",
+    var adminScheduleLoading: Boolean = false,
     var adminNewbiesSectionOpen: Boolean = true,
     var adminInstructorsSectionOpen: Boolean = true,
     var adminCadetsSectionOpen: Boolean = true,
@@ -81,13 +142,30 @@ data class AppState(
     var adminAssignInstructorId: String? = null,
     var adminAssignCadetId: String? = null,
     var adminInstructorCadetsModalId: String? = null,
+    /** Учебные группы (список из Firestore). */
+    var cadetGroups: List<CadetGroup> = emptyList(),
+    var adminAddGroupModalOpen: Boolean = false,
+    /** Редактирование группы (id документа); null — создание новой. */
+    var adminEditingGroupId: String? = null,
+    /** Открыт выбор группы для курсанта (id курсанта). */
+    var adminCadetGroupPickerCadetId: String? = null,
     var cadetInstructor: User? = null,
     var instructorCadets: List<User> = emptyList(),
     var chatVoiceRecording: Boolean = false,
+    /** Если true — отправляем голосовое сразу при остановке/отпускании (режим "удерживай"). */
+    var chatVoiceRecordingAutoSend: Boolean = false,
     var chatVoiceRecordStartMs: Double = 0.0,
     var chatVoiceRecordElapsedSec: Int = 0,
+    /** Если true — запись готова к просмотру/отправке (режим "однократный клик"). */
+    var chatVoiceReviewReady: Boolean = false,
+    /** Local object URL (blob) для проигрывания готовой записи. */
+    var chatVoiceReviewLocalUrl: String? = null,
+    /** Длительность готовой записи для отображения таймера. */
+    var chatVoiceReviewDurationSec: Int = 0,
     var chatPlayingVoiceId: String? = null,
     var chatPlayingVoiceCurrentMs: Int = 0,
+    /** true — то же голосовое на паузе (позиция в chatPlayingVoiceCurrentMs / currentTime). */
+    var chatVoicePlaybackPaused: Boolean = false,
     var pddCategoryId: String? = null,
     var pddTicketName: String? = null,
     var pddQuestions: List<PddQuestion> = emptyList(),
@@ -133,6 +211,28 @@ data class AppState(
     var soundAudioUnlocked: Boolean = false,
     /** До какого времени (мс) кнопка «Опаздываю» неактивна после выбора задержки. */
     var instructorRunningLateUntilMs: Long = 0L,
+    /** Подэкран вкладки «Главная» у инструктора: основная или «Профиль» (без отдельной вкладки внизу). */
+    var instructorHomeSubView: String = "main",
+    /** Подэкран вкладки «Главная» у курсанта: основная или «Профиль» со статистикой (как в Android). */
+    var cadetHomeSubView: String = "main",
+    /** Курсант, выбранный в форме «Записать курсанта» (вкладка Запись); задаётся с кнопки на карточке «Мои курсанты». */
+    var instructorRecordingBookCadetId: String? = null,
+    /** Значение поля даты/времени «Записать курсанта» (формат datetime-local), чтобы не сбрасывалось при перерисовке. */
+    var instructorRecordingBookDatetimeLocal: String = "",
+    /** Черновик даты/времени «Добавить окно» на вкладке Запись (инструктор). */
+    var instructorRecordingAddDatetimeLocal: String = "",
+    /** Однократно прокрутить к блоку «Записать курсанта» после перехода с Главной. */
+    var instructorRecordingScrollToBookForm: Boolean = false,
+    /** Статистика Storage по контактам чата (админ → Callable). */
+    var chatStorageStatsByUserId: Map<String, ChatContactStorageStats> = emptyMap(),
+    /** Статистика Storage по групповым чатам (админ → Callable). */
+    var chatGroupStorageStatsByGroupId: Map<String, ChatGroupStorageStats> = emptyMap(),
+    var chatStorageStatsLoading: Boolean = false,
+    var chatStorageStatsError: String? = null,
+    /** Заполненность бакета и разбивка по ролям; null — ещё не запрашивали. */
+    var chatStorageBucketBreakdown: StorageBucketUsageBreakdown? = null,
+    var chatStorageBucketLoading: Boolean = false,
+    var chatStorageBucketError: String? = null,
 )
 
 /** Одно уведомление: дата, время, текст. */

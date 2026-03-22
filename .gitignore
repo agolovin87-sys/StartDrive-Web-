@@ -24,3 +24,6 @@ webApp/build/
 # Service account key (для скрипта set-storage-cors.js)
 functions/service-account-key.json
 service-account-key.json
+
+# Node (Cloud Functions)
+functions/node_modules/

@@ -1,5 +1,8 @@
 package firebase
 
+import ChatContactStorageStats
+import ChatGroupStorageStats
+import StorageBucketUsageBreakdown
 import com.example.startdrive.shared.FirebasePaths
 import com.example.startdrive.shared.model.User
 import kotlinx.browser.window
@@ -152,6 +155,8 @@ private fun parseUserFromDoc(doc: dynamic, d: dynamic): User {
     val assignedCadets = (assignedCadetsRaw as? Array<*>)?.mapNotNull { it?.toString() } ?: emptyList<String>()
     @Suppress("UNCHECKED_CAST_TO_NATIVE_INTERFACE")
     val chatAvatarUrl = (data["chatAvatarUrl"] as? String) ?: (data.chatAvatarUrl as? String)
+    val cadetGroupIdRaw = (data["cadetGroupId"] as? String) ?: (data.cadetGroupId as? String)
+    val cadetGroupId = cadetGroupIdRaw?.takeIf { it.isNotBlank() }
     return User(
         id = id,
         fullName = fullName,
@@ -164,7 +169,23 @@ private fun parseUserFromDoc(doc: dynamic, d: dynamic): User {
         assignedInstructorId = assignedInstructorId,
         assignedCadets = assignedCadets,
         chatAvatarUrl = chatAvatarUrl,
+        cadetGroupId = cadetGroupId,
     )
+}
+
+/** Обновить привязку курсанта к группе (null — снять группу). */
+fun setUserCadetGroup(cadetId: String, groupId: String?, callback: (String?) -> Unit) {
+    val firestore = getFirestore()
+    val payload = js("{}").unsafeCast<dynamic>()
+    if (groupId.isNullOrBlank()) {
+        payload.cadetGroupId = js("firebase.firestore.FieldValue.delete()")
+    } else {
+        payload.cadetGroupId = groupId
+    }
+    firestore.collection(FirebasePaths.USERS).doc(cadetId)
+        .update(payload)
+        .then { callback(null) }
+        .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
 }
 
 fun getCurrentUser(callback: (User?, errorMessage: String?) -> Unit) {
@@ -199,6 +220,32 @@ fun getCurrentUser(callback: (User?, errorMessage: String?) -> Unit) {
             }
             callback(null, msg)
         }
+}
+
+/**
+ * Подписка на изменения документа текущего пользователя в Firestore (баланс, ФИО и т.д.).
+ * Нужна, чтобы баланс в профиле обновлялся сразу после списания/зачисления с другого клиента или функции.
+ * Возвращает функцию отписки; вызывать при выходе из аккаунта.
+ */
+fun subscribeCurrentUserDocument(onUpdate: (User) -> Unit): () -> Unit {
+    val uid = getCurrentUserId() ?: return {}
+    val ref = getFirestore().collection(FirebasePaths.USERS).doc(uid)
+    val unsubscribe = ref.onSnapshot { snap: dynamic ->
+        if (snap?.exists != true) return@onSnapshot
+        val docD = snap.unsafeCast<dynamic>()
+        val d = docD.data()
+        if (d == null) return@onSnapshot
+        onUpdate(parseUserFromDoc(docD, d))
+    }
+    return {
+        try {
+            unsubscribe.unsafeCast<dynamic>().invoke()
+        } catch (_: Throwable) {
+            try {
+                js("(function(u){ try { if (typeof u === 'function') u(); } catch(e) {} })").unsafeCast<(dynamic) -> Unit>().invoke(unsubscribe)
+            } catch (_: Throwable) { }
+        }
+    }
 }
 
 fun getUsers(callback: (List<User>) -> Unit) {
@@ -377,20 +424,510 @@ private fun uploadChatAvatarDirect(uid: String, dataUrl: String, callback: (Stri
     }
 }
 
-/** Удаляет аватар: обнуляет chatAvatarUrl в Firestore и удаляет файл из Firebase Storage.
- * 404 при DELETE — нормально (файла могло не быть). Ошибку delete не пробрасываем. */
+/** Путь к аватару группового чата (storage.rules: chats/group_avatars/{groupId}/). */
+private fun chatGroupAvatarStoragePath(groupId: String): String = "chats/group_avatars/$groupId/avatar.png"
+
+/**
+ * Обновляет ID-токен перед Storage — иначе правила с `request.auth` часто дают storage/unauthorized.
+ */
+private fun withFreshAuthTokenForStorage(onReady: () -> Unit, onError: (String?) -> Unit) {
+    val user = getAuth()?.unsafeCast<dynamic>()?.currentUser
+    if (user == null) {
+        onError("Войдите в аккаунт — без Firebase Auth Storage вернёт «нет доступа».")
+        return
+    }
+    val promise = user.getIdToken(true).unsafeCast<dynamic>()
+    promise.then { _: dynamic -> onReady() }.unsafeCast<dynamic>().`catch` { e: dynamic ->
+        onError((e?.message as? String) ?: "Не удалось обновить токен для Storage")
+    }
+}
+
+/** Загружает аватар группы (Callable → Admin SDK, как uploadChatAvatar; иначе прямой PUT в Storage). */
+fun uploadChatGroupAvatar(groupId: String, dataUrl: String, callback: (String?) -> Unit) {
+    fun friendlyMessage(msg: String): String = when {
+        msg.contains("Failed to fetch", ignoreCase = true) || msg.contains("NetworkError", ignoreCase = true) ->
+            "Нет соединения с интернетом. Проверьте сеть и повторите."
+        msg.contains("unauthenticated", ignoreCase = true) -> "Войдите в аккаунт и повторите."
+        msg.contains("invalid-argument", ignoreCase = true) -> "Неверные данные. Попробуйте другую фотографию."
+        msg.contains("permission-denied", ignoreCase = true) -> "Нет прав на изменение аватара группы."
+        msg.contains("not-found", ignoreCase = true) -> "Группа не найдена."
+        else -> msg
+    }
+    val functions = getFunctions()
+    val callable = if (functions != null) {
+        val httpsCallableFn = js("require('firebase/functions').httpsCallable")
+        (httpsCallableFn as (dynamic, String) -> dynamic)(functions, "uploadChatGroupAvatar")
+    } else null
+    if (callable != null) {
+        js("if(typeof console!=='undefined'&&console.log)console.log('StartDrive: аватар группы через Callable')")
+        val payload = kotlin.js.json("groupId" to groupId, "dataUrl" to dataUrl)
+        (callable as (dynamic) -> dynamic)(payload).then { _: dynamic ->
+            callback(null)
+        }.catch { e: dynamic ->
+            val code = (e?.code as? String) ?: ""
+            val msg = (e?.message as? String) ?: "Ошибка загрузки"
+            js("if(typeof console!=='undefined'&&console.error)console.error('StartDrive uploadChatGroupAvatar callable:', msg, e)")
+            callback(friendlyMessage("$code $msg".trim()))
+        }
+    } else {
+        uploadChatGroupAvatarDirect(groupId, dataUrl, callback)
+    }
+}
+
+private fun uploadChatGroupAvatarDirect(groupId: String, dataUrl: String, callback: (String?) -> Unit) {
+    withFreshAuthTokenForStorage(
+        onReady = {
+            val storage = getStorage() ?: run { callback("Storage не доступен"); return@withFreshAuthTokenForStorage }
+            val firestore = getFirestore()
+            val path = chatGroupAvatarStoragePath(groupId)
+            val storageRef = storage.ref(path)
+            val blob = dataUrlToBlob(dataUrl)
+            storageRef.put(blob, kotlin.js.json("contentType" to "image/png")).then { _: dynamic ->
+                storageRef.getDownloadURL()
+            }.then { url: dynamic ->
+                firestore.collection(FirebasePaths.CHAT_GROUPS).doc(groupId).update(kotlin.js.json("chatAvatarUrl" to (url as String)))
+            }.then { callback(null) }.catch { e: dynamic ->
+                val msg = (e?.message as? String) ?: "Ошибка загрузки аватара группы"
+                callback(
+                    when {
+                        msg.contains("Failed to fetch", ignoreCase = true) || msg.contains("NetworkError", ignoreCase = true) ->
+                            "Нет соединения с интернетом. Проверьте сеть и повторите."
+                        else -> msg
+                    }
+                )
+            }
+        },
+        onError = callback,
+    )
+}
+
+/** Удаляет файл аватара группы и обнуляет chatAvatarUrl в Firestore. */
+fun removeChatGroupAvatar(groupId: String, callback: (String?) -> Unit) {
+    fun friendlyMessage(msg: String): String = when {
+        msg.contains("Failed to fetch", ignoreCase = true) || msg.contains("NetworkError", ignoreCase = true) ->
+            "Нет соединения с интернетом."
+        msg.contains("permission-denied", ignoreCase = true) -> "Нет прав."
+        else -> msg
+    }
+    val functions = getFunctions()
+    val callable = if (functions != null) {
+        val httpsCallableFn = js("require('firebase/functions').httpsCallable")
+        (httpsCallableFn as (dynamic, String) -> dynamic)(functions, "removeChatGroupAvatar")
+    } else null
+    if (callable != null) {
+        val payload = kotlin.js.json("groupId" to groupId)
+        (callable as (dynamic) -> dynamic)(payload).then { _: dynamic ->
+            callback(null)
+        }.catch { e: dynamic ->
+            val code = (e?.code as? String) ?: ""
+            val msg = (e?.message as? String) ?: "Ошибка"
+            callback(friendlyMessage("$code $msg".trim()))
+        }
+    } else {
+        withFreshAuthTokenForStorage(
+            onReady = {
+                val firestore = getFirestore()
+                firestore.collection(FirebasePaths.CHAT_GROUPS).doc(groupId).update(kotlin.js.json("chatAvatarUrl" to ""))
+                    .then {
+                        val storage = getStorage()
+                        if (storage != null) {
+                            val ref = storage.ref(chatGroupAvatarStoragePath(groupId))
+                            ref.delete().catch { _: dynamic -> js("undefined") }
+                        } else
+                            js("undefined")
+                    }
+                    .then { callback(null) }
+                    .catch { e: Throwable ->
+                        val msg = (e.asDynamic().message as? String) ?: "Ошибка"
+                        callback(if (msg.contains("Failed to fetch", ignoreCase = true)) "Нет соединения с интернетом." else msg)
+                    }
+            },
+            onError = callback,
+        )
+    }
+}
+
+/**
+ * Загрузка файла в чат (участники комнаты: личный чат или группа). Callable → Admin SDK → URL с download token.
+ * [callback]: (ошибка или null, url или null).
+ */
+fun uploadChatAdminFile(
+    roomId: String,
+    fileName: String,
+    contentType: String,
+    base64: String,
+    callback: (String?, String?) -> Unit,
+) {
+    fun friendlyMessage(msg: String): String = when {
+        msg.contains("Failed to fetch", ignoreCase = true) || msg.contains("NetworkError", ignoreCase = true) ->
+            "Нет соединения с интернетом. Проверьте сеть и повторите."
+        msg.contains("unauthenticated", ignoreCase = true) -> "Войдите в аккаунт и повторите."
+        msg.contains("permission-denied", ignoreCase = true) -> "Нет доступа к этой переписке или группе."
+        msg.contains("invalid-argument", ignoreCase = true) -> "Неверные данные или файл слишком большой (макс. 8 МБ)."
+        else -> msg
+    }
+    val functions = getFunctions()
+    val callable = if (functions != null) {
+        val httpsCallableFn = js("require('firebase/functions').httpsCallable")
+        (httpsCallableFn as (dynamic, String) -> dynamic)(functions, "uploadChatAdminFile")
+    } else null
+    if (callable == null) {
+        callback("Cloud Functions недоступны", null)
+        return
+    }
+    val payload = kotlin.js.json(
+        "roomId" to roomId,
+        "fileName" to fileName,
+        "contentType" to contentType,
+        "base64" to base64,
+    )
+    (callable as (dynamic) -> dynamic)(payload).then { res: dynamic ->
+        // res — HttpsCallableResult из JS; не вызывать .asDynamic() у dynamic — иначе "asDynamic is not a function"
+        val url = res.data?.url as? String
+        if (url.isNullOrBlank()) callback("Пустой ответ сервера", null)
+        else callback(null, url)
+    }.catch { e: dynamic ->
+        val code = (e?.code as? String) ?: ""
+        val msg = (e?.message as? String) ?: "Ошибка загрузки"
+        val details = e.details
+        js("if(typeof console!=='undefined'&&console.error)console.error('StartDrive uploadChatAdminFile:', code, msg, details, e)")
+        val detailSuffix = try {
+            val d = details
+            if (d == null) ""
+            else {
+                val s = js("JSON.stringify")(d) as? String ?: ""
+                if (s.isNotBlank() && s != "undefined") " $s" else ""
+            }
+        } catch (_: Throwable) {
+            ""
+        }
+        callback(friendlyMessage("$code $msg$detailSuffix".trim()), null)
+    }
+}
+
+/** Статистика Storage по контактам чата (только админ). [callback]: ошибка или null, список или null. */
+fun getAdminChatStorageStats(contactIds: List<String>, callback: (String?, List<ChatContactStorageStats>?) -> Unit) {
+    fun friendly(msg: String): String = when {
+        msg.contains("permission-denied", ignoreCase = true) -> "Нет доступа."
+        msg.contains("unauthenticated", ignoreCase = true) -> "Войдите в аккаунт."
+        else -> msg
+    }
+    val functions = getFunctions()
+    val callable = if (functions != null) {
+        val httpsCallableFn = js("require('firebase/functions').httpsCallable")
+        (httpsCallableFn as (dynamic, String) -> dynamic)(functions, "getAdminChatStorageStats")
+    } else null
+    if (callable == null) {
+        callback("Cloud Functions недоступны", null)
+        return
+    }
+    val payload = js("{}").unsafeCast<dynamic>()
+    val arr = js("[]").unsafeCast<dynamic>()
+    contactIds.forEachIndexed { i, id -> arr[i] = id }
+    payload.contactIds = arr
+    (callable as (dynamic) -> dynamic)(payload).then { res: dynamic ->
+        val data = res.data
+        val statsDyn = data?.unsafeCast<dynamic>()?.stats
+        val out = mutableListOf<ChatContactStorageStats>()
+        if (statsDyn != null && statsDyn != undefined) {
+            val len = js("(function(a){ return a && a.length ? a.length : 0; })")(statsDyn).unsafeCast<Number>().toInt()
+            for (i in 0 until len) {
+                val it = statsDyn[i].unsafeCast<dynamic>()
+                val uid = it.userId as? String ?: continue
+                out.add(
+                    ChatContactStorageStats(
+                        userId = uid,
+                        voiceFileCount = (it.voiceFileCount as? Number)?.toInt() ?: 0,
+                        voiceTotalBytes = (it.voiceTotalBytes as? Number)?.toLong() ?: 0L,
+                        chatFileCount = (it.chatFileCount as? Number)?.toInt() ?: 0,
+                        chatFileTotalBytes = (it.chatFileTotalBytes as? Number)?.toLong() ?: 0L,
+                        avatarBytes = (it.avatarBytes as? Number)?.toLong() ?: 0L,
+                    ),
+                )
+            }
+        }
+        callback(null, out)
+    }.catch { e: dynamic ->
+        val code = (e?.code as? String) ?: ""
+        val msg = (e?.message as? String) ?: "Ошибка"
+        js("if(typeof console!=='undefined'&&console.error)console.error('getAdminChatStorageStats:', code, msg, e)")
+        callback(friendly("$code $msg".trim()), null)
+    }
+}
+
+/** Статистика Storage по групповым чатам (только админ). */
+fun getAdminGroupChatStorageStats(groupIds: List<String>, callback: (String?, List<ChatGroupStorageStats>?) -> Unit) {
+    fun friendly(msg: String): String = when {
+        msg.contains("permission-denied", ignoreCase = true) -> "Нет доступа."
+        msg.contains("unauthenticated", ignoreCase = true) -> "Войдите в аккаунт."
+        else -> msg
+    }
+    val functions = getFunctions()
+    val callable = if (functions != null) {
+        val httpsCallableFn = js("require('firebase/functions').httpsCallable")
+        (httpsCallableFn as (dynamic, String) -> dynamic)(functions, "getAdminGroupChatStorageStats")
+    } else null
+    if (callable == null) {
+        callback("Cloud Functions недоступны", null)
+        return
+    }
+    val payload = js("{}").unsafeCast<dynamic>()
+    val arr = js("[]").unsafeCast<dynamic>()
+    groupIds.forEachIndexed { i, id -> arr[i] = id }
+    payload.groupIds = arr
+    (callable as (dynamic) -> dynamic)(payload).then { res: dynamic ->
+        val data = res.data
+        val statsDyn = data?.unsafeCast<dynamic>()?.stats
+        val out = mutableListOf<ChatGroupStorageStats>()
+        if (statsDyn != null && statsDyn != undefined) {
+            val len = js("(function(a){ return a && a.length ? a.length : 0; })")(statsDyn).unsafeCast<Number>().toInt()
+            for (i in 0 until len) {
+                val it = statsDyn[i].unsafeCast<dynamic>()
+                val gid = it.groupId as? String ?: continue
+                out.add(
+                    ChatGroupStorageStats(
+                        groupId = gid,
+                        voiceFileCount = (it.voiceFileCount as? Number)?.toInt() ?: 0,
+                        voiceTotalBytes = (it.voiceTotalBytes as? Number)?.toLong() ?: 0L,
+                        chatFileCount = (it.chatFileCount as? Number)?.toInt() ?: 0,
+                        chatFileTotalBytes = (it.chatFileTotalBytes as? Number)?.toLong() ?: 0L,
+                        avatarBytes = (it.avatarBytes as? Number)?.toLong() ?: 0L,
+                    ),
+                )
+            }
+        }
+        callback(null, out)
+    }.catch { e: dynamic ->
+        val code = (e?.code as? String) ?: ""
+        val msg = (e?.message as? String) ?: "Ошибка"
+        js("if(typeof console!=='undefined'&&console.error)console.error('getAdminGroupChatStorageStats:', code, msg, e)")
+        callback(friendly("$code $msg".trim()), null)
+    }
+}
+
+/** Админ: объём бакета и разбивка по ролям. [callback]: ошибка или null, данные или null. */
+fun getFirebaseStorageBucketUsage(callback: (String?, StorageBucketUsageBreakdown?) -> Unit) {
+    fun friendly(msg: String): String = when {
+        msg.contains("permission-denied", ignoreCase = true) -> "Нет доступа."
+        msg.contains("unauthenticated", ignoreCase = true) -> "Войдите в аккаунт."
+        else -> msg
+    }
+    val functions = getFunctions()
+    val callable = if (functions != null) {
+        val httpsCallableFn = js("require('firebase/functions').httpsCallable")
+        (httpsCallableFn as (dynamic, String) -> dynamic)(functions, "getFirebaseStorageBucketUsage")
+    } else null
+    if (callable == null) {
+        callback("Cloud Functions недоступны", null)
+        return
+    }
+    val payload = js("{}").unsafeCast<dynamic>()
+    (callable as (dynamic) -> dynamic)(payload).then { res: dynamic ->
+        val d = res.data?.unsafeCast<dynamic>()
+        fun n(field: String): Long {
+            val v = js("(function(o,k){ return o ? o[k] : null; })")(d, field)
+            return (v as? Number)?.toLong() ?: 0L
+        }
+        val breakdown = StorageBucketUsageBreakdown(
+            totalBytes = n("totalBytes"),
+            instructorBytes = n("instructorBytes"),
+            cadetBytes = n("cadetBytes"),
+            adminBytes = n("adminBytes"),
+            groupBytes = n("groupBytes"),
+            otherBytes = n("otherBytes"),
+        )
+        callback(null, breakdown)
+    }.catch { e: dynamic ->
+        val code = (e?.code as? String) ?: ""
+        val msg = (e?.message as? String) ?: "Ошибка"
+        js("if(typeof console!=='undefined'&&console.error)console.error('getFirebaseStorageBucketUsage:', code, msg, e)")
+        callback(friendly("$code $msg".trim()), null)
+    }
+}
+
+/** Админ: очистить файлы в личном чате с контактом (комната админ↔контакт). [callback]: ошибка или null. */
+fun adminClearContactFiles(contactId: String, callback: (String?) -> Unit) {
+    fun friendly(msg: String): String = when {
+        msg.contains("permission-denied", ignoreCase = true) -> "Нет доступа."
+        msg.contains("unauthenticated", ignoreCase = true) -> "Войдите в аккаунт."
+        else -> msg
+    }
+    val functions = getFunctions()
+    val callable = if (functions != null) {
+        val httpsCallableFn = js("require('firebase/functions').httpsCallable")
+        (httpsCallableFn as (dynamic, String) -> dynamic)(functions, "adminClearContactFiles")
+    } else null
+    if (callable == null) {
+        callback("Cloud Functions недоступны")
+        return
+    }
+    val payload = kotlin.js.json("contactId" to contactId)
+    (callable as (dynamic) -> dynamic)(payload).then { _: dynamic ->
+        callback(null)
+    }.catch { e: dynamic ->
+        val code = (e?.code as? String) ?: ""
+        val msg = (e?.message as? String) ?: "Ошибка"
+        js("if(typeof console!=='undefined'&&console.error)console.error('adminClearContactFiles:', code, msg, e)")
+        callback(friendly("$code $msg".trim()))
+    }
+}
+
+/** Админ: очистить голосовые в личном чате с контактом (RTDB + Storage). [callback]: ошибка или null. */
+fun adminClearContactVoice(contactId: String, callback: (String?) -> Unit) {
+    fun friendly(msg: String): String = when {
+        msg.contains("permission-denied", ignoreCase = true) -> "Нет доступа."
+        msg.contains("unauthenticated", ignoreCase = true) -> "Войдите в аккаунт."
+        else -> msg
+    }
+    val functions = getFunctions()
+    val callable = if (functions != null) {
+        val httpsCallableFn = js("require('firebase/functions').httpsCallable")
+        (httpsCallableFn as (dynamic, String) -> dynamic)(functions, "adminClearContactVoice")
+    } else null
+    if (callable == null) {
+        callback("Cloud Functions недоступны")
+        return
+    }
+    val payload = kotlin.js.json("contactId" to contactId)
+    (callable as (dynamic) -> dynamic)(payload).then { _: dynamic ->
+        callback(null)
+    }.catch { e: dynamic ->
+        val code = (e?.code as? String) ?: ""
+        val msg = (e?.message as? String) ?: "Ошибка"
+        js("if(typeof console!=='undefined'&&console.error)console.error('adminClearContactVoice:', code, msg, e)")
+        callback(friendly("$code $msg".trim()))
+    }
+}
+
+/** Админ: удалить аватар контакта (Storage + Firestore). [callback]: ошибка или null. */
+fun adminClearContactAvatar(contactId: String, callback: (String?) -> Unit) {
+    fun friendly(msg: String): String = when {
+        msg.contains("permission-denied", ignoreCase = true) -> "Нет доступа."
+        msg.contains("unauthenticated", ignoreCase = true) -> "Войдите в аккаунт."
+        else -> msg
+    }
+    val functions = getFunctions()
+    val callable = if (functions != null) {
+        val httpsCallableFn = js("require('firebase/functions').httpsCallable")
+        (httpsCallableFn as (dynamic, String) -> dynamic)(functions, "adminClearContactAvatar")
+    } else null
+    if (callable == null) {
+        callback("Cloud Functions недоступны")
+        return
+    }
+    val payload = kotlin.js.json("contactId" to contactId)
+    (callable as (dynamic) -> dynamic)(payload).then { _: dynamic ->
+        callback(null)
+    }.catch { e: dynamic ->
+        val code = (e?.code as? String) ?: ""
+        val msg = (e?.message as? String) ?: "Ошибка"
+        js("if(typeof console!=='undefined'&&console.error)console.error('adminClearContactAvatar:', code, msg, e)")
+        callback(friendly("$code $msg".trim()))
+    }
+}
+
+/** Админ: очистить голосовые в групповом чате (RTDB + Storage). */
+fun adminClearGroupVoice(groupId: String, callback: (String?) -> Unit) {
+    fun friendly(msg: String): String = when {
+        msg.contains("permission-denied", ignoreCase = true) -> "Нет доступа."
+        msg.contains("unauthenticated", ignoreCase = true) -> "Войдите в аккаунт."
+        msg.contains("not-found", ignoreCase = true) -> "Группа не найдена."
+        else -> msg
+    }
+    val functions = getFunctions()
+    val callable = if (functions != null) {
+        val httpsCallableFn = js("require('firebase/functions').httpsCallable")
+        (httpsCallableFn as (dynamic, String) -> dynamic)(functions, "adminClearGroupVoice")
+    } else null
+    if (callable == null) {
+        callback("Cloud Functions недоступны")
+        return
+    }
+    val payload = kotlin.js.json("groupId" to groupId)
+    (callable as (dynamic) -> dynamic)(payload).then { _: dynamic ->
+        callback(null)
+    }.catch { e: dynamic ->
+        val code = (e?.code as? String) ?: ""
+        val msg = (e?.message as? String) ?: "Ошибка"
+        js("if(typeof console!=='undefined'&&console.error)console.error('adminClearGroupVoice:', code, msg, e)")
+        callback(friendly("$code $msg".trim()))
+    }
+}
+
+/** Админ: очистить файлы в групповом чате (RTDB + Storage). */
+fun adminClearGroupFiles(groupId: String, callback: (String?) -> Unit) {
+    fun friendly(msg: String): String = when {
+        msg.contains("permission-denied", ignoreCase = true) -> "Нет доступа."
+        msg.contains("unauthenticated", ignoreCase = true) -> "Войдите в аккаунт."
+        msg.contains("not-found", ignoreCase = true) -> "Группа не найдена."
+        else -> msg
+    }
+    val functions = getFunctions()
+    val callable = if (functions != null) {
+        val httpsCallableFn = js("require('firebase/functions').httpsCallable")
+        (httpsCallableFn as (dynamic, String) -> dynamic)(functions, "adminClearGroupFiles")
+    } else null
+    if (callable == null) {
+        callback("Cloud Functions недоступны")
+        return
+    }
+    val payload = kotlin.js.json("groupId" to groupId)
+    (callable as (dynamic) -> dynamic)(payload).then { _: dynamic ->
+        callback(null)
+    }.catch { e: dynamic ->
+        val code = (e?.code as? String) ?: ""
+        val msg = (e?.message as? String) ?: "Ошибка"
+        js("if(typeof console!=='undefined'&&console.error)console.error('adminClearGroupFiles:', code, msg, e)")
+        callback(friendly("$code $msg".trim()))
+    }
+}
+
+/** Админ: удалить аватар группы (Storage + Firestore). */
+fun adminClearGroupAvatar(groupId: String, callback: (String?) -> Unit) {
+    fun friendly(msg: String): String = when {
+        msg.contains("permission-denied", ignoreCase = true) -> "Нет доступа."
+        msg.contains("unauthenticated", ignoreCase = true) -> "Войдите в аккаунт."
+        msg.contains("not-found", ignoreCase = true) -> "Группа не найдена."
+        else -> msg
+    }
+    val functions = getFunctions()
+    val callable = if (functions != null) {
+        val httpsCallableFn = js("require('firebase/functions').httpsCallable")
+        (httpsCallableFn as (dynamic, String) -> dynamic)(functions, "adminClearGroupAvatar")
+    } else null
+    if (callable == null) {
+        callback("Cloud Functions недоступны")
+        return
+    }
+    val payload = kotlin.js.json("groupId" to groupId)
+    (callable as (dynamic) -> dynamic)(payload).then { _: dynamic ->
+        callback(null)
+    }.catch { e: dynamic ->
+        val code = (e?.code as? String) ?: ""
+        val msg = (e?.message as? String) ?: "Ошибка"
+        js("if(typeof console!=='undefined'&&console.error)console.error('adminClearGroupAvatar:', code, msg, e)")
+        callback(friendly("$code $msg".trim()))
+    }
+}
+
+/** Удаляет аватар: сначала файл в Firebase Storage, затем обнуляет chatAvatarUrl в Firestore.
+ * 404 при DELETE в Storage — нормально (файла могло не быть). */
 fun removeChatAvatar(uid: String, callback: (String?) -> Unit) {
     val firestore = getFirestore()
-    firestore.collection(FirebasePaths.USERS).doc(uid).update(kotlin.js.json("chatAvatarUrl" to ""))
-        .then {
-            val storage = getStorage()
-            if (storage != null) {
-                val ref = storage.ref(chatAvatarStoragePath(uid))
-                ref.delete().catch { _: dynamic -> js("undefined") }
-            } else
-                js("undefined")
+    val storage = getStorage()
+    val path = chatAvatarStoragePath(uid)
+    val deleteFile: kotlin.js.Promise<dynamic> = if (storage != null) {
+        storage.ref(path).delete().catch { _: dynamic -> js("undefined") }
+    } else {
+        kotlin.js.Promise.resolve(js("undefined"))
+    }
+    deleteFile
+        .then { _: dynamic ->
+            firestore.collection(FirebasePaths.USERS).doc(uid).update(kotlin.js.json("chatAvatarUrl" to ""))
         }
-        .then { callback(null) }
+        .then { _: dynamic ->
+            callback(null)
+        }
         .catch { e: Throwable ->
             val msg = (e.asDynamic().message as? String) ?: "Ошибка"
             callback(if (msg.contains("Failed to fetch", ignoreCase = true)) "Нет соединения с интернетом." else msg)

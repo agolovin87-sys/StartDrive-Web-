@@ -10,14 +10,25 @@ data class ChatMessage(
     val status: String = "sent",
     val voiceUrl: String? = null,
     val voiceDurationSec: Int? = null,
+    /** Вложение (только админ): URL в Storage + имя файла. */
+    val fileUrl: String? = null,
+    val fileName: String? = null,
+    val fileMime: String? = null,
+    val replyToMessageId: String? = null,
+    val replyToText: String? = null,
+    val deletedForUserIds: Set<String> = emptySet(),
 ) {
     val isVoice: Boolean get() = !voiceUrl.isNullOrBlank() || (voiceDurationSec != null && voiceDurationSec!! > 0)
+    val isFile: Boolean get() = !fileUrl.isNullOrBlank()
 }
 
 fun chatRoomId(id1: String, id2: String): String {
     val sorted = listOf(id1, id2).sorted()
     return "${sorted[0]}_${sorted[1]}"
 }
+
+/** Комната Realtime DB для группового чата (Firestore id документа chat_groups). */
+fun groupChatRoomId(groupId: String): String = "group_$groupId"
 
 private fun parseMessage(key: String, m: dynamic): ChatMessage {
     val ts = m?.timestamp
@@ -30,6 +41,15 @@ private fun parseMessage(key: String, m: dynamic): ChatMessage {
         is Number -> dur.toInt()
         else -> null
     }
+    val deletedForIds = mutableSetOf<String>()
+    val deletedForObj = m?.deletedFor
+    if (deletedForObj != null && deletedForObj != undefined) {
+        val keys = js("Object.keys(deletedForObj)").unsafeCast<Array<String>>()
+        keys.forEach { uid ->
+            val v = deletedForObj[uid]
+            if (v == true) deletedForIds.add(uid)
+        }
+    }
     return ChatMessage(
         id = key,
         senderId = (m?.senderId as? String) ?: "",
@@ -38,6 +58,12 @@ private fun parseMessage(key: String, m: dynamic): ChatMessage {
         status = (m?.status as? String) ?: "sent",
         voiceUrl = m?.voiceUrl as? String,
         voiceDurationSec = durationSec,
+        fileUrl = (m?.fileUrl as? String)?.takeIf { it.isNotBlank() },
+        fileName = (m?.fileName as? String)?.takeIf { it.isNotBlank() },
+        fileMime = (m?.fileMime as? String)?.takeIf { it.isNotBlank() },
+        replyToMessageId = m?.replyToMessageId as? String,
+        replyToText = m?.replyToText as? String,
+        deletedForUserIds = deletedForIds,
     )
 }
 
@@ -77,16 +103,57 @@ fun unsubscribeChat() {
     currentUnsubscribe = null
 }
 
-fun sendMessage(roomId: String, senderId: String, text: String): kotlin.js.Promise<Unit> {
+fun sendMessage(
+    roomId: String,
+    senderId: String,
+    text: String,
+    replyToMessageId: String? = null,
+    replyToText: String? = null,
+): kotlin.js.Promise<Unit> {
     val db = getDatabase() ?: return kotlin.js.Promise.reject(js("Error('Database not initialized')"))
     val ref = db.ref("${FirebasePaths.CHATS}/$roomId/${FirebasePaths.MESSAGES}").push()
     val serverTimestamp = getDatabaseServerTimestamp()
-    val data = kotlin.js.json(
-        "senderId" to senderId,
-        "text" to text,
-        "timestamp" to serverTimestamp,
-        "status" to "sent"
-    )
+    // Plain JS object: надёжнее для Firebase set(), чем дозапись в json() (как в Android ChatRepository).
+    val data = js("{}").unsafeCast<dynamic>()
+    data.senderId = senderId
+    data.text = text
+    data.timestamp = serverTimestamp
+    data.status = "sent"
+    if (!replyToMessageId.isNullOrBlank()) {
+        data.replyToMessageId = replyToMessageId
+        val trimmed = replyToText?.trim()?.take(200)
+        data.replyToText = if (trimmed.isNullOrBlank()) "Сообщение" else trimmed
+    }
+    return ref.set(data).then { js("undefined") }
+}
+
+/** Сообщение с файлом (URL после Callable uploadChatAdminFile). */
+fun sendFileMessage(
+    roomId: String,
+    senderId: String,
+    text: String,
+    fileUrl: String,
+    fileName: String,
+    fileMime: String?,
+    replyToMessageId: String? = null,
+    replyToText: String? = null,
+): kotlin.js.Promise<Unit> {
+    val db = getDatabase() ?: return kotlin.js.Promise.reject(js("Error('Database not initialized')"))
+    val ref = db.ref("${FirebasePaths.CHATS}/$roomId/${FirebasePaths.MESSAGES}").push()
+    val serverTimestamp = getDatabaseServerTimestamp()
+    val data = js("{}").unsafeCast<dynamic>()
+    data.senderId = senderId
+    data.text = text
+    data.fileUrl = fileUrl
+    data.fileName = fileName
+    if (!fileMime.isNullOrBlank()) data.fileMime = fileMime
+    data.timestamp = serverTimestamp
+    data.status = "sent"
+    if (!replyToMessageId.isNullOrBlank()) {
+        data.replyToMessageId = replyToMessageId
+        val trimmed = replyToText?.trim()?.take(200)
+        data.replyToText = if (trimmed.isNullOrBlank()) "Сообщение" else trimmed
+    }
     return ref.set(data).then { js("undefined") }
 }
 
@@ -129,4 +196,34 @@ fun sendVoiceMessage(roomId: String, senderId: String, audioBlob: dynamic, durat
         )
         ref.set(data)
     }.then { js("undefined") }
+}
+
+/** Удалить сообщение только у текущего пользователя (скрыть в его клиенте). */
+fun deleteMessageForUser(roomId: String, messageId: String, userId: String): kotlin.js.Promise<Unit> {
+    val db = getDatabase() ?: return kotlin.js.Promise.reject(js("Error('Database not initialized')"))
+    val ref = db.ref("${FirebasePaths.CHATS}/$roomId/${FirebasePaths.MESSAGES}/$messageId/deletedFor/$userId")
+    return ref.set(true).then { js("undefined") }
+}
+
+/**
+ * Полностью удалить голосовое сообщение: файл в Storage (если есть URL), затем узел в Realtime DB.
+ * Вызывать только для своего сообщения (проверка на клиенте).
+ */
+fun deleteVoiceMessageFully(roomId: String, messageId: String, voiceUrl: String?): kotlin.js.Promise<Unit> {
+    val db = getDatabase() ?: return kotlin.js.Promise.reject(js("Error('Database not initialized')"))
+    val storage = getStorage()
+    val msgRef = db.ref("${FirebasePaths.CHATS}/$roomId/${FirebasePaths.MESSAGES}/$messageId")
+    fun removeDb(): kotlin.js.Promise<dynamic> = msgRef.remove().then { js("undefined") }
+    if (storage != null && !voiceUrl.isNullOrBlank()) {
+        return try {
+            val storageRef = storage.refFromURL(voiceUrl)
+            storageRef.delete()
+                .catch { _: dynamic -> js("undefined") }
+                .then { removeDb() }
+                .then { js("undefined") }
+        } catch (_: Throwable) {
+            removeDb()
+        }
+    }
+    return removeDb()
 }

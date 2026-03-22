@@ -4,7 +4,8 @@
   "main": "index.js",
   "engines": { "node": "20" },
   "scripts": {
-    "set-cors": "node scripts/set-storage-cors.js"
+    "set-cors": "node scripts/set-storage-cors.js",
+    "cleanup-chat-groups": "node scripts/cleanup-invalid-chat-groups.js"
   },
   "dependencies": {
     "firebase-admin": "^12.0.0",

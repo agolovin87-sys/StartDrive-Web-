@@ -304,6 +304,45 @@ body {
 }
 
 /* ── Карточка профиля инструктора (тёмный стиль) ── */
+.sd-instructor-profile-card-wrap {
+    position: relative;
+    margin: 0 0 20px 0;
+}
+.sd-instructor-profile-card-wrap .sd-profile-card {
+    margin-bottom: 0;
+}
+.sd-instructor-profile-card-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 5;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.35);
+    background: rgba(0,0,0,0.28);
+    color: #fff;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+}
+.sd-instructor-profile-card-btn:hover {
+    background: rgba(255,255,255,0.14);
+}
+.sd-instructor-profile-card-btn-label {
+    letter-spacing: 0.02em;
+}
+@media (max-width: 380px) {
+    .sd-instructor-profile-card-btn-label {
+        display: none;
+    }
+    .sd-instructor-profile-card-btn {
+        padding: 8px 10px;
+    }
+}
 .sd-profile-card {
     margin: 0 0 20px 0;
     position: relative;
@@ -669,6 +708,18 @@ a.sd-cadet-icon-btn:active {
     border-radius: 6px;
     background: rgba(0,0,0,0.12);
 }
+.sd-cadet-card-footer {
+    padding: 0 14px 14px;
+}
+.sd-instructor-cadet-card-footer {
+    margin-top: 2px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255,255,255,0.12);
+}
+.sd-instructor-cadet-card-footer .sd-btn {
+    width: 100%;
+    justify-content: center;
+}
 .sd-btn-circle {
     display: inline-flex;
     align-items: center;
@@ -704,6 +755,514 @@ a.sd-cadet-icon-btn:active {
 .sd-btn-phone.sd-btn-disabled {
     opacity: 0.6;
     pointer-events: none;
+}
+
+/* Экран «Профиль» инструктора (статистика) */
+.sd-instructor-profile-page {
+    padding-bottom: 8px;
+}
+.sd-instructor-profile-toolbar {
+    margin: 0 0 8px 0;
+}
+.sd-instructor-profile-title {
+    margin: 0 0 16px 0;
+    font-size: 1.35rem;
+    color: var(--sd-text);
+}
+.sd-instr-stat-card {
+    background: var(--sd-card);
+    border: 1px solid var(--sd-border);
+    border-radius: 14px;
+    padding: 16px;
+    margin-bottom: 14px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+.sd-instr-stat-card-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+.sd-instr-stat-card-head > div {
+    flex: 1;
+    min-width: 120px;
+}
+.sd-instr-stat-icon-wrap {
+    flex-shrink: 0;
+    color: var(--sd-primary);
+    opacity: 0.95;
+}
+.sd-instr-stat-icon {
+    display: block;
+}
+.sd-instr-stat-label {
+    margin: 0;
+    font-size: 0.88rem;
+    color: var(--sd-text-secondary);
+}
+.sd-instr-stat-value {
+    margin: 4px 0 0 0;
+    font-size: 1.65rem;
+    font-weight: 800;
+    color: var(--sd-text);
+}
+.sd-instr-earned-delta-pos {
+    margin-left: auto;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #2e7d32;
+}
+.sd-instr-earned-delta-neg {
+    margin-left: auto;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--sd-error, #c62828);
+}
+.sd-instr-earned-calc-placeholder {
+    min-height: 0;
+}
+.sd-instr-stat-card-earned {
+    padding-bottom: 12px;
+}
+.sd-instr-earned-calc {
+    margin-top: 12px;
+    padding: 12px 14px;
+    background: rgba(59, 130, 246, 0.12);
+    border-radius: 10px;
+}
+.sd-instr-earned-calc-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 12px 14px;
+    align-items: end;
+}
+@media (max-width: 420px) {
+    .sd-instr-earned-calc-grid {
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: auto auto;
+    }
+    .sd-instr-earned-total-col {
+        grid-column: 1 / -1;
+        justify-self: stretch;
+        text-align: right;
+    }
+}
+.sd-instr-earned-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+.sd-instr-earned-field-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--sd-text-secondary);
+    margin: 0;
+}
+.sd-instr-earned-input {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    font-size: 0.95rem;
+}
+.sd-instr-earned-total-col {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: flex-end;
+    gap: 4px;
+    padding-bottom: 2px;
+}
+.sd-instr-earned-total-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--sd-text-secondary);
+}
+.sd-instr-earned-rub-out {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--sd-text);
+    white-space: nowrap;
+}
+.sd-instr-stat-card-simple {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+.sd-instr-stat-heading {
+    margin: 0 0 12px 0;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--sd-text);
+}
+.sd-instr-chart-hint,
+.sd-instr-chart-avg {
+    margin: 0 0 10px 0;
+    font-size: 0.85rem;
+}
+.sd-instr-rating-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 20px;
+    justify-content: space-between;
+}
+.sd-instr-rating-pie-wrap {
+    position: relative;
+    width: 140px;
+    height: 140px;
+    flex-shrink: 0;
+}
+.sd-instr-rating-pie {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+}
+.sd-instr-rating-pie-center {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 112px;
+    height: 112px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+.sd-instr-rating-star-bg {
+    width: 100%;
+    height: 100%;
+    display: block;
+    /* Доп. объём к SVG-градиентам: верхний блик + тень */
+    filter: drop-shadow(0 1px 0 rgba(255,255,255,0.45)) drop-shadow(0 2px 4px rgba(0,0,0,0.28)) drop-shadow(0 6px 14px rgba(0,0,0,0.18));
+}
+.sd-instr-rating-avg-overlay {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -52%);
+    font-size: 1.45rem;
+    font-weight: 800;
+    color: #1a1a1a;
+    line-height: 1;
+    text-shadow: 0 0 10px rgba(255,255,255,0.95), 0 0 6px rgba(255,255,255,0.9), 0 1px 3px rgba(0,0,0,0.35);
+    z-index: 2;
+}
+.sd-instr-rating-center-inner {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+.sd-instr-rating-star-icon {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    display: block;
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.2));
+}
+.sd-instr-rating-avg {
+    font-size: 1.2rem;
+    font-weight: 800;
+    color: var(--sd-text);
+    line-height: 1;
+}
+.sd-instr-rating-legend {
+    flex: 1;
+    min-width: 140px;
+}
+.sd-instr-rating-legend-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.82rem;
+    color: var(--sd-text-secondary);
+    padding: 2px 0;
+}
+.sd-instr-rating-sq {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+.sd-instr-no-ratings {
+    margin: 0;
+}
+/* Курсант — экран «Профиль» со статистикой (как в Android) */
+.sd-cadet-progress-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 20px;
+    justify-content: center;
+}
+.sd-cadet-progress-ring-wrap {
+    position: relative;
+    width: 140px;
+    height: 140px;
+    flex-shrink: 0;
+}
+.sd-cadet-progress-ring {
+    position: relative;
+    z-index: 1;
+    width: 140px;
+    height: 140px;
+    border-radius: 50%;
+    /* 0° — вверху, по часовой стрелке: жёлтый 0–5 → зелёный 5–15 → синий 15–25 → красный 25–30 (12° на занятие) */
+    background: conic-gradient(from 0deg, #FFC107 0deg 60deg, #2E7D32 60deg 180deg, #1565C0 180deg 300deg, #C62828 300deg 360deg);
+}
+/* Указатель прогресса */
+.sd-cadet-progress-pointer {
+    position: absolute;
+    left: 50%;
+    bottom: 50%;
+    width: 6px;
+    height: 44%;
+    margin-left: -3px;
+    background: #ffffff;
+    border-radius: 3px;
+    box-shadow: 0 0 4px rgba(0, 0, 0, 0.35);
+    transform-origin: bottom center;
+    z-index: 2;
+    pointer-events: none;
+}
+.sd-cadet-progress-center-num {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 1.35rem;
+    font-weight: 800;
+    color: var(--sd-text);
+    pointer-events: none;
+    z-index: 3;
+}
+.sd-cadet-seg-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 160px;
+    font-size: 0.82rem;
+    color: var(--sd-text-secondary);
+}
+.sd-cadet-seg-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.sd-cadet-role-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 140px;
+}
+.sd-cadet-role-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    color: var(--sd-text-secondary);
+}
+.sd-cadet-role-row-active {
+    font-weight: 700;
+    color: var(--sd-text);
+}
+.sd-cadet-role-sq {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+.sd-cadet-current-role {
+    margin: 12px 0 0 0;
+    font-weight: 700;
+    font-size: 0.95rem;
+}
+.sd-cadet-inst-rating-chart {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 6px;
+    min-height: 120px;
+    padding: 8px 0 0 0;
+}
+.sd-cadet-inst-rating-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+.sd-cadet-inst-rating-bar {
+    width: 100%;
+    max-width: 40px;
+    min-height: 4px;
+    border-radius: 4px 4px 0 0;
+    background: linear-gradient(180deg, #42A5F5 0%, #1565C0 100%);
+}
+.sd-cadet-inst-rating-num {
+    font-size: 0.75rem;
+    color: var(--sd-text-secondary);
+}
+.sd-cadet-inst-rating-cnt {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: #1565C0;
+}
+.sd-cadet-inst-rating-chart-3 {
+    max-width: 280px;
+    margin-left: auto;
+    margin-right: auto;
+}
+.sd-cadet-inst-rating-chart-3 .sd-cadet-inst-rating-bar {
+    max-width: 56px;
+}
+.sd-cadet-dow-chart-wrap {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 8px;
+    width: 100%;
+    max-width: 100%;
+}
+.sd-cadet-dow-y-labels {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    align-items: flex-end;
+    min-width: 1.5rem;
+    padding-bottom: 2.5rem;
+    min-height: 118px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--sd-text-secondary);
+    line-height: 1.1;
+}
+.sd-cadet-dow-chart {
+    flex: 1;
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 4px;
+    min-height: 120px;
+    padding: 4px 0 0 0;
+    border-left: 1px solid rgba(0,0,0,0.08);
+    padding-left: 8px;
+}
+.sd-cadet-dow-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    min-width: 0;
+}
+.sd-cadet-dow-bar {
+    width: 100%;
+    max-width: 36px;
+    min-height: 4px;
+    border-radius: 4px 4px 0 0;
+    background: linear-gradient(180deg, #42A5F5 0%, #1565C0 100%);
+}
+.sd-cadet-dow-day {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--sd-text-secondary);
+}
+.sd-cadet-dow-cnt {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: #1565C0;
+}
+.sd-cadet-week-chart-dow {
+    width: 100%;
+}
+.sd-cadet-week-chart {
+    display: flex;
+    justify-content: space-around;
+    align-items: flex-end;
+    gap: 12px;
+    min-height: 100px;
+    padding: 8px 0 0 0;
+}
+.sd-cadet-week-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+.sd-cadet-week-bar {
+    width: 100%;
+    max-width: 48px;
+    min-height: 4px;
+    border-radius: 4px 4px 0 0;
+}
+.sd-cadet-week-bar-done {
+    background: linear-gradient(180deg, #26A69A 0%, #00695C 100%);
+}
+.sd-cadet-week-bar-cancel {
+    background: linear-gradient(180deg, #ef9a9a 0%, #c62828 100%);
+}
+.sd-cadet-week-lbl {
+    font-size: 0.7rem;
+    color: var(--sd-text-secondary);
+}
+.sd-cadet-week-cnt {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--sd-text-secondary);
+}
+.sd-instr-bars {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 4px;
+    min-height: 120px;
+    padding: 4px 0 0 0;
+}
+.sd-instr-bars-cancel {
+    min-height: 100px;
+}
+.sd-instr-bar-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+.sd-instr-bar {
+    width: 60%;
+    max-width: 36px;
+    min-height: 4px;
+    border-radius: 4px 4px 0 0;
+    background: var(--sd-primary);
+}
+.sd-instr-bar-zero {
+    background: #E53935;
+}
+.sd-instr-bar-cancel {
+    background: #E53935;
+}
+.sd-instr-bar-day {
+    font-size: 0.7rem;
+    color: var(--sd-text-secondary);
+}
+.sd-instr-bar-num {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--sd-primary);
+}
+.sd-instr-bar-num-cancel {
+    color: #E53935;
 }
 
 .sd-version {
@@ -1206,6 +1765,254 @@ a.sd-cadet-icon-btn:active {
 .sd-modal-actions {
     margin: 0;
     text-align: center;
+}
+.sd-cancel-reason-other-wrap {
+    margin: 0.75rem 0 0 0;
+    width: 100%;
+}
+.sd-cancel-reason-other-text {
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 0.35rem;
+    resize: vertical;
+    min-height: 3.5rem;
+}
+.sd-admin-cadets-toolbar {
+    margin: 0 0 0.75rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+.sd-admin-cadets-toolbar-hint {
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.35;
+}
+.sd-admin-cadets-grouped {
+    display: flex;
+    flex-direction: column;
+    gap: 1.1rem;
+}
+.sd-instructor-cadets-grouped {
+    width: 100%;
+}
+.sd-admin-cadets-subsection {
+    border: 1px solid var(--sd-border, #e5e7eb);
+    border-radius: 12px;
+    background: var(--sd-surface-elevated, #fff);
+    overflow: hidden;
+}
+.sd-admin-cadets-subsection-unassigned {
+    border-style: dashed;
+    background: rgba(0, 0, 0, 0.02);
+}
+.sd-admin-cadets-subsection-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem 0.75rem;
+    padding: 0.65rem 0.85rem;
+    background: linear-gradient(180deg, rgba(13, 148, 136, 0.08), transparent);
+    border-bottom: 1px solid var(--sd-border, #eee);
+}
+.sd-admin-cadets-subsection-unassigned .sd-admin-cadets-subsection-head {
+    background: linear-gradient(180deg, rgba(107, 114, 128, 0.12), transparent);
+}
+.sd-admin-cadets-subsection-head .sd-admin-cadets-subtitle {
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    flex: 1;
+    min-width: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--sd-text, #111);
+}
+.sd-admin-cadets-subsection-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+    flex-shrink: 0;
+}
+.sd-admin-cadet-group-inline-label {
+    font-size: 0.88rem;
+    color: var(--sd-text-secondary, #666);
+    margin-right: 0.25rem;
+}
+.sd-admin-cadets-subcount {
+    font-weight: 500;
+    color: var(--sd-text-secondary, #666);
+}
+.sd-admin-cards-cadet-group {
+    padding: 10px 12px;
+}
+.sd-admin-cadets-empty {
+    margin: 0.5rem 0 0.75rem 0;
+    font-size: 0.9rem;
+}
+.sd-admin-groups-list {
+    width: 100%;
+    border: 1px solid var(--sd-border, #e5e7eb);
+    border-radius: 10px;
+    background: var(--sd-surface, #f9fafb);
+    padding: 0.5rem 0.65rem;
+    max-height: 220px;
+    overflow-y: auto;
+}
+.sd-admin-groups-list-empty {
+    margin: 0.35rem 0;
+    font-size: 0.9rem;
+}
+.sd-admin-group-list-item {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.45rem 0.25rem;
+    border-bottom: 1px solid var(--sd-border, #eee);
+    font-size: 0.9rem;
+}
+.sd-admin-group-list-item:last-child {
+    border-bottom: none;
+}
+.sd-admin-group-list-text {
+    flex: 1;
+    min-width: 0;
+    line-height: 1.35;
+    word-break: break-word;
+}
+.sd-admin-group-list-actions {
+    display: flex;
+    flex-shrink: 0;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+.sd-admin-group-list-actions .sd-btn {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.8rem;
+}
+.sd-btn-danger {
+    background: rgba(239, 68, 68, 0.12);
+    color: #b91c1c;
+    border: 1px solid rgba(239, 68, 68, 0.45);
+}
+.sd-btn-danger:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.22);
+}
+.sd-admin-group-no-date-row {
+    margin: 0.25rem 0 0.5rem 0;
+}
+.sd-switch.sd-switch-no-date {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    cursor: pointer;
+    user-select: none;
+}
+.sd-switch.sd-switch-no-date input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+.sd-switch.sd-switch-no-date .sd-switch-slider {
+    position: relative;
+    width: 44px;
+    height: 24px;
+    flex-shrink: 0;
+    background: var(--sd-border, #cbd5e1);
+    border-radius: 999px;
+    transition: background 0.2s;
+}
+.sd-switch.sd-switch-no-date .sd-switch-slider::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 18px;
+    height: 18px;
+    background: #fff;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    transition: transform 0.2s;
+}
+.sd-switch.sd-switch-no-date input:checked + .sd-switch-slider {
+    background: var(--sd-primary, #0d9488);
+}
+.sd-switch.sd-switch-no-date input:checked + .sd-switch-slider::after {
+    transform: translateX(20px);
+}
+.sd-switch-label {
+    font-size: 0.9rem;
+    color: var(--sd-text, #111);
+}
+.sd-admin-group-dates-muted {
+    opacity: 0.45;
+    pointer-events: none;
+}
+.sd-admin-group-dates-muted input {
+    pointer-events: none;
+}
+/* «Добавить группу» на главной — те же классы, что «Создать группу» во вкладке «Чат» + .sd-accent-pill-light */
+.sd-admin-add-group-toolbar-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+}
+.sd-admin-cadets-subsection-actions .sd-chat-create-group-btn.sd-accent-pill-light {
+    font-size: 0.75rem;
+    padding: 5px 10px;
+}
+.sd-admin-cadet-group-btn svg {
+    width: 14px;
+    height: 14px;
+}
+.sd-admin-group-date-inp[type="date"] {
+    min-height: 2.5rem;
+    cursor: pointer;
+}
+.sd-admin-group-modal .sd-modal-title {
+    margin: 0 0 0.75rem 0;
+    text-align: left;
+}
+.sd-admin-group-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    text-align: left;
+}
+.sd-admin-group-dates {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+.sd-admin-group-dates .sd-auth-input {
+    flex: 1;
+    min-width: 6.5rem;
+}
+.sd-admin-pick-group-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    max-height: 50vh;
+    overflow-y: auto;
+    text-align: left;
+}
+.sd-admin-pick-group-item {
+    justify-content: flex-start;
+    text-align: left;
+}
+.sd-admin-pick-group-empty {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.9rem;
 }
 .sd-sound-settings-modal .sd-modal-title {
     margin: 0 0 0.75rem 0;
@@ -1745,15 +2552,81 @@ a.sd-cadet-icon-btn:active {
 /* Stat cards */
 .sd-rec-stats-bar { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .sd-rec-stat-card {
+    position: relative;
+    overflow: hidden;
     border-radius: 18px;
     padding: 18px 16px;
     display: flex; flex-direction: column; align-items: center;
-    box-shadow: 0 4px 18px rgba(0,0,0,0.13);
+    border: 1px solid rgba(255,255,255,0.22);
+    /* объём: внешняя тень + внутренние блики/затемнение снизу */
+    box-shadow:
+        0 8px 22px rgba(0,0,0,0.18),
+        inset 0 1px 0 rgba(255,255,255,0.42),
+        inset 0 -6px 14px rgba(0,0,0,0.12);
 }
-.sd-rec-stat-blue { background: linear-gradient(135deg, #1976D2 0%, #1565C0 100%); }
+/* глянцевый блик сверху (объём) */
+.sd-rec-stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 52%;
+    background: linear-gradient(
+        180deg,
+        rgba(255,255,255,0.5) 0%,
+        rgba(255,255,255,0.14) 42%,
+        transparent 100%
+    );
+    border-radius: 18px 18px 0 0;
+    pointer-events: none;
+}
+/* лёгкое свечение снизу для глубины */
+.sd-rec-stat-card::after {
+    content: '';
+    position: absolute;
+    bottom: -20%;
+    left: -5%;
+    right: -5%;
+    height: 55%;
+    background: radial-gradient(ellipse 80% 60% at 50% 100%, rgba(0,0,0,0.14) 0%, transparent 65%);
+    pointer-events: none;
+}
+.sd-rec-stat-blue {
+    background: linear-gradient(148deg, #4FC3F7 0%, #1E88E5 38%, #1565C0 72%, #0D47A1 100%);
+    box-shadow:
+        0 8px 24px rgba(13,71,161,0.38),
+        inset 0 1px 0 rgba(255,255,255,0.45),
+        inset 0 -8px 16px rgba(0,0,0,0.14);
+}
 .sd-rec-stat-green { background: linear-gradient(135deg, #43A047 0%, #2E7D32 100%); }
-.sd-rec-stat-val { font-size: 2.2rem; font-weight: 800; color: #fff; line-height: 1.1; }
-.sd-rec-stat-label { font-size: 0.75rem; color: rgba(255,255,255,0.82); margin-top: 5px; text-align: center; font-weight: 500; }
+/* фиолетовая карточка «Свободных окон» (инструктор) */
+.sd-rec-stat-purple {
+    background: linear-gradient(148deg, #CE93D8 0%, #AB47BC 32%, #7B1FA2 68%, #4A148C 100%);
+    box-shadow:
+        0 8px 24px rgba(74,20,140,0.42),
+        inset 0 1px 0 rgba(255,255,255,0.4),
+        inset 0 -8px 18px rgba(0,0,0,0.18);
+}
+.sd-rec-stat-val {
+    position: relative;
+    z-index: 1;
+    font-size: 2.2rem;
+    font-weight: 800;
+    color: #fff;
+    line-height: 1.1;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.22), 0 1px 0 rgba(255,255,255,0.15);
+}
+.sd-rec-stat-label {
+    position: relative;
+    z-index: 1;
+    font-size: 0.75rem;
+    color: rgba(255,255,255,0.9);
+    margin-top: 5px;
+    text-align: center;
+    font-weight: 600;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
 
 /* Sections */
 .sd-rec-section {
@@ -1942,7 +2815,8 @@ a.sd-cadet-icon-btn:active {
 /* Picker controls (styled select / datetime as button-like) */
 .sd-rec-picker-wrap {
     position: relative; display: flex; align-items: center;
-    border-radius: 14px; overflow: hidden;
+    /* overflow:hidden ломал нативный выпадающий список <select> в части браузеров/масштабов */
+    border-radius: 14px; overflow: visible;
 }
 .sd-rec-picker-wrap::after {
     content: ''; position: absolute; top: 0; left: 0; right: 0; height: 48%;
@@ -2908,6 +3782,229 @@ a.sd-cadet-icon-btn:active {
     margin: 0 0 12px 0;
     color: var(--sd-text-primary, #111);
 }
+
+.sd-admin-storage-block .sd-admin-storage-hint {
+    margin: 0 0 12px 0;
+    line-height: 1.45;
+}
+.sd-admin-storage-bucket-usage {
+    margin: 0 0 16px 0;
+    padding: 14px 14px 12px;
+    border-radius: 10px;
+    background: rgba(37, 99, 235, 0.06);
+    border: 1px solid rgba(37, 99, 235, 0.15);
+}
+.sd-admin-storage-bucket-usage-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.sd-admin-storage-bucket-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--sd-text-primary, #111);
+}
+.sd-admin-storage-bucket-mb-wrap {
+    margin: 0 0 10px 0;
+    font-size: 0.95rem;
+}
+.sd-admin-storage-bucket-mb {
+    font-weight: 600;
+    color: var(--sd-text-primary, #111);
+}
+.sd-admin-storage-bucket-bar-wrap {
+    margin: 0 0 8px 0;
+}
+.sd-admin-storage-bucket-bar {
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.08);
+    overflow: hidden;
+}
+.sd-admin-storage-bucket-bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #2563eb, #3b82f6);
+    min-width: 0;
+    transition: width 0.25s ease;
+}
+.sd-admin-storage-role-subs-below-refresh {
+    margin: 0 0 14px 0;
+}
+.sd-admin-storage-role-placeholder {
+    margin: 0;
+    line-height: 1.45;
+}
+.sd-admin-storage-bucket-subs {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(37, 99, 235, 0.2);
+}
+.sd-admin-storage-role-subs-below-refresh .sd-admin-storage-bucket-subs {
+    margin-top: 0;
+}
+.sd-admin-storage-bucket-subs-lead {
+    font-weight: 600;
+    font-size: 0.88rem;
+    margin: 0 0 10px 0;
+    color: var(--sd-text-primary, #111);
+}
+.sd-admin-storage-bucket-sub {
+    margin-bottom: 12px;
+}
+.sd-admin-storage-bucket-sub-head {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--sd-text-secondary, #555);
+    margin-bottom: 4px;
+}
+.sd-admin-storage-bucket-sub-mb {
+    margin: 0 0 6px 0;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--sd-text-primary, #111);
+}
+.sd-admin-storage-bucket-bar-sub {
+    height: 8px;
+}
+.sd-admin-storage-bucket-sub-instructor .sd-admin-storage-bucket-bar-fill-sub {
+    background: linear-gradient(90deg, #1d4ed8, #2563eb);
+}
+.sd-admin-storage-bucket-sub-cadet .sd-admin-storage-bucket-bar-fill-sub {
+    background: linear-gradient(90deg, #047857, #10b981);
+}
+.sd-admin-storage-bucket-sub-group .sd-admin-storage-bucket-bar-fill-sub {
+    background: linear-gradient(90deg, #7c3aed, #a78bfa);
+}
+.sd-admin-storage-bucket-sub-admin .sd-admin-storage-bucket-bar-fill-sub {
+    background: linear-gradient(90deg, #b45309, #f59e0b);
+}
+.sd-admin-storage-bucket-other {
+    margin: 10px 0 0 0;
+    font-size: 0.82rem;
+    color: var(--sd-text-secondary, #666);
+    line-height: 1.4;
+}
+.sd-admin-storage-bucket-role-hint {
+    margin: 12px 0 0 0;
+    font-size: 0.78rem;
+    color: var(--sd-text-secondary, #777);
+    line-height: 1.45;
+}
+.sd-admin-storage-bucket-scale {
+    margin: 10px 0 0 0;
+    font-size: 0.8rem;
+    color: var(--sd-text-secondary, #666);
+}
+.sd-admin-storage-actions {
+    margin: 0 0 12px 0;
+}
+.sd-admin-storage-status {
+    margin: 0 0 12px 0;
+    font-size: 0.9rem;
+}
+.sd-admin-storage-loading {
+    color: var(--sd-text-secondary, #666);
+}
+.sd-admin-storage-role-section {
+    margin-bottom: 18px;
+}
+.sd-admin-storage-role-section:last-child {
+    margin-bottom: 0;
+}
+.sd-admin-storage-role-section-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 0 0 10px 0;
+    color: var(--sd-text-primary, #111);
+}
+.sd-admin-storage-role-section-instructors .sd-admin-storage-role-section-title {
+    color: #1d4ed8;
+}
+.sd-admin-storage-role-section-cadets .sd-admin-storage-role-section-title {
+    color: #047857;
+}
+.sd-admin-storage-role-section-other .sd-admin-storage-role-section-title {
+    color: var(--sd-text-secondary, #555);
+}
+.sd-admin-storage-role-section-groups .sd-admin-storage-role-section-title {
+    color: #6d28d9;
+}
+.sd-admin-storage-row-group {
+    border-color: rgba(109, 40, 217, 0.15);
+}
+.sd-admin-storage-role-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.sd-admin-storage-role-empty {
+    margin: 0;
+    font-size: 0.88rem;
+}
+.sd-admin-storage-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-height: min(55vh, 520px);
+    overflow-y: auto;
+    padding: 4px 2px 8px 0;
+}
+.sd-admin-storage-row {
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: rgba(0,0,0,0.04);
+    border: 1px solid rgba(0,0,0,0.06);
+}
+.sd-admin-storage-contact-name {
+    font-weight: 600;
+    font-size: 0.95rem;
+    margin-bottom: 8px;
+    color: var(--sd-text-primary, #111);
+}
+.sd-admin-storage-lines {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    color: var(--sd-text-secondary, #444);
+}
+.sd-admin-storage-label {
+    color: var(--sd-text-primary, #333);
+    font-weight: 500;
+}
+.sd-admin-storage-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+    margin-bottom: 6px;
+    list-style: disc;
+}
+.sd-admin-storage-line:last-child {
+    margin-bottom: 0;
+}
+.sd-admin-storage-line-main {
+    flex: 1 1 160px;
+    min-width: 0;
+}
+.sd-admin-storage-line .sd-admin-storage-clear-btn {
+    flex-shrink: 0;
+}
+.sd-admin-storage-line-no-action {
+    justify-content: flex-start;
+}
+.sd-admin-storage-line-no-action .sd-admin-storage-line-main {
+    flex: 1 1 auto;
+}
+.sd-admin-storage-confirm-modal {
+    max-width: 420px;
+}
+
 .sd-settings-avatar-wrap {
     display: flex;
     flex-wrap: wrap;
@@ -3053,9 +4150,74 @@ a.sd-cadet-icon-btn:active {
     min-width: 100px;
 }
 
+/* Шапка экрана «Настройки»: заголовок слева, «Назад к чату» справа */
+.sd-settings-screen {
+    position: relative;
+}
+.sd-settings-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 0 16px 0;
+}
+.sd-settings-title {
+    margin: 0;
+    font-size: 1.35rem;
+    font-weight: 700;
+    line-height: 1.2;
+    min-width: 0;
+    flex: 1;
+}
+/* «Назад к чату» — тот же акцент indigo, что «Создать группу», вариант для светлого фона */
+.sd-settings-back-chat-btn.sd-chat-create-group-btn.sd-accent-pill-light {
+    padding: 0;
+    margin: 0;
+    min-width: 44px;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    gap: 0;
+}
+.sd-settings-back-chat-btn.sd-chat-create-group-btn.sd-accent-pill-light svg {
+    display: block;
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+}
+.sd-settings-back-chat-btn.sd-chat-create-group-btn.sd-accent-pill-light svg polyline {
+    stroke: currentColor;
+}
+
 .sd-settings-sound-select {
     max-width: 280px;
     display: block;
+}
+
+/* «Прослушать» в настройках уведомлений — синяя основная кнопка.
+   Важно: у элемента одновременно .sd-btn и .sd-btn-icon — позже .sd-btn даёт padding 10px 20px,
+   при width:32px и box-sizing:border-box контент схлопывается и SVG не виден. Сбрасываем padding. */
+.sd-settings-sound-preview-btn.sd-btn-primary {
+    border: none;
+    color: #fff;
+    padding: 0 !important;
+    margin: 8px 8px 8px 0;
+    min-width: 44px;
+    min-height: 44px;
+    width: 44px;
+    height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.sd-settings-sound-preview-btn.sd-btn-primary svg {
+    display: block;
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+}
+.sd-settings-sound-preview-btn.sd-btn-primary svg polygon {
+    fill: #ffffff;
 }
 
 .sd-checkbox {
@@ -4147,13 +5309,13 @@ a.sd-cadet-icon-btn:active {
         padding-top: max(10px, env(safe-area-inset-top));
         flex-shrink: 0;
     }
-    .sd-chat-settings-btn {
+    .sd-chat-settings-btn.sd-chat-create-group-btn--icon {
         width: 44px;
         height: 44px;
         min-width: 44px;
         min-height: 44px;
     }
-    .sd-chat-settings-btn svg {
+    .sd-chat-settings-btn.sd-chat-create-group-btn--icon svg {
         width: 22px;
         height: 22px;
         min-width: 22px;
@@ -4190,6 +5352,7 @@ a.sd-cadet-icon-btn:active {
         min-height: 40px;
     }
     .sd-chat-send-btn,
+    .sd-chat-attach-btn,
     .sd-chat-voice-mic-btn {
         width: 44px;
         height: 44px;
@@ -4423,62 +5586,220 @@ a.sd-cadet-icon-btn:active {
 .sd-chat-header-actions {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: 8px;
     flex-shrink: 0;
 }
 
-.sd-chat-settings-btn {
+/* Кнопка «Создать группу» — в одном ряду с «Обновить», акцент indigo под стекло шапки чата */
+.sd-chat-create-group-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    gap: 6px;
+    padding: 7px 14px;
+    white-space: nowrap;
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.28) 0%, rgba(129, 140, 248, 0.2) 100%);
+    border: 1px solid rgba(165, 180, 252, 0.42);
+    border-radius: 20px;
+    color: #e8eaff;
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    font-family: inherit;
+    touch-action: manipulation;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.12) inset, 0 2px 10px rgba(67, 56, 202, 0.2);
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.sd-chat-create-group-btn svg {
+    width: 14px;
+    height: 14px;
+    min-width: 14px;
+    min-height: 14px;
+    flex-shrink: 0;
+    opacity: 0.95;
+}
+.sd-chat-create-group-btn:hover {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.45) 0%, rgba(129, 140, 248, 0.35) 100%);
+    border-color: rgba(199, 210, 254, 0.55);
+    color: #fff;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset, 0 4px 14px rgba(79, 70, 229, 0.35);
+}
+.sd-chat-create-group-btn:active {
+    transform: translateY(1px);
+    box-shadow: 0 1px 6px rgba(67, 56, 202, 0.25);
+}
+.sd-chat-create-group-btn:disabled,
+.sd-chat-create-group-btn[disabled] {
+    opacity: 0.45;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+/* Тот же pill-акцент на светлом фоне (настройки, блок Storage) */
+.sd-chat-create-group-btn.sd-accent-pill-light {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.16) 0%, rgba(129, 140, 248, 0.11) 100%);
+    border: 1px solid rgba(129, 140, 248, 0.45);
+    color: #4338ca;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.95) inset, 0 2px 10px rgba(67, 56, 202, 0.12);
+}
+.sd-chat-create-group-btn.sd-accent-pill-light:hover {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.26) 0%, rgba(129, 140, 248, 0.18) 100%);
+    border-color: rgba(99, 102, 241, 0.55);
+    color: #3730a3;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 1) inset, 0 4px 14px rgba(79, 70, 229, 0.2);
+}
+.sd-chat-create-group-btn.sd-accent-pill-light:active {
+    transform: translateY(1px);
+    box-shadow: 0 1px 6px rgba(67, 56, 202, 0.18);
+}
+/* «Удалить группу» в шапке чата — красный акцент на тёмном фоне */
+.sd-chat-create-group-btn.sd-chat-create-group-btn--danger {
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.32) 0%, rgba(248, 113, 113, 0.22) 100%);
+    border-color: rgba(252, 165, 165, 0.55);
+    color: #fee2e2;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.1) inset, 0 2px 10px rgba(185, 28, 28, 0.25);
+}
+.sd-chat-create-group-btn.sd-chat-create-group-btn--danger:hover {
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.48) 0%, rgba(248, 113, 113, 0.36) 100%);
+    border-color: rgba(254, 202, 202, 0.65);
+    color: #fff;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.15) inset, 0 4px 14px rgba(185, 28, 28, 0.35);
+}
+/* «Удалить» у группы на главной админа — красный акцент на светлом фоне (вместе с .sd-accent-pill-light) */
+.sd-chat-create-group-btn.sd-accent-pill-light.sd-chat-create-group-btn--danger {
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.14) 0%, rgba(248, 113, 113, 0.1) 100%);
+    border-color: rgba(248, 113, 113, 0.45);
+    color: #b91c1c;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.95) inset, 0 2px 10px rgba(185, 28, 28, 0.1);
+}
+.sd-chat-create-group-btn.sd-accent-pill-light.sd-chat-create-group-btn--danger:hover {
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.24) 0%, rgba(248, 113, 113, 0.16) 100%);
+    border-color: rgba(220, 38, 38, 0.5);
+    color: #991b1b;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 1) inset, 0 4px 14px rgba(185, 28, 28, 0.18);
+}
+/* Круглая кнопка «Настройки» в шапке чата — тот же indigo, что «Создать группу» */
+.sd-chat-create-group-btn.sd-chat-create-group-btn--icon {
     width: 36px;
     height: 36px;
     min-width: 36px;
     min-height: 36px;
-    flex-shrink: 0;
     padding: 0;
-    box-sizing: border-box;
-    aspect-ratio: 1;
-    background: rgba(255,255,255,0.08);
-    border: 1px solid rgba(255,255,255,0.14);
     border-radius: 50%;
-    color: rgba(255,255,255,0.85);
-    cursor: pointer;
-    font-family: inherit;
-    touch-action: manipulation;
+    gap: 0;
 }
-.sd-chat-settings-btn svg {
-    width: 20px;
-    height: 20px;
-    min-width: 20px;
-    min-height: 20px;
-    flex-shrink: 0;
-    display: block;
+.sd-chat-create-group-btn.sd-chat-create-group-btn--icon svg {
+    width: 18px;
+    height: 18px;
+    min-width: 18px;
+    min-height: 18px;
 }
-.sd-chat-settings-btn:hover {
-    background: rgba(255,255,255,0.15);
-    color: #fff;
+.sd-admin-storage-block .sd-chat-create-group-btn.sd-accent-pill-light {
+    font-size: 0.75rem;
+    padding: 5px 10px;
 }
 
-.sd-chat-refresh-btn {
-    display: inline-flex;
+.sd-chat-group-row {
+    display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 6px 12px;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    padding: 12px 14px;
+    margin-bottom: 6px;
+    border: none;
+    border-radius: 10px;
     background: rgba(255,255,255,0.08);
-    border: 1px solid rgba(255,255,255,0.14);
-    border-radius: 20px;
-    color: rgba(255,255,255,0.75);
-    font-size: 0.8rem;
-    font-weight: 500;
+    color: #fff;
     cursor: pointer;
     font-family: inherit;
     touch-action: manipulation;
 }
-.sd-chat-refresh-btn:hover {
-    background: rgba(255,255,255,0.15);
-    color: #fff;
+.sd-chat-group-row:hover {
+    background: rgba(255,255,255,0.12);
 }
+.sd-chat-group-row .sd-chat-group-label {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+}
+.sd-chat-group-label {
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+.sd-chat-group-modal .sd-chat-group-avatar-block {
+    margin-bottom: 16px;
+}
+
+.sd-chat-header-group {
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+.sd-chat-header-group .sd-chat-contact-name {
+    flex: 1;
+    min-width: 0;
+}
+.sd-chat-group-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.sd-msg-group-sender {
+    font-size: 0.75rem;
+    opacity: 0.88;
+    margin-bottom: 4px;
+    font-weight: 600;
+}
+
+.sd-chat-group-modal .sd-chat-group-add-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+    align-items: center;
+}
+.sd-chat-group-modal .sd-chat-group-pick {
+    flex: 1;
+    min-width: 140px;
+}
+.sd-chat-group-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+    min-height: 8px;
+}
+.sd-chat-group-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    background: rgba(0,0,0,0.12);
+    border-radius: 8px;
+    font-size: 0.85rem;
+}
+.sd-chat-group-chip-remove {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1.1rem;
+    line-height: 1;
+    padding: 0 2px;
+    color: inherit;
+    opacity: 0.8;
+}
+
+/* Маркер для мобильных отступов; стили — .sd-chat-create-group-btn.sd-chat-create-group-btn--icon */
+
+/* «Обновить контакты» использует те же классы, что «Создать группу» (.sd-chat-create-group-btn) */
 
 .sd-chat-loading-text {
     padding: 8px 16px;
@@ -4785,6 +6106,19 @@ a.sd-cadet-icon-btn:active {
     color: #111;
     line-height: 1.45;
 }
+.sd-msg-reply-snippet {
+    font-size: 0.78rem;
+    line-height: 1.3;
+    color: rgba(0,0,0,0.65);
+    border-left: 3px solid rgba(37,99,235,0.55);
+    padding-left: 8px;
+    margin-bottom: 6px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.sd-msg-reply-target .sd-msg-bubble-wrap {
+    box-shadow: 0 0 0 2px rgba(37,99,235,0.45);
+}
 .sd-msg-footer {
     display: flex;
     align-items: center;
@@ -4828,6 +6162,66 @@ a.sd-cadet-icon-btn:active {
     backdrop-filter: blur(8px);
     border-top: 1px solid rgba(255,255,255,0.08);
 }
+.sd-chat-reply-preview {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: rgba(255,255,255,0.92);
+    border-left: 3px solid #2563eb;
+    border-radius: 10px;
+    padding: 8px 10px;
+}
+.sd-chat-reply-preview-text {
+    font-size: 0.82rem;
+    color: rgba(0,0,0,0.75);
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.sd-chat-reply-cancel-btn {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.06);
+    color: #374151;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+.sd-chat-reply-cancel-btn:hover { background: rgba(0,0,0,0.12); }
+
+.sd-chat-msg-menu {
+    position: fixed;
+    z-index: 2000;
+    min-width: 170px;
+    background: #fff;
+    border: 1px solid rgba(0,0,0,0.12);
+    border-radius: 12px;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.22);
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.sd-chat-msg-menu-item {
+    width: 100%;
+    border: none;
+    background: transparent;
+    color: #111;
+    text-align: left;
+    padding: 9px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+.sd-chat-msg-menu-item:hover { background: rgba(0,0,0,0.06); }
+.sd-chat-msg-menu-item-danger { color: #b91c1c; }
 .sd-chat-input {
     flex: 1;
     padding: 9px 14px;
@@ -4862,6 +6256,150 @@ a.sd-cadet-icon-btn:active {
 }
 .sd-chat-send-btn:hover { background: #1d4ed8; }
 
+/* Прикрепить файл — те же стили, что «Отправить» и голосовое (синий круг, белая иконка) */
+.sd-chat-attach-btn {
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: none;
+    background: #2563eb;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-family: inherit;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    box-sizing: border-box;
+}
+.sd-chat-attach-btn:hover { background: #1d4ed8; }
+.sd-chat-attach-btn svg {
+    width: 20px;
+    height: 20px;
+    display: block;
+}
+
+.sd-msg-file .sd-msg-file-row { margin-bottom: 4px; }
+.sd-msg-file-row-image {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-start;
+    max-width: min(280px, 100%);
+}
+.sd-msg-file-image-link {
+    display: block;
+    line-height: 0;
+    border-radius: 10px;
+    overflow: hidden;
+    max-width: 100%;
+    border: 1px solid rgba(0,0,0,0.08);
+    background: rgba(0,0,0,0.04);
+}
+.sd-msg-file-image {
+    display: block;
+    max-width: min(280px, 100%);
+    max-height: 320px;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    vertical-align: middle;
+}
+.sd-msg-file-name-under {
+    font-size: 0.85rem;
+}
+.sd-msg-file-link {
+    color: #2563eb;
+    text-decoration: underline;
+    word-break: break-all;
+}
+.sd-msg-file-caption { margin-top: 6px; display: block; }
+
+/* Полноэкранный просмотр вложения из чата */
+.sd-chat-file-viewer {
+    position: fixed;
+    inset: 0;
+    z-index: 10060;
+    background: rgba(0, 0, 0, 0.88);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
+    box-sizing: border-box;
+}
+.sd-chat-file-viewer.sd-hidden { display: none !important; }
+.sd-chat-file-viewer-close {
+    position: absolute;
+    top: max(12px, env(safe-area-inset-top, 12px));
+    right: max(12px, env(safe-area-inset-right, 12px));
+    z-index: 10061;
+    width: 44px;
+    height: 44px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.15);
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+.sd-chat-file-viewer-close:hover {
+    background: rgba(255, 255, 255, 0.28);
+}
+.sd-chat-file-viewer-close svg {
+    width: 26px;
+    height: 26px;
+    display: block;
+}
+.sd-chat-file-viewer-inner {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 56px 16px 24px;
+    box-sizing: border-box;
+    overflow: auto;
+}
+.sd-chat-file-viewer-img-el {
+    max-width: 100%;
+    max-height: calc(100vh - 120px);
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    border-radius: 8px;
+}
+.sd-chat-file-viewer-frame-el {
+    flex: 1;
+    width: 100%;
+    min-height: 50vh;
+    max-height: calc(100vh - 140px);
+    border: none;
+    border-radius: 8px;
+    background: #fff;
+}
+.sd-chat-file-viewer-extra {
+    margin-top: 12px;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.92);
+    max-width: 100%;
+}
+.sd-chat-file-viewer-filename {
+    margin: 0 0 10px;
+    font-size: 0.95rem;
+    word-break: break-all;
+}
+.sd-chat-file-viewer-open-new {
+    display: inline-block;
+}
+
 /* Кнопка микрофона — по дизайну как кнопка отправки */
 .sd-chat-voice-mic-btn {
     flex-shrink: 0;
@@ -4884,6 +6422,123 @@ a.sd-cadet-icon-btn:active {
 /* Строка «Запись… M:SS» + кнопка «Остановить» — как в Android */
 .sd-chat-voice-recording {
     justify-content: space-between;
+}
+.sd-chat-voice-hold-hint {
+    font-size: 0.8rem;
+    color: rgba(255,255,255,0.65);
+}
+
+/* ── Режим превью (однократный клик): дорожка + кнопки ── */
+.sd-chat-voice-recording-review {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+}
+.sd-chat-voice-review-track {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.sd-chat-voice-review-track-bar {
+    height: 2px;
+    width: 100%;
+    background: rgba(0,0,0,0.65);
+    border-radius: 2px;
+    overflow: hidden;
+}
+.sd-chat-voice-review-track-fill {
+    height: 100%;
+    background: #000;
+    width: 0%;
+    transition: width 0.15s ease;
+}
+.sd-chat-voice-review-track-time {
+    font-size: 0.85rem;
+    color: rgba(255,255,255,0.85);
+}
+
+.sd-chat-voice-review-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+}
+.sd-chat-voice-review-actions-recording {
+    justify-content: space-between;
+}
+.sd-chat-voice-review-icon-placeholder {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    display: block;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.sd-chat-voice-review-icon-btn {
+    flex-shrink: 0;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: none;
+    background: #2563eb;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-family: inherit;
+    touch-action: manipulation;
+}
+.sd-chat-voice-review-icon-btn:hover { background: #1d4ed8; }
+.sd-chat-voice-review-icon-btn.sd-chat-voice-review-send-btn {
+    background: #22c55e;
+}
+.sd-chat-voice-review-icon-btn.sd-chat-voice-review-send-btn:hover {
+    background: #16a34a;
+}
+
+.sd-chat-voice-review-player {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.sd-chat-voice-record-review-ready {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+}
+.sd-chat-voice-review-play-btn {
+    flex-shrink: 0;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(37, 99, 235, 0.2);
+    color: #2563eb;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-family: inherit;
+    touch-action: manipulation;
+}
+.sd-chat-voice-review-play-btn:hover { background: rgba(37, 99, 235, 0.35); }
+.sd-chat-voice-review-range {
+    flex: 1;
+    height: 24px;
+}
+.sd-chat-voice-review-times {
+    flex-shrink: 0;
+    font-size: 0.75rem;
+    color: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
 }
 .sd-chat-recording-text {
     font-size: 0.95rem;
@@ -4924,29 +6579,38 @@ a.sd-cadet-icon-btn:active {
 }
 .sd-voice-play-btn {
     flex-shrink: 0;
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border-radius: 0;
     border: none;
-    background: rgba(37, 99, 235, 0.2);
-    color: #2563eb;
+    background: transparent;
+    box-shadow: none;
+    color: #000;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     font-family: inherit;
     touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
 }
 .sd-voice-play-btn:hover {
-    background: rgba(37, 99, 235, 0.35);
-    color: #1d4ed8;
+    background: transparent;
+    color: #000;
+    opacity: 0.75;
+}
+.sd-voice-play-btn:active {
+    opacity: 0.55;
 }
 .sd-msg-me .sd-voice-play-btn {
-    background: rgba(255,255,255,0.25);
-    color: #1d4ed8;
+    background: transparent;
+    color: #000;
 }
 .sd-msg-me .sd-voice-play-btn:hover {
-    background: rgba(255,255,255,0.4);
+    background: transparent;
+    color: #000;
+    opacity: 0.75;
 }
 /* Прогресс голосового — тонкая чёрная шкала с круглым ползунком (можно тянуть) */
 .sd-voice-progress-wrap {
@@ -5466,4 +7130,150 @@ a.sd-cadet-icon-btn:active {
         flex-shrink: 0;
         padding-top: max(10px, env(safe-area-inset-top));
     }
+}
+
+/* Админ — вкладка «Расписание» */
+.sd-admin-schedule-intro {
+    margin-bottom: 12px;
+    font-size: 0.92rem;
+}
+.sd-admin-schedule-actions {
+    margin: 0 0 16px;
+}
+.sd-admin-schedule-list {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+}
+.sd-admin-schedule-block {
+    background: var(--sd-card);
+    border: 1px solid var(--sd-border);
+    border-radius: 14px;
+    padding: 14px 16px;
+}
+.sd-admin-schedule-instructor-details {
+    display: block;
+}
+.sd-admin-schedule-instructor-details > .sd-admin-schedule-instructor-summary {
+    cursor: pointer;
+    list-style: none;
+    margin: 0 0 12px;
+    padding: 0;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--sd-primary-dark);
+}
+.sd-admin-schedule-instructor-details > .sd-admin-schedule-instructor-summary::-webkit-details-marker {
+    display: none;
+}
+.sd-admin-schedule-instructor-body {
+    padding-top: 0;
+}
+.sd-admin-schedule-instructor {
+    margin: 0 0 12px;
+    font-size: 1.05rem;
+    color: var(--sd-primary-dark);
+}
+.sd-admin-schedule-h4 {
+    margin: 0 0 10px;
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--sd-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+.sd-admin-schedule-day-block {
+    margin-bottom: 16px;
+}
+.sd-admin-schedule-day-block:last-child {
+    margin-bottom: 0;
+}
+.sd-admin-schedule-day-head {
+    margin: 0 0 8px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--sd-text);
+    line-height: 1.35;
+}
+.sd-admin-schedule-month-block {
+    margin-bottom: 18px;
+}
+.sd-admin-schedule-month-block:last-child {
+    margin-bottom: 0;
+}
+.sd-admin-schedule-month-head {
+    margin: 0 0 10px;
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: var(--sd-text-secondary);
+    letter-spacing: 0.02em;
+}
+.sd-admin-schedule-history-summary {
+    list-style: none;
+}
+.sd-admin-schedule-history-summary::-webkit-details-marker {
+    display: none;
+}
+.sd-admin-schedule-summary-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    flex-wrap: wrap;
+}
+.sd-admin-schedule-summary-title {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.sd-admin-history-clear-btn {
+    flex-shrink: 0;
+}
+.sd-admin-clear-history-dialog {
+    max-width: 400px;
+}
+.sd-admin-schedule-table-wrap {
+    overflow-x: auto;
+    margin-bottom: 12px;
+    -webkit-overflow-scrolling: touch;
+}
+.sd-admin-schedule-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+}
+.sd-admin-schedule-table th,
+.sd-admin-schedule-table td {
+    border: 1px solid var(--sd-border);
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+}
+.sd-admin-schedule-table th {
+    background: #f0f4fa;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.sd-admin-schedule-table tbody tr:nth-child(even) {
+    background: #fafbfd;
+}
+.sd-admin-schedule-details {
+    margin-top: 8px;
+    border-top: 1px dashed var(--sd-border);
+    padding-top: 10px;
+}
+.sd-admin-schedule-summary {
+    cursor: pointer;
+    font-weight: 600;
+    padding: 6px 0;
+    list-style: none;
+}
+.sd-admin-schedule-summary::-webkit-details-marker {
+    display: none;
+}
+.sd-admin-schedule-details[open] .sd-admin-schedule-summary {
+    margin-bottom: 8px;
+}
+.sd-admin-schedule-table td:last-child {
+    white-space: nowrap;
 }

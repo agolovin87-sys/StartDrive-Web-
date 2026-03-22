@@ -6,7 +6,9 @@ import kotlinx.browser.document
 import kotlinx.browser.window
 import org.w3c.dom.HTMLButtonElement
 import org.w3c.dom.HTMLInputElement
+import org.w3c.dom.HTMLTextAreaElement
 import org.w3c.dom.HTMLSelectElement
+import org.w3c.dom.Element
 import org.w3c.dom.events.Event
 import org.w3c.dom.events.EventListener
 
@@ -15,20 +17,103 @@ private var voiceRecorderChunks: dynamic = null
 private var voiceRecorderStream: dynamic = null
 private var voiceRecorder: dynamic = null
 private var voiceRecorderMimeType: String = "audio/webm"
+/** Если true — после остановки отправляем голосовое сразу (режим "удерживай"). */
+private var voiceAutoSendOnStop: Boolean = false
+/** Если true — после остановки просто выкидываем запись (удалить во время записи). */
+private var voiceDiscardOnStop: Boolean = false
+/** Blob готовой записи (для режима "однократный клик"). */
+private var voiceReviewBlob: dynamic = null
+/** Объектный URL (URL.createObjectURL) для локального проигрывания. */
+private var voiceReviewObjectUrl: String? = null
+/** Если true — таймер долгого нажатия сработал (режим "удерживай"). */
+private var voiceMicHoldTriggered: Boolean = false
+/** Таймер для определения "удержания" микрофона. */
+private var voiceMicLongPressTimerId: Int = 0
 private var voiceRecordInterval: Int = 0
 private var voicePlayInterval: Int = 0
+/** Токен/флаг, чтобы не навешивать слушатели на аудио повторно при каждом рендере. */
+private var voiceReviewAudioBoundForUrl: String? = null
+private var chatMsgLongPressTimerId: Int = 0
+/** Поля калькулятора «талоны × руб» на экране профиля: null = подставить totalEarned из данных. */
+private var instructorProfileCalcTokensOverride: String? = null
+private var instructorProfileCalcRubInput: String = ""
+/** Узел калькулятора вынесен из-под innerHTML #sd-card, чтобы ввод не моргал. */
+private var instructorProfileEarnedCalcMountEl: Element? = null
+/** Отложенное обновление суммы в руб. (один кадр), чтобы не дёргать DOM на каждый символ. */
+private var instructorEarnedRubRafId: Int = 0
+/** Запланированный render() из main (blur калькулятора — подтянуть статистику без мигания при вводе). */
+private var scheduleAppRender: (() -> Unit)? = null
+private var chatFileViewerEscapeListenerBound: Boolean = false
+private var adminStoragePendingClearKind: String? = null
+private var adminStoragePendingContactId: String? = null
+private var adminStoragePendingGroupId: String? = null
 private val chatScrollByContactId = mutableMapOf<String, Int>()
+private val chatScrollByGroupId = mutableMapOf<String, Int>()
+private val chatNotifUnsubByGroupId = mutableMapOf<String, () -> Unit>()
 private var cadetNotificationAudio: dynamic = null
 private var cadetNotificationAudioUnlocked: Boolean = false
 private var cadetNotificationAudioContext: dynamic = null
 private var chatMessageAudio: dynamic = null
+/** Отписка от onSnapshot документа users/{uid} (баланс в профиле в реальном времени). */
+private var userProfileFirestoreUnsubscribe: (() -> Unit)? = null
+
+/** Черновик аватара группы до «Сохранить»/«Создать» (загрузка в Storage после записи в Firestore). */
+private var groupChatAvatarPendingDataUrl: String? = null
+private var groupChatAvatarPendingRemove: Boolean = false
+
+/** Состояние кропа аватара группы (общее, чтобы не дублировать слушатели на root). */
+private val groupModalCropState = doubleArrayOf(0.0, 0.0, 1.0)
+private val groupModalCropDataUrlHolder = mutableListOf<String?>(null)
+private var groupModalCropDragging = false
+private var groupModalCropPinching = false
+private var groupModalCropDragStartX = 0.0
+private var groupModalCropDragStartY = 0.0
+private var groupModalCropDragOffsetStartX = 0.0
+private var groupModalCropDragOffsetStartY = 0.0
+private var groupModalCropPinchStartDist = 0.0
+private var groupModalCropPinchStartScale = 0.0
+private var groupChatAvatarRootListenersBound = false
+
+/** Сигнатура списка курсантов для блока форм: при частичном обновлении вкладки «Запись» пересобираем только стабильные поля, если изменился состав курсантов. */
+private var lastInstructorRecordingCadetSigForStable: String? = null
+
+private fun instructorCadetsSignature(cadets: List<User>): String {
+    return cadets.map { "${it.id}:${it.balance}" }.sorted().joinToString(",")
+}
+
+private fun clearGroupChatAvatarPending() {
+    groupChatAvatarPendingDataUrl = null
+    groupChatAvatarPendingRemove = false
+}
+
+private fun groupChatNameInitials(name: String): String =
+    name.split(" ").filter { it.isNotBlank() }.take(2).joinToString("") { it.first().uppercase() }.ifBlank { "?" }
+
+/** После addChatGroup/updateChatGroup — загрузить/удалить аватар по черновику. */
+private fun applyGroupAvatarAfterFirebaseSave(groupId: String, onDone: () -> Unit) {
+    when {
+        !groupChatAvatarPendingDataUrl.isNullOrBlank() ->
+            uploadChatGroupAvatar(groupId, groupChatAvatarPendingDataUrl!!) { err ->
+                if (err != null) updateState { networkError = err }
+                else onDone()
+            }
+        groupChatAvatarPendingRemove ->
+            removeChatGroupAvatar(groupId) { err ->
+                if (err != null) updateState { networkError = err }
+                else onDone()
+            }
+        else -> onDone()
+    }
+}
 
 private fun saveChatScrollForCurrentContact() {
-    val contactId = appState.selectedChatContactId ?: return
-    val c = document.getElementById("sd-chat-messages")?.asDynamic()
-    if (c != null) {
-        val top = (c.scrollTop as? Number)?.toInt() ?: 0
-        chatScrollByContactId[contactId] = top
+    val contactId = appState.selectedChatContactId
+    val groupId = appState.selectedChatGroupId
+    val c = document.getElementById("sd-chat-messages")?.asDynamic() ?: return
+    val top = (c.scrollTop as? Number)?.toInt() ?: 0
+    when {
+        groupId != null -> chatScrollByGroupId[groupId] = top
+        contactId != null -> chatScrollByContactId[contactId] = top
     }
 }
 
@@ -72,6 +157,7 @@ private val SD_ICON_CHECK_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width
 private val SD_ICON_CLOSE_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>"""
 private val SD_ICON_OTHER_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>"""
 private val SD_ICON_NOTIFICATION_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>"""
+private val SD_ICON_BACK_CHEVRON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>"""
 
 private fun formatVoiceDurationSec(sec: Int): String {
     val m = sec / 60
@@ -83,19 +169,21 @@ private fun formatVoiceDurationSec(sec: Int): String {
 private fun patchVoicePlayerDOM() {
     val playingId = appState.chatPlayingVoiceId
     val currentMs = appState.chatPlayingVoiceCurrentMs
+    val playbackPaused = appState.chatVoicePlaybackPaused
     val voiceEls = document.querySelectorAll(".sd-msg-voice")
     for (i in 0 until voiceEls.length) {
         val el = voiceEls.item(i)?.asDynamic() ?: continue
         val msgId = el.getAttribute("data-voice-id") as? String ?: continue
         val dur = ((el.getAttribute("data-voice-duration") as? String) ?: "0").toIntOrNull() ?: 0
-        val isPlaying = playingId == msgId
-        val ms = if (isPlaying) currentMs else 0
+        val isActiveClip = playingId == msgId
+        val isPlayingNow = isActiveClip && !playbackPaused
+        val ms = if (isActiveClip) currentMs else 0
         val progress = if (dur > 0) (ms.toDouble() / 1000 / dur).coerceIn(0.0, 1.0) else 0.0
         val progressPct = (progress * 100).toInt()
         val currentStr = formatVoiceDurationSec((ms / 1000).coerceAtLeast(0).coerceAtMost(dur))
         val totalStr = formatVoiceDurationSec(dur)
-        js("(function(el, isPlaying, progressPct, currentStr, totalStr, iconPlay, iconPause){ var btn=el.querySelector('.sd-voice-play-btn'); if(btn){ btn.innerHTML=isPlaying?iconPause:iconPlay; btn.setAttribute('title',isPlaying?'Пауза':'Воспроизвести'); btn.setAttribute('aria-label',isPlaying?'Пауза':'Воспроизвести'); } var wrap=el.querySelector('.sd-voice-progress-wrap'); if(wrap){ var bar=wrap.querySelector('.sd-voice-progress-bar'); if(isPlaying||progressPct>0){ if(!bar){ bar=document.createElement('div'); bar.className='sd-voice-progress-bar'; var ref=wrap.querySelector('.sd-voice-times'); if(ref) wrap.insertBefore(bar,ref); else wrap.appendChild(bar); } bar.style.width=progressPct+'%'; } else if(bar) bar.remove(); } var cur=el.querySelector('.sd-voice-current'); if(cur) cur.textContent=currentStr; var tot=el.querySelector('.sd-voice-total'); if(tot) tot.textContent=totalStr; })")(
-            el, isPlaying, progressPct, currentStr, totalStr, SD_ICON_PLAY_SVG, SD_ICON_PAUSE_SVG
+        js("(function(el, isPlayingNow, progressPct, currentStr, totalStr, iconPlay, iconPause){ var btn=el.querySelector('.sd-voice-play-btn'); if(btn){ btn.innerHTML=isPlayingNow?iconPause:iconPlay; btn.setAttribute('title',isPlayingNow?'Пауза':'Воспроизвести'); btn.setAttribute('aria-label',isPlayingNow?'Пауза':'Воспроизвести'); } var wrap=el.querySelector('.sd-voice-progress-wrap'); if(wrap){ var bar=wrap.querySelector('.sd-voice-progress-bar'); if(isPlayingNow||progressPct>0){ if(!bar){ bar=document.createElement('div'); bar.className='sd-voice-progress-bar'; var ref=wrap.querySelector('.sd-voice-times'); if(ref) wrap.insertBefore(bar,ref); else wrap.appendChild(bar); } bar.style.width=progressPct+'%'; } else if(bar) bar.remove(); } var cur=el.querySelector('.sd-voice-current'); if(cur) cur.textContent=currentStr; var tot=el.querySelector('.sd-voice-total'); if(tot) tot.textContent=totalStr; })")(
+            el, isPlayingNow, progressPct, currentStr, totalStr, SD_ICON_PLAY_SVG, SD_ICON_PAUSE_SVG
         )
     }
 }
@@ -132,6 +220,8 @@ fun main() {
         initFirebase()
 
         var lastRenderedTabIndex: Int? = null
+        /** Чтобы не пересоздавать DOM вкладок при каждом updateState — иначе «дергается» иконка Главная. */
+        var lastTabButtonsMarkup: String? = null
 
         fun render() {
             val state = appState
@@ -144,9 +234,9 @@ fun main() {
             val sdCard = (root.unsafeCast<dynamic>().querySelector("#sd-card")) as? org.w3c.dom.Element
             if (panelScreen && state.user != null && sdCard != null && state.networkError == null && !state.loading) {
                 val tabs = when (state.screen) {
-                    AppScreen.Admin -> listOf("Главная", "Баланс", "Чат", "История")
-                    AppScreen.Instructor -> listOf("Главная", "Запись", "Чат", "Билеты", "История", "Настройки")
-                    else -> listOf("Главная", "Запись", "Чат", "Билеты", "История", "Настройки")
+                    AppScreen.Admin -> listOf("Главная", "Баланс", "Расписание", "Чат", "История")
+                    AppScreen.Instructor -> listOf("Главная", "Запись", "Чат", "Билеты", "История")
+                    else -> listOf("Главная", "Запись", "Чат", "Билеты", "История")
                 }
                 /* Состояние секций главной (развёрнуто/свёрнуто) сохраняем при переключении вкладок и перед рендером текущей вкладки */
                 if (state.screen == AppScreen.Admin && state.selectedTabIndex == 1) {
@@ -160,7 +250,10 @@ fun main() {
                     }
                 }
                 val (tabButtons, tabContent) = getPanelTabButtonsAndContent(state.user!!, tabs)
-                (root.unsafeCast<dynamic>().querySelector("nav.sd-tabs") as? org.w3c.dom.Element)?.innerHTML = tabButtons
+                if (tabButtons != lastTabButtonsMarkup) {
+                    (root.unsafeCast<dynamic>().querySelector("nav.sd-tabs") as? org.w3c.dom.Element)?.innerHTML = tabButtons
+                    lastTabButtonsMarkup = tabButtons
+                }
                 lastRenderedTabIndex = state.selectedTabIndex
                 if (state.screen == AppScreen.Instructor || state.screen == AppScreen.Cadet) {
                     (root.unsafeCast<dynamic>().querySelector("#sd-btn-notifications .sd-btn-notif-wrap") as? org.w3c.dom.Element)?.innerHTML = getNotificationButtonWrapHtml()
@@ -170,8 +263,53 @@ fun main() {
                     state.pddExamMode && state.pddQuestions.isNotEmpty() -> renderTicketsTabContent()
                     else -> tabContent
                 }
-                sdCard.innerHTML = cardContent
-                if (state.selectedTabIndex == 2 && state.selectedChatContactId != null) {
+                val canPatchInstructorRecording =
+                    state.screen == AppScreen.Instructor &&
+                    state.selectedTabIndex == 1 &&
+                    !state.notificationsViewOpen &&
+                    !(state.pddExamMode && state.pddQuestions.isNotEmpty())
+                if (canPatchInstructorRecording) {
+                    val stable = sdCard.querySelector("#sd-instructor-rec-forms-stable")
+                    val dyn = sdCard.querySelector("#sd-instructor-rec-dynamic")
+                    if (stable != null && dyn != null) {
+                        val u = state.user!!
+                        dyn.innerHTML = renderInstructorRecordingDynamicPanelHtml(u)
+                        patchInstructorRecordingDatetimeInputsMin(sdCard)
+                        val cadSig = instructorCadetsSignature(state.instructorCadets)
+                        if (cadSig != lastInstructorRecordingCadetSigForStable) {
+                            stable.innerHTML = renderInstructorRecordingFormsPanelHtml()
+                            lastInstructorRecordingCadetSigForStable = cadSig
+                        }
+                        attachListeners(root)
+                        appendSoundSettingsModalIfNeeded(root)
+                        appendAdminCadetGroupModalsIfNeeded(root)
+                        appendChatGroupModalsIfNeeded(root)
+                        appendInstructorCancelReasonModalIfNeeded(root)
+                        appendInstructorRunningLateModalIfNeeded(root)
+                        appendRecCancelSessionConfirmModalIfNeeded(root)
+                        appendAllowSoundBarIfNeeded(root)
+                        return
+                    }
+                }
+                lastInstructorRecordingCadetSigForStable = null
+                val skipFullCardRedraw =
+                    state.screen == AppScreen.Instructor &&
+                    state.selectedTabIndex == 0 &&
+                    state.instructorHomeSubView == "profile" &&
+                    !state.notificationsViewOpen &&
+                    !(state.pddExamMode && state.pddQuestions.isNotEmpty()) &&
+                    isInstructorEarnedCalcInputFocused()
+                if (!skipFullCardRedraw) {
+                    detachInstructorProfileEarnedCalcMount()
+                    sdCard.innerHTML = cardContent
+                    reattachInstructorProfileEarnedCalcMount(root)
+                } else {
+                    reattachInstructorProfileEarnedCalcMount(root)
+                }
+                if (canPatchInstructorRecording && sdCard.querySelector("#sd-instructor-rec-forms-stable") != null) {
+                    lastInstructorRecordingCadetSigForStable = instructorCadetsSignature(state.instructorCadets)
+                }
+                if (state.selectedTabIndex == 2 && (state.selectedChatContactId != null || state.selectedChatGroupId != null) && !state.chatSettingsOpen) {
                     val chatContainer = document.getElementById("sd-chat-messages")?.asDynamic()
                     if (chatContainer != null) {
                         val maxScroll = ((chatContainer.scrollHeight as Number).toDouble() - (chatContainer.clientHeight as Number).toDouble()).toInt().coerceAtLeast(0)
@@ -186,22 +324,33 @@ fun main() {
                 }
                 attachListeners(root)
                 appendSoundSettingsModalIfNeeded(root)
+                appendAdminCadetGroupModalsIfNeeded(root)
+                appendChatGroupModalsIfNeeded(root)
+                appendInstructorCancelReasonModalIfNeeded(root)
+                appendInstructorRunningLateModalIfNeeded(root)
+                appendRecCancelSessionConfirmModalIfNeeded(root)
                 appendAllowSoundBarIfNeeded(root)
                 return
             }
             lastRenderedTabIndex = null
+            lastTabButtonsMarkup = null
             val html = when (state.screen) {
                 AppScreen.Login -> renderLogin(state.error, state.loading)
                 AppScreen.Register -> renderRegister(state.error, state.loading)
                 AppScreen.PendingApproval -> renderPendingApproval()
                 AppScreen.ProfileNotFound -> renderProfileNotFound(state.error ?: "Профиль не найден.")
-                AppScreen.Admin -> renderPanel(state.user!!, "Администратор", listOf("Главная", "Баланс", "Чат", "История"))
-                AppScreen.Instructor -> renderPanel(state.user!!, "Инструктор", listOf("Главная", "Запись", "Чат", "Билеты", "История", "Настройки"))
-                AppScreen.Cadet -> renderPanel(state.user!!, "Курсант", listOf("Главная", "Запись", "Чат", "Билеты", "История", "Настройки"))
+                AppScreen.Admin -> renderPanel(state.user!!, "Администратор", listOf("Главная", "Баланс", "Расписание", "Чат", "История"))
+                AppScreen.Instructor -> renderPanel(state.user!!, "Инструктор", listOf("Главная", "Запись", "Чат", "Билеты", "История"))
+                AppScreen.Cadet -> renderPanel(state.user!!, "Курсант", listOf("Главная", "Запись", "Чат", "Билеты", "История"))
             }
             root.innerHTML = networkBanner + loadingOverlay + html
             attachListeners(root)
             appendSoundSettingsModalIfNeeded(root)
+            appendAdminCadetGroupModalsIfNeeded(root)
+            appendChatGroupModalsIfNeeded(root)
+            appendInstructorCancelReasonModalIfNeeded(root)
+            appendInstructorRunningLateModalIfNeeded(root)
+            appendRecCancelSessionConfirmModalIfNeeded(root)
             appendAllowSoundBarIfNeeded(root)
         }
 
@@ -216,19 +365,35 @@ fun main() {
             }
         }
 
+        scheduleAppRender = { scheduleRender() }
+
         onStateChanged = { scheduleRender() }
 
         setupPanelClickDelegation(root)
 
         onAuthStateChanged { uid ->
             if (uid == null) {
-                updateState { screen = AppScreen.Login; user = null; error = null }
+                try {
+                    userProfileFirestoreUnsubscribe?.invoke()
+                } catch (_: Throwable) { }
+                userProfileFirestoreUnsubscribe = null
+                updateState {
+                    screen = AppScreen.Login
+                    user = null
+                    error = null
+                    instructorHomeSubView = "main"
+                    cadetHomeSubView = "main"
+                }
                 return@onAuthStateChanged
             }
             updateState { loading = true; error = null }
             getCurrentUser { user, errorMsg ->
                 updateState { loading = false; networkError = null }
                 if (user == null) {
+                    try {
+                        userProfileFirestoreUnsubscribe?.invoke()
+                    } catch (_: Throwable) { }
+                    userProfileFirestoreUnsubscribe = null
                     updateState {
                         screen = AppScreen.ProfileNotFound
                         this.user = null
@@ -252,6 +417,14 @@ fun main() {
                     showSoundSettingsModal = (user.role == "cadet" && user.isActive && isFirstRunSoundSetting())
                 }
                 setPresence(user.id, true)
+                try {
+                    userProfileFirestoreUnsubscribe?.invoke()
+                } catch (_: Throwable) { }
+                userProfileFirestoreUnsubscribe = null
+                userProfileFirestoreUnsubscribe = subscribeCurrentUserDocument { newUser ->
+                    if (appState.user == newUser) return@subscribeCurrentUserDocument
+                    updateState { this.user = newUser }
+                }
             }
         }
 
@@ -453,18 +626,319 @@ private fun renderProfileNotFound(message: String): String = """
     </main>
 """.trimIndent()
 
+/** Аватар собеседника в пузыре чата (для группы — по пользователю). */
+private fun chatOtherUserAvatarHtml(u: User): String {
+    val initials = u.initials().ifEmpty { "?" }.escapeHtml()
+    val bg = avatarColorForId(u.id).escapeHtml()
+    val url = u.chatAvatarUrl?.takeIf { it.isNotBlank() }
+    return if (url != null) """<div class="sd-msg-them-avatar sd-avatar-wrap" data-initials="$initials" data-bg="$bg"><img src="${url.escapeHtml()}" alt="" class="sd-msg-avatar-img sd-avatar-img" decoding="async" data-user-id="${u.id.escapeHtml()}" /></div>"""
+    else """<div class="sd-msg-them-avatar" style="background:$bg"><span class="sd-msg-them-avatar-initials">$initials</span></div>"""
+}
+
+/** Сообщение с файлом — показывать как картинку в чате (превью). */
+private fun chatFileMessageIsImage(msg: ChatMessage): Boolean {
+    val mime = msg.fileMime?.trim()?.lowercase() ?: ""
+    if (mime.startsWith("image/")) return true
+    val name = (msg.fileName ?: "").lowercase()
+    return name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png") ||
+        name.endsWith(".gif") || name.endsWith(".webp") || name.endsWith(".bmp") ||
+        name.endsWith(".svg") || name.endsWith(".avif") || name.endsWith(".heic") || name.endsWith(".heif")
+}
+
+/** Пузырь сообщения с вложением (файл). */
+private fun chatFileMessageBubbleHtml(
+    msg: ChatMessage,
+    cls: String,
+    replyTargetClass: String,
+    replyHtml: String,
+    timeRow: String,
+    statusHtml: String,
+    otherAvatarHtml: String,
+    myAvatarHtml: String,
+    isMe: Boolean,
+    senderLabel: String,
+): String {
+    val url = (msg.fileUrl ?: "").escapeHtml()
+    val fn = (msg.fileName ?: "файл").escapeHtml()
+    val fnAttr = (msg.fileName ?: "файл").escapeHtml()
+    val isImage = chatFileMessageIsImage(msg)
+    val fileRow = if (isImage && url.isNotBlank()) {
+        """<div class="sd-msg-file-row sd-msg-file-row-image">
+            <a href="$url" class="sd-msg-file-image-link sd-chat-file-in-app" rel="noopener noreferrer" title="$fn" data-file-name="$fnAttr">
+                <img src="$url" alt="$fn" class="sd-msg-file-image" loading="lazy" decoding="async" />
+            </a>
+            <a href="$url" class="sd-msg-file-link sd-msg-file-name-under sd-chat-file-in-app" rel="noopener noreferrer" data-file-name="$fnAttr">📎 $fn</a>
+        </div>"""
+    } else {
+        """<div class="sd-msg-file-row"><a href="$url" class="sd-msg-file-link sd-chat-file-in-app" rel="noopener noreferrer" data-file-name="$fnAttr" download="$fn">📎 $fn</a></div>"""
+    }
+    val caption = msg.text.trim().takeIf { it.isNotBlank() }?.let {
+        """<div class="sd-msg-text sd-msg-file-caption">${it.escapeHtml()}</div>"""
+    } ?: ""
+    return """<div class="$cls sd-msg-file${if (isImage) " sd-msg-file-is-image" else ""}$replyTargetClass" data-msg-id="${msg.id.escapeHtml()}" data-msg-text="${msg.text.escapeHtml()}">${if (isMe) "" else otherAvatarHtml}<div class="sd-msg-bubble-wrap">$senderLabel$replyHtml$fileRow$caption<div class="sd-msg-footer">$timeRow$statusHtml</div></div>${if (isMe) myAvatarHtml else ""}</div>"""
+}
+
+/** Оверлей просмотра вложения из чата (крестик — назад в чат). Создаётся один раз на body. */
+private fun ensureChatFileViewerOverlay() {
+    if (document.getElementById("sd-chat-file-viewer") != null) return
+    val wrap = document.createElement("div")
+    wrap.id = "sd-chat-file-viewer"
+    wrap.className = "sd-chat-file-viewer sd-hidden"
+    wrap.setAttribute("aria-hidden", "true")
+    wrap.setAttribute("role", "dialog")
+    wrap.innerHTML = """
+        <button type="button" id="sd-chat-file-viewer-close" class="sd-chat-file-viewer-close" title="Закрыть" aria-label="Закрыть">$SD_ICON_CLOSE_SVG</button>
+        <div class="sd-chat-file-viewer-inner">
+            <img id="sd-chat-file-viewer-img" class="sd-hidden sd-chat-file-viewer-img-el" alt="" />
+            <iframe id="sd-chat-file-viewer-frame" class="sd-hidden sd-chat-file-viewer-frame-el" title="Файл"></iframe>
+            <div id="sd-chat-file-viewer-extra" class="sd-chat-file-viewer-extra sd-hidden">
+                <p id="sd-chat-file-viewer-filename" class="sd-chat-file-viewer-filename"></p>
+                <a id="sd-chat-file-viewer-open-new" class="sd-btn sd-btn-secondary sd-chat-file-viewer-open-new" href="#" target="_blank" rel="noopener noreferrer">Открыть в новой вкладке</a>
+            </div>
+        </div>
+    """.trimIndent()
+    document.body?.appendChild(wrap)
+    document.getElementById("sd-chat-file-viewer-close")?.addEventListener("click", { closeChatFileViewer() })
+    wrap.addEventListener("click", { e: dynamic ->
+        if (e?.target === wrap) closeChatFileViewer()
+    })
+    if (!chatFileViewerEscapeListenerBound) {
+        chatFileViewerEscapeListenerBound = true
+        document.addEventListener("keydown", { e: dynamic ->
+            if (e?.key != "Escape") return@addEventListener
+            val v = document.getElementById("sd-chat-file-viewer") ?: return@addEventListener
+            if (v.classList.contains("sd-hidden")) return@addEventListener
+            closeChatFileViewer()
+            (e as? org.w3c.dom.events.Event)?.preventDefault()
+        }, true)
+    }
+}
+
+private fun openChatFileViewer(fileUrl: String, displayName: String, isImage: Boolean) {
+    ensureChatFileViewerOverlay()
+    val overlay = document.getElementById("sd-chat-file-viewer") ?: return
+    val img = document.getElementById("sd-chat-file-viewer-img") as? org.w3c.dom.HTMLImageElement
+    val frame = document.getElementById("sd-chat-file-viewer-frame") as? org.w3c.dom.HTMLIFrameElement
+    val extra = document.getElementById("sd-chat-file-viewer-extra")
+    val fname = document.getElementById("sd-chat-file-viewer-filename")
+    val openNew = document.getElementById("sd-chat-file-viewer-open-new") as? org.w3c.dom.HTMLAnchorElement
+    if (isImage && img != null) {
+        img.classList.remove("sd-hidden")
+        img.src = fileUrl
+        img.alt = displayName
+        frame?.classList?.add("sd-hidden")
+        try {
+            frame?.removeAttribute("src")
+        } catch (_: Throwable) {
+        }
+        frame?.setAttribute("src", "about:blank")
+        extra?.classList?.add("sd-hidden")
+    } else {
+        img?.classList?.add("sd-hidden")
+        try {
+            img?.removeAttribute("src")
+        } catch (_: Throwable) {
+        }
+        frame?.classList?.remove("sd-hidden")
+        frame?.setAttribute("src", fileUrl)
+        fname?.textContent = displayName
+        openNew?.href = fileUrl
+        extra?.classList?.remove("sd-hidden")
+    }
+    overlay.classList.remove("sd-hidden")
+    overlay.setAttribute("aria-hidden", "false")
+    val bodyStyle = (document.body as? org.w3c.dom.HTMLElement)?.asDynamic().style
+    bodyStyle.overflow = "hidden"
+}
+
+private fun closeChatFileViewer() {
+    val overlay = document.getElementById("sd-chat-file-viewer") ?: return
+    val img = document.getElementById("sd-chat-file-viewer-img") as? org.w3c.dom.HTMLImageElement
+    val frame = document.getElementById("sd-chat-file-viewer-frame") as? org.w3c.dom.HTMLIFrameElement
+    img?.classList?.add("sd-hidden")
+    try {
+        img?.removeAttribute("src")
+    } catch (_: Throwable) {
+    }
+    frame?.classList?.add("sd-hidden")
+    frame?.setAttribute("src", "about:blank")
+    document.getElementById("sd-chat-file-viewer-extra")?.classList?.add("sd-hidden")
+    overlay.classList.add("sd-hidden")
+    overlay.setAttribute("aria-hidden", "true")
+    val bodyStyle = (document.body as? org.w3c.dom.HTMLElement)?.asDynamic().style
+    bodyStyle.overflow = ""
+}
+
 private fun renderChatTabContent(currentUser: User): String {
     val contactId = appState.selectedChatContactId
     val contacts = appState.chatContacts
     val loading = appState.chatContactsLoading
     val messages = appState.chatMessages
     val myId = currentUser.id
+    val groupId = appState.selectedChatGroupId
+    if (groupId != null) {
+        val grp = appState.chatGroups.find { it.id == groupId } ?: return """<p class="sd-error">Группа не найдена.</p>"""
+        if (myId !in grp.memberIds) return """<p class="sd-error">У вас нет доступа к этой группе.</p>"""
+        val iconCheck = """<svg class="sd-msg-check" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>"""
+        val iconSendSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>"""
+        val iconBackSvg = SD_ICON_BACK_CHEVRON_SVG
+        val iconMicSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>"""
+        val iconAttachSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>"""
+        val iconPlaySvg = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>"""
+        val iconPauseSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>"""
+        fun formatVoiceDuration(sec: Int): String {
+            val m = sec / 60
+            val s = sec % 60
+            return "$m:${s.toString().padStart(2, '0')}"
+        }
+        val myAvatarUrl = appState.user?.chatAvatarUrl?.takeIf { it.isNotBlank() } ?: getChatAvatarDataUrl(myId)
+        val myInitials = appState.user?.let { it.initials().ifEmpty { "?" }.escapeHtml() } ?: "?"
+        val myAvatarBg = avatarColorForId(myId).escapeHtml()
+        val myAvatarHtml = if (myAvatarUrl != null) """<div class="sd-msg-my-avatar sd-avatar-wrap" data-initials="$myInitials" data-bg="$myAvatarBg"><img src="${myAvatarUrl.escapeHtml()}" alt="" class="sd-msg-avatar-img sd-avatar-img" decoding="async" data-user-id="${myId.escapeHtml()}" /></div>""" else ""
+        val visibleMessages = messages.filterNot { it.deletedForUserIds.contains(myId) }
+        val msgsHtml = visibleMessages.joinToString("") { msg ->
+            val isMe = msg.senderId == myId
+            val themUser = if (!isMe) contacts.find { it.id == msg.senderId } else null
+            val otherAvatarHtml = if (themUser != null) chatOtherUserAvatarHtml(themUser) else """<div class="sd-msg-them-avatar"><span class="sd-msg-them-avatar-initials">?</span></div>"""
+            val senderLabel = if (!isMe) """<div class="sd-msg-group-sender">${formatShortName(themUser?.fullName ?: "Участник").escapeHtml()}</div>""" else ""
+            val cls = if (isMe) "sd-msg sd-msg-me" else "sd-msg sd-msg-them"
+            val timeStr = formatMessageDateTime(msg.timestamp).escapeHtml()
+            val replyTargetClass = if (appState.chatReplyToMessageId == msg.id) " sd-msg-reply-target" else ""
+            val statusHtml = if (isMe) {
+                val isRead = msg.status == "read"
+                val checks = if (isRead) """<span class="sd-msg-check-wrap">$iconCheck</span><span class="sd-msg-check-wrap">$iconCheck</span>""" else """<span class="sd-msg-check-wrap">$iconCheck</span>"""
+                val checkClass = if (isRead) "sd-msg-checks sd-msg-checks-read" else "sd-msg-checks sd-msg-checks-sent"
+                """<span class="$checkClass" title="${if (isRead) "Прочитано" else "Доставлено"}">$checks</span>"""
+            } else ""
+            val timeRow = """<span class="sd-msg-time">$timeStr</span>"""
+            val replyHtml = msg.replyToText?.takeIf { it.isNotBlank() }?.let { rText ->
+                """<div class="sd-msg-reply-snippet">${rText.escapeHtml()}</div>"""
+            } ?: ""
+            if (msg.isVoice && !msg.voiceUrl.isNullOrBlank() && (msg.voiceDurationSec ?: 0) > 0) {
+                val dur = msg.voiceDurationSec!!
+                val totalStr = formatVoiceDuration(dur).escapeHtml()
+                val isPlaying = appState.chatPlayingVoiceId == msg.id && !appState.chatVoicePlaybackPaused
+                val currentMs = if (msg.id == appState.chatPlayingVoiceId) appState.chatPlayingVoiceCurrentMs else 0
+                val progress = if (dur > 0) (currentMs.toDouble() / 1000 / dur).coerceIn(0.0, 1.0) else 0.0
+                val progressPct = (progress * 100).toInt()
+                val currentStr = formatVoiceDuration((currentMs / 1000).coerceAtLeast(0).coerceAtMost(dur)).escapeHtml()
+                """<div class="$cls sd-msg-voice$replyTargetClass" data-msg-id="${msg.id.escapeHtml()}" data-msg-text="${msg.text.escapeHtml()}" data-voice-id="${msg.id.escapeHtml()}" data-voice-url="${msg.voiceUrl.escapeHtml()}" data-voice-duration="$dur">
+                    ${if (isMe) "" else otherAvatarHtml}
+                    <div class="sd-msg-bubble-wrap">
+                    $senderLabel
+                    $replyHtml
+                    <div class="sd-voice-player">
+                        <button type="button" class="sd-voice-play-btn" title="${if (isPlaying) "Пауза" else "Воспроизвести"}" aria-label="${if (isPlaying) "Пауза" else "Воспроизвести"}">${if (isPlaying) iconPauseSvg else iconPlaySvg}</button>
+                        <div class="sd-voice-progress-wrap">
+                            ${if (isPlaying || currentMs > 0) """<div class="sd-voice-progress-bar" style="width:${progressPct}%"></div>""" else ""}
+                            <div class="sd-voice-times"><span class="sd-voice-current">$currentStr</span><span class="sd-voice-total">$totalStr</span></div>
+                        </div>
+                    </div>
+                    <audio id="sd-voice-audio-${msg.id.escapeHtml()}" class="sd-voice-audio" preload="metadata"></audio>
+                    <div class="sd-msg-footer">$timeRow$statusHtml</div>
+                    </div>
+                    ${if (isMe) myAvatarHtml else ""}
+                </div>"""
+            } else if (msg.isFile && !msg.fileUrl.isNullOrBlank()) {
+                chatFileMessageBubbleHtml(msg, cls, replyTargetClass, replyHtml, timeRow, statusHtml, otherAvatarHtml, myAvatarHtml, isMe, senderLabel)
+            } else {
+                """<div class="$cls$replyTargetClass" data-msg-id="${msg.id.escapeHtml()}" data-msg-text="${msg.text.escapeHtml()}">${if (isMe) "" else otherAvatarHtml}<div class="sd-msg-bubble-wrap">$senderLabel<span class="sd-msg-text">${msg.text.escapeHtml()}</span><div class="sd-msg-footer">$timeRow$statusHtml</div></div>${if (isMe) myAvatarHtml else ""}</div>"""
+            }
+        }
+        val recording = appState.chatVoiceRecording
+        val autoSend = appState.chatVoiceRecordingAutoSend
+        val reviewReady = appState.chatVoiceReviewReady
+        val elapsed = appState.chatVoiceRecordElapsedSec
+        val recordTimeStr = "${elapsed / 60}:${(elapsed % 60).toString().padStart(2, '0')}"
+        val chatFileAttachHtml = """<input type="file" id="sd-chat-file-input" class="sd-hidden" aria-hidden="true" />
+                    <button type="button" id="sd-chat-file-btn" class="sd-chat-attach-btn" title="Прикрепить файл" aria-label="Прикрепить файл">$iconAttachSvg</button>"""
+        val inputRowHtml = when {
+            reviewReady -> {
+                val dur = appState.chatVoiceReviewDurationSec
+                val totalStr = formatVoiceDuration(dur).escapeHtml()
+                val localUrl = appState.chatVoiceReviewLocalUrl?.takeIf { it.isNotBlank() }?.escapeHtml() ?: ""
+                """<div class="sd-chat-input-row sd-chat-voice-record-review-ready" id="sd-chat-voice-record-review-ready">
+                    <div class="sd-chat-voice-review-player">
+                        <button type="button" id="sd-chat-voice-review-play-btn" class="sd-chat-voice-review-play-btn" title="Воспроизвести">$iconPlaySvg</button>
+                        <input id="sd-chat-voice-review-range" class="sd-chat-voice-review-range" type="range" min="0" max="1000" value="0" />
+                        <div class="sd-chat-voice-review-times">
+                            <span id="sd-chat-voice-review-current" class="sd-chat-voice-review-current">0:00</span>
+                            <span class="sd-chat-voice-review-sep">/</span>
+                            <span class="sd-chat-voice-review-total">$totalStr</span>
+                        </div>
+                        <audio id="sd-chat-voice-review-audio" class="sd-chat-voice-review-audio" preload="metadata" src="$localUrl"></audio>
+                    </div>
+                    <div class="sd-chat-voice-review-actions">
+                        <button type="button" id="sd-chat-voice-review-delete" class="sd-chat-voice-review-icon-btn" title="Удалить">$iconTrashSvg</button>
+                        <button type="button" id="sd-chat-voice-review-mic" class="sd-chat-voice-review-icon-btn" title="Записать заново">$iconMicSvg</button>
+                        <button type="button" id="sd-chat-voice-review-send" class="sd-chat-voice-review-icon-btn sd-chat-voice-review-send-btn" title="Отправить">$iconSendSvg</button>
+                    </div>
+                </div>"""
+            }
+            recording && autoSend -> {
+                """<div class="sd-chat-input-row sd-chat-voice-recording" id="sd-chat-voice-recording">
+                    <span class="sd-chat-recording-text">Запись… $recordTimeStr</span>
+                    <span class="sd-chat-voice-hold-hint" aria-hidden="true">Отпустите, чтобы отправить</span>
+                </div>"""
+            }
+            recording && !autoSend -> {
+                val progressPct = ((elapsed.toDouble() / 30.0) * 100.0).coerceIn(0.0, 100.0).toInt()
+                """<div class="sd-chat-input-row sd-chat-voice-recording sd-chat-voice-recording-review" id="sd-chat-voice-recording-review">
+                    <div class="sd-chat-voice-review-track">
+                        <div class="sd-chat-voice-review-track-bar"><div class="sd-chat-voice-review-track-fill" style="width:${progressPct}%"></div></div>
+                        <div class="sd-chat-voice-review-track-time">Запись… $recordTimeStr</div>
+                    </div>
+                    <div class="sd-chat-voice-review-actions sd-chat-voice-review-actions-recording">
+                        <button type="button" id="sd-chat-voice-review-delete" class="sd-chat-voice-review-icon-btn" title="Удалить">$iconTrashSvg</button>
+                        <button type="button" id="sd-chat-voice-review-pause" class="sd-chat-voice-review-icon-btn" title="Пауза (остановить запись)">$iconPauseSvg</button>
+                        <button type="button" id="sd-chat-voice-review-send" class="sd-chat-voice-review-icon-btn sd-chat-voice-review-send-btn" title="Отправить">$iconSendSvg</button>
+                    </div>
+                </div>"""
+            }
+            else -> {
+                val replyComposerHtml = appState.chatReplyToText?.takeIf { it.isNotBlank() }?.let { txt ->
+                    """<div class="sd-chat-reply-preview" id="sd-chat-reply-preview">
+                        <span class="sd-chat-reply-preview-text">${txt.escapeHtml()}</span>
+                        <button type="button" id="sd-chat-reply-cancel" class="sd-chat-reply-cancel-btn" title="Отменить ответ">$SD_ICON_CLOSE_SVG</button>
+                    </div>"""
+                } ?: ""
+                """<div class="sd-chat-input-row">
+                    $replyComposerHtml
+                    $chatFileAttachHtml
+                    <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="" maxlength="2000" aria-label="Сообщение" />
+                    <button type="button" id="sd-chat-send" class="sd-chat-send-btn" title="Отправить">$iconSendSvg</button>
+                    <button type="button" id="sd-chat-voice-mic" class="sd-chat-voice-mic-btn" title="Голосовое сообщение">$iconMicSvg</button>
+                </div>"""
+            }
+        }
+        val adminGroupBtns = if (currentUser.role == "admin") """<span class="sd-chat-group-actions"><button type="button" id="sd-chat-group-edit" class="sd-chat-create-group-btn">Редактировать</button><button type="button" id="sd-chat-group-delete" class="sd-chat-create-group-btn sd-chat-create-group-btn--danger">Удалить группу</button></span>""" else ""
+        val grpAvatarBg = avatarColorForId(grp.id).escapeHtml()
+        val grpInitials = groupChatNameInitials(grp.name).escapeHtml()
+        val grpHeaderAvatarHtml = grp.chatAvatarUrl?.takeIf { it.isNotBlank() }?.let { url ->
+            """<div class="sd-chat-header-avatar sd-avatar-wrap" data-initials="$grpInitials" data-bg="$grpAvatarBg"><img src="${url.escapeHtml()}" alt="" class="sd-avatar-img" decoding="async" data-group-id="${grp.id.escapeHtml()}" /></div>"""
+        } ?: """<div class="sd-chat-header-avatar" style="background:$grpAvatarBg">$grpInitials</div>"""
+        return """
+            <div class="sd-chat-tab">
+            <div class="sd-chat-conversation">
+                <div class="sd-chat-header sd-chat-header-group">
+                    <button type="button" id="sd-chat-back" class="sd-chat-back-btn" title="Назад" aria-label="Назад">$iconBackSvg</button>
+                    $grpHeaderAvatarHtml
+                    <span class="sd-chat-contact-name">${"Группа: ${grp.name} (${grp.memberIds.size} ${participantsWord(grp.memberIds.size)})".escapeHtml()}</span>
+                    $adminGroupBtns
+                </div>
+                <div class="sd-chat-messages" id="sd-chat-messages">$msgsHtml</div>
+                $inputRowHtml
+            </div>
+            </div>
+        """.trimIndent()
+    }
     if (contactId != null) {
         val contact = contacts.find { it.id == contactId } ?: return """<p class="sd-error">Контакт не найден.</p>"""
         val iconCheck = """<svg class="sd-msg-check" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>"""
         val iconSendSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>"""
-        val iconBackSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>"""
+        val iconBackSvg = SD_ICON_BACK_CHEVRON_SVG
         val iconMicSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>"""
+        val iconAttachSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>"""
         val iconStopSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12"/></svg>"""
         val iconPlaySvg = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>"""
         val iconPauseSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>"""
@@ -484,10 +958,12 @@ private fun renderChatTabContent(currentUser: User): String {
             if (url != null) """<div class="sd-msg-them-avatar sd-avatar-wrap" data-initials="$contactInitials" data-bg="${contactAvatarBg}"><img src="${url.escapeHtml()}" alt="" class="sd-msg-avatar-img sd-avatar-img" decoding="async" data-user-id="${contact.id.escapeHtml()}" /></div>"""
             else """<div class="sd-msg-them-avatar" style="background:$contactAvatarBg"><span class="sd-msg-them-avatar-initials">$contactInitials</span></div>"""
         }
-        val msgsHtml = messages.joinToString("") { msg ->
+        val visibleMessages = messages.filterNot { it.deletedForUserIds.contains(myId) }
+        val msgsHtml = visibleMessages.joinToString("") { msg ->
             val isMe = msg.senderId == myId
             val cls = if (isMe) "sd-msg sd-msg-me" else "sd-msg sd-msg-them"
             val timeStr = formatMessageDateTime(msg.timestamp).escapeHtml()
+            val replyTargetClass = if (appState.chatReplyToMessageId == msg.id) " sd-msg-reply-target" else ""
             val statusHtml = if (isMe) {
                 val isRead = msg.status == "read"
                 val checks = if (isRead) """<span class="sd-msg-check-wrap">$iconCheck</span><span class="sd-msg-check-wrap">$iconCheck</span>""" else """<span class="sd-msg-check-wrap">$iconCheck</span>"""
@@ -495,17 +971,21 @@ private fun renderChatTabContent(currentUser: User): String {
                 """<span class="$checkClass" title="${if (isRead) "Прочитано" else "Доставлено"}">$checks</span>"""
             } else ""
             val timeRow = """<span class="sd-msg-time">$timeStr</span>"""
+            val replyHtml = msg.replyToText?.takeIf { it.isNotBlank() }?.let { rText ->
+                """<div class="sd-msg-reply-snippet">${rText.escapeHtml()}</div>"""
+            } ?: ""
             if (msg.isVoice && !msg.voiceUrl.isNullOrBlank() && (msg.voiceDurationSec ?: 0) > 0) {
                 val dur = msg.voiceDurationSec!!
                 val totalStr = formatVoiceDuration(dur).escapeHtml()
-                val isPlaying = appState.chatPlayingVoiceId == msg.id
+                val isPlaying = appState.chatPlayingVoiceId == msg.id && !appState.chatVoicePlaybackPaused
                 val currentMs = if (msg.id == appState.chatPlayingVoiceId) appState.chatPlayingVoiceCurrentMs else 0
                 val progress = if (dur > 0) (currentMs.toDouble() / 1000 / dur).coerceIn(0.0, 1.0) else 0.0
                 val progressPct = (progress * 100).toInt()
                 val currentStr = formatVoiceDuration((currentMs / 1000).coerceAtLeast(0).coerceAtMost(dur)).escapeHtml()
-                """<div class="$cls sd-msg-voice" data-voice-id="${msg.id.escapeHtml()}" data-voice-url="${msg.voiceUrl.escapeHtml()}" data-voice-duration="$dur">
+                """<div class="$cls sd-msg-voice$replyTargetClass" data-msg-id="${msg.id.escapeHtml()}" data-msg-text="${msg.text.escapeHtml()}" data-voice-id="${msg.id.escapeHtml()}" data-voice-url="${msg.voiceUrl.escapeHtml()}" data-voice-duration="$dur">
                     ${if (isMe) "" else otherAvatarHtml}
                     <div class="sd-msg-bubble-wrap">
+                    $replyHtml
                     <div class="sd-voice-player">
                         <button type="button" class="sd-voice-play-btn" title="${if (isPlaying) "Пауза" else "Воспроизвести"}" aria-label="${if (isPlaying) "Пауза" else "Воспроизвести"}">${if (isPlaying) iconPauseSvg else iconPlaySvg}</button>
                         <div class="sd-voice-progress-wrap">
@@ -518,24 +998,83 @@ private fun renderChatTabContent(currentUser: User): String {
                     </div>
                     ${if (isMe) myAvatarHtml else ""}
                 </div>"""
+            } else if (msg.isFile && !msg.fileUrl.isNullOrBlank()) {
+                chatFileMessageBubbleHtml(msg, cls, replyTargetClass, replyHtml, timeRow, statusHtml, otherAvatarHtml, myAvatarHtml, isMe, "")
             } else {
-                """<div class="$cls">${if (isMe) "" else otherAvatarHtml}<div class="sd-msg-bubble-wrap"><span class="sd-msg-text">${msg.text.escapeHtml()}</span><div class="sd-msg-footer">$timeRow$statusHtml</div></div>${if (isMe) myAvatarHtml else ""}</div>"""
+                """<div class="$cls$replyTargetClass" data-msg-id="${msg.id.escapeHtml()}" data-msg-text="${msg.text.escapeHtml()}">${if (isMe) "" else otherAvatarHtml}<div class="sd-msg-bubble-wrap"><span class="sd-msg-text">${msg.text.escapeHtml()}</span><div class="sd-msg-footer">$timeRow$statusHtml</div></div>${if (isMe) myAvatarHtml else ""}</div>"""
             }
         }
         val recording = appState.chatVoiceRecording
+        val autoSend = appState.chatVoiceRecordingAutoSend
+        val reviewReady = appState.chatVoiceReviewReady
         val elapsed = appState.chatVoiceRecordElapsedSec
         val recordTimeStr = "${elapsed / 60}:${(elapsed % 60).toString().padStart(2, '0')}"
-        val inputRowHtml = if (recording) {
-            """<div class="sd-chat-input-row sd-chat-voice-recording" id="sd-chat-voice-recording">
-                <span class="sd-chat-recording-text">Запись… $recordTimeStr</span>
-                <button type="button" id="sd-chat-voice-stop" class="sd-chat-voice-stop-btn" title="Остановить">$iconStopSvg</button>
-            </div>"""
-        } else {
-            """<div class="sd-chat-input-row">
-                <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="" maxlength="2000" aria-label="Сообщение" />
-                <button type="button" id="sd-chat-send" class="sd-chat-send-btn" title="Отправить">$iconSendSvg</button>
-                <button type="button" id="sd-chat-voice-mic" class="sd-chat-voice-mic-btn" title="Голосовое сообщение">$iconMicSvg</button>
-            </div>"""
+        val chatFileAttachHtml = """<input type="file" id="sd-chat-file-input" class="sd-hidden" aria-hidden="true" />
+                    <button type="button" id="sd-chat-file-btn" class="sd-chat-attach-btn" title="Прикрепить файл" aria-label="Прикрепить файл">$iconAttachSvg</button>"""
+
+        val inputRowHtml = when {
+            reviewReady -> {
+                val dur = appState.chatVoiceReviewDurationSec
+                val totalStr = formatVoiceDuration(dur).escapeHtml()
+                val localUrl = appState.chatVoiceReviewLocalUrl?.takeIf { it.isNotBlank() }?.escapeHtml() ?: ""
+                """<div class="sd-chat-input-row sd-chat-voice-record-review-ready" id="sd-chat-voice-record-review-ready">
+                    <div class="sd-chat-voice-review-player">
+                        <button type="button" id="sd-chat-voice-review-play-btn" class="sd-chat-voice-review-play-btn" title="Воспроизвести">$iconPlaySvg</button>
+                        <input id="sd-chat-voice-review-range" class="sd-chat-voice-review-range" type="range" min="0" max="1000" value="0" />
+                        <div class="sd-chat-voice-review-times">
+                            <span id="sd-chat-voice-review-current" class="sd-chat-voice-review-current">0:00</span>
+                            <span class="sd-chat-voice-review-sep">/</span>
+                            <span class="sd-chat-voice-review-total">$totalStr</span>
+                        </div>
+                        <audio id="sd-chat-voice-review-audio" class="sd-chat-voice-review-audio" preload="metadata" src="$localUrl"></audio>
+                    </div>
+                    <div class="sd-chat-voice-review-actions">
+                        <button type="button" id="sd-chat-voice-review-delete" class="sd-chat-voice-review-icon-btn" title="Удалить">$iconTrashSvg</button>
+                        <button type="button" id="sd-chat-voice-review-mic" class="sd-chat-voice-review-icon-btn" title="Записать заново">$iconMicSvg</button>
+                        <button type="button" id="sd-chat-voice-review-send" class="sd-chat-voice-review-icon-btn sd-chat-voice-review-send-btn" title="Отправить">$iconSendSvg</button>
+                    </div>
+                </div>"""
+            }
+
+            recording && autoSend -> {
+                // режим "удерживай": на отпускание отправляем автоматически
+                """<div class="sd-chat-input-row sd-chat-voice-recording" id="sd-chat-voice-recording">
+                    <span class="sd-chat-recording-text">Запись… $recordTimeStr</span>
+                    <span class="sd-chat-voice-hold-hint" aria-hidden="true">Отпустите, чтобы отправить</span>
+                </div>"""
+            }
+
+            recording && !autoSend -> {
+                // режим "однократный клик": показываем дорожку + пауза/удаление
+                val progressPct = ((elapsed.toDouble() / 30.0) * 100.0).coerceIn(0.0, 100.0).toInt()
+                """<div class="sd-chat-input-row sd-chat-voice-recording sd-chat-voice-recording-review" id="sd-chat-voice-recording-review">
+                    <div class="sd-chat-voice-review-track">
+                        <div class="sd-chat-voice-review-track-bar"><div class="sd-chat-voice-review-track-fill" style="width:${progressPct}%"></div></div>
+                        <div class="sd-chat-voice-review-track-time">Запись… $recordTimeStr</div>
+                    </div>
+                    <div class="sd-chat-voice-review-actions sd-chat-voice-review-actions-recording">
+                        <button type="button" id="sd-chat-voice-review-delete" class="sd-chat-voice-review-icon-btn" title="Удалить">$iconTrashSvg</button>
+                        <button type="button" id="sd-chat-voice-review-pause" class="sd-chat-voice-review-icon-btn" title="Пауза (остановить запись)">$iconPauseSvg</button>
+                        <button type="button" id="sd-chat-voice-review-send" class="sd-chat-voice-review-icon-btn sd-chat-voice-review-send-btn" title="Отправить">$iconSendSvg</button>
+                    </div>
+                </div>"""
+            }
+
+            else -> {
+                val replyComposerHtml = appState.chatReplyToText?.takeIf { it.isNotBlank() }?.let { txt ->
+                    """<div class="sd-chat-reply-preview" id="sd-chat-reply-preview">
+                        <span class="sd-chat-reply-preview-text">${txt.escapeHtml()}</span>
+                        <button type="button" id="sd-chat-reply-cancel" class="sd-chat-reply-cancel-btn" title="Отменить ответ">$SD_ICON_CLOSE_SVG</button>
+                    </div>"""
+                } ?: ""
+                """<div class="sd-chat-input-row">
+                    $replyComposerHtml
+                    $chatFileAttachHtml
+                    <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="" maxlength="2000" aria-label="Сообщение" />
+                    <button type="button" id="sd-chat-send" class="sd-chat-send-btn" title="Отправить">$iconSendSvg</button>
+                    <button type="button" id="sd-chat-voice-mic" class="sd-chat-voice-mic-btn" title="Голосовое сообщение">$iconMicSvg</button>
+                </div>"""
+            }
         }
         return """
             <div class="sd-chat-tab">
@@ -552,7 +1091,7 @@ private fun renderChatTabContent(currentUser: User): String {
         """.trimIndent()
     }
     val loadingLine = if (loading) """<p class="sd-chat-loading-text">Загрузка контактов…</p>""" else ""
-    val iconRefreshSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>"""
+    val iconRefreshSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>"""
     fun contactRow(c: User) = run {
         val initials = c.initials().ifEmpty { "?" }.escapeHtml()
         val avatarBg = avatarColorForId(c.id).escapeHtml()
@@ -578,22 +1117,43 @@ private fun renderChatTabContent(currentUser: User): String {
             $unreadBadge
         </button>"""
     }
+    val chatGroupsList = appState.chatGroups.sortedBy { it.name.lowercase() }
+    fun groupRow(g: ChatGroup) = run {
+        val gKey = chatUnreadKeyForGroup(g.id)
+        val unread = appState.chatUnreadCounts[gKey] ?: 0
+        val unreadBadge = if (unread > 0) """<span class="sd-chat-contact-unread">${if (unread > 99) "99+" else unread.toString()}</span>""" else ""
+        val gInitials = groupChatNameInitials(g.name).escapeHtml()
+        val gBg = avatarColorForId(g.id).escapeHtml()
+        val gAvatarHtml = g.chatAvatarUrl?.takeIf { it.isNotBlank() }?.let { url ->
+            """<span class="sd-chat-contact-avatar sd-avatar-wrap" data-initials="$gInitials" data-bg="$gBg"><img src="${url.escapeHtml()}" alt="" class="sd-avatar-img" decoding="async" data-group-id="${g.id.escapeHtml()}" /></span>"""
+        } ?: """<span class="sd-chat-contact-avatar" style="background:$gBg">$gInitials</span>"""
+        """<button type="button" class="sd-chat-group-row" data-chat-group-id="${g.id.escapeHtml()}">
+            <div class="sd-chat-contact-avatar-wrap">$gAvatarHtml</div>
+            <span class="sd-chat-group-label">Группа: ${g.name.escapeHtml()} (${g.memberIds.size} ${participantsWord(g.memberIds.size)})</span>
+            $unreadBadge
+        </button>"""
+    }
+    val groupsSection = if (chatGroupsList.isEmpty()) "" else """<div class="sd-chat-contacts-group"><p class="sd-chat-contacts-group-title">Группы</p><div class="sd-chat-contacts">${chatGroupsList.joinToString("") { groupRow(it) }}</div></div>"""
     val instructors = contacts.filter { it.role == "instructor" }.sortedBy { it.fullName }
     val cadets = contacts.filter { it.role == "cadet" }.sortedBy { it.fullName }
     val others = contacts.filter { it.role !in listOf("instructor", "cadet") }.sortedBy { it.fullName }
     val instructorsSection = if (instructors.isEmpty()) "" else """<div class="sd-chat-contacts-group"><p class="sd-chat-contacts-group-title">Инструкторы</p><div class="sd-chat-contacts">${instructors.joinToString("") { contactRow(it) }}</div></div>"""
     val cadetsSection = if (cadets.isEmpty()) "" else """<div class="sd-chat-contacts-group"><p class="sd-chat-contacts-group-title">Курсанты</p><div class="sd-chat-contacts">${cadets.joinToString("") { contactRow(it) }}</div></div>"""
     val othersSection = if (others.isEmpty()) "" else """<div class="sd-chat-contacts-group"><p class="sd-chat-contacts-group-title">Другие</p><div class="sd-chat-contacts">${others.joinToString("") { contactRow(it) }}</div></div>"""
-    val contactsBlock = if (contacts.isEmpty() && !loading) """<p class="sd-chat-empty-hint">Нет доступных контактов.</p>""" else """$instructorsSection$cadetsSection$othersSection"""
+    val contactsBlock = if (contacts.isEmpty() && chatGroupsList.isEmpty() && !loading) """<p class="sd-chat-empty-hint">Нет доступных контактов.</p>""" else """$groupsSection$instructorsSection$cadetsSection$othersSection"""
     val iconSettingsSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>"""
-    val settingsBtnHtml = """<button type="button" id="sd-chat-settings-btn" class="sd-btn sd-btn-icon sd-chat-settings-btn" title="Настройки" aria-label="Настройки">$iconSettingsSvg</button>"""
-    val refreshBtnStyled = """<button type="button" id="sd-chat-refresh" class="sd-chat-refresh-btn">$iconRefreshSvg Обновить контакты</button>"""
-    return """<div class="sd-chat-tab"><div class="sd-chat-list-header"><h2 class="sd-chat-title">Чат</h2><div class="sd-chat-header-actions">$settingsBtnHtml$refreshBtnStyled</div></div>$loadingLine$contactsBlock</div>"""
+    val createGroupBtn = if (currentUser.role == "admin") """<button type="button" id="sd-chat-create-group" class="sd-chat-create-group-btn" title="Создать групповой чат" aria-label="Создать группу">$iconCreateGroupSvg Создать группу</button>""" else ""
+    val settingsBtnHtml = """<button type="button" id="sd-chat-settings-btn" class="sd-chat-create-group-btn sd-chat-create-group-btn--icon sd-chat-settings-btn" title="Настройки" aria-label="Настройки">$iconSettingsSvg</button>"""
+    val refreshBtnStyled = """<button type="button" id="sd-chat-refresh" class="sd-chat-create-group-btn" title="Обновить список контактов" aria-label="Обновить контакты">$iconRefreshSvg Обновить контакты</button>"""
+    return """<div class="sd-chat-tab"><div class="sd-chat-list-header"><h2 class="sd-chat-title">Чат</h2><div class="sd-chat-header-actions">$createGroupBtn$settingsBtnHtml$refreshBtnStyled</div></div>$loadingLine$contactsBlock</div>"""
 }
 
-/** Экранирует HTML, чтобы пользовательский ввод не приводил к XSS. */
+/** Экранирует HTML, чтобы пользовательский ввод не приводил к XSS. В т.ч. для атрибутов (data-msg-text). */
 private fun String.escapeHtml(): String = this
     .replace("&", "&amp;")
+    .replace("\r\n", "&#10;")
+    .replace("\n", "&#10;")
+    .replace("\r", "&#10;")
     .replace("<", "&lt;")
     .replace(">", "&gt;")
     .replace("\"", "&quot;")
@@ -612,6 +1172,33 @@ private fun formatMessageDateTime(timestampMs: Long): String {
 }
 
 private const val LAST_BALANCE_TS_KEY_PREFIX = "sd_last_balance_ts_"
+/** Уже показанные уведомления по балансу (id документа или составной ключ), чтобы не дублировать одно списание/зачисление. */
+private const val BALANCE_NOTIFIED_KEYS_PREFIX = "sd_balance_notified_keys_"
+private const val MAX_BALANCE_NOTIFIED_KEYS = 200
+
+private fun balanceHistoryEntryNotifyKey(e: BalanceHistoryEntry): String =
+    if (e.id.isNotBlank()) e.id else "${e.type}|${e.amount}|${e.timestampMillis}|${e.performedBy}"
+
+private fun loadBalanceNotifiedKeys(userId: String): MutableSet<String> {
+    return try {
+        val raw = window.asDynamic().localStorage?.getItem(BALANCE_NOTIFIED_KEYS_PREFIX + userId) as? String ?: return mutableSetOf()
+        if (raw.isBlank()) return mutableSetOf()
+        val arr = js("(function(r){ return JSON.parse(r); })").unsafeCast<(String) -> dynamic>().invoke(raw)
+        val len = (arr?.length as? Number)?.toInt() ?: 0
+        val getAt = js("(function(a, i){ return a[i]; })").unsafeCast<(Any, Int) -> Any?>()
+        (0 until len).mapNotNull { i ->
+            (if (arr != null) getAt(arr, i) else null as Any?)?.unsafeCast<dynamic>()?.toString()?.takeIf { it.isNotBlank() }
+        }.toMutableSet()
+    } catch (_: Throwable) { mutableSetOf() }
+}
+
+private fun saveBalanceNotifiedKeys(userId: String, ids: Set<String>) {
+    try {
+        val list = ids.toList().takeLast(MAX_BALANCE_NOTIFIED_KEYS)
+        val json = "[" + list.joinToString(",") { "\"" + escapeJsonString(it) + "\"" } + "]"
+        window.asDynamic().localStorage?.setItem(BALANCE_NOTIFIED_KEYS_PREFIX + userId, json)
+    } catch (_: Throwable) { }
+}
 
 /** Склонение «талон»: 1 талон, 2 талона, 5 талонов. */
 private fun ticketWord(n: Int): String {
@@ -620,20 +1207,38 @@ private fun ticketWord(n: Int): String {
     return when (n % 10) { 1 -> "талон"; 2, 3, 4 -> "талона"; else -> "талонов" }
 }
 
-/** Показывает тосты о новых операциях по балансу для указанного пользователя (зачисление/списание/установка). Один раз на операцию: сразу помечаем последнее время, чтобы повторный вызов не дублировал уведомления. */
+/** Склонение «участник»: 1 участник, 2 участника, 5 участников. */
+private fun participantsWord(n: Int): String {
+    val a = n % 100
+    if (a in 11..14) return "участников"
+    return when (n % 10) { 1 -> "участник"; 2, 3, 4 -> "участника"; else -> "участников" }
+}
+
+/** Показывает тосты о новых операциях по балансу для указанного пользователя (зачисление/списание/установка). Одно уведомление на запись: дедуп по id Firestore + составной ключ; повторный вызов не дублирует уже показанные. */
 private fun notifyNewBalanceOpsForUser(userId: String, entries: List<BalanceHistoryEntry>, users: List<User>) {
     if (entries.isEmpty()) return
     val storage = window.asDynamic().localStorage
-    val key = LAST_BALANCE_TS_KEY_PREFIX + userId
-    val lastStr = storage?.getItem(key) as? String
+    val keyTs = LAST_BALANCE_TS_KEY_PREFIX + userId
+    val lastStr = storage?.getItem(keyTs) as? String
     val lastSeen = lastStr?.toLongOrNull() ?: 0L
     val sorted = entries.sortedBy { it.timestampMillis ?: 0L }
     val maxTsInEntries = sorted.maxOfOrNull { it.timestampMillis ?: 0L } ?: 0L
     if (maxTsInEntries <= lastSeen) return
-    storage?.setItem(key, maxTsInEntries.toString())
-    for (e in sorted) {
+    val seenInBatch = mutableSetOf<String>()
+    val deduped = sorted.filter { e ->
+        val k = balanceHistoryEntryNotifyKey(e)
+        if (k in seenInBatch) false else {
+            seenInBatch.add(k)
+            true
+        }
+    }
+    val notifiedKeys = loadBalanceNotifiedKeys(userId)
+    var keysChanged = false
+    for (e in deduped) {
         val ts = e.timestampMillis ?: 0L
         if (ts <= lastSeen) continue
+        val notifyKey = balanceHistoryEntryNotifyKey(e)
+        if (notifyKey in notifiedKeys) continue
         val performer = users.find { it.id == e.performedBy }
         val performerShortName = performer?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) }
         val performerRole = performer?.role ?: ""
@@ -658,7 +1263,15 @@ private fun notifyNewBalanceOpsForUser(userId: String, entries: List<BalanceHist
         }
         if (msg != null) {
             showNotification(msg)
+            notifiedKeys.add(notifyKey)
+            keysChanged = true
         }
+    }
+    if (keysChanged) {
+        saveBalanceNotifiedKeys(userId, notifiedKeys)
+    }
+    if (maxTsInEntries > lastSeen) {
+        storage?.setItem(keyTs, maxTsInEntries.toString())
     }
 }
 
@@ -717,6 +1330,10 @@ private val iconPhoneLabelSvg = """<svg xmlns="http://www.w3.org/2000/svg" width
 private val iconEmailLabelSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>"""
 private val iconTicketSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2"/><path d="M13 17v2"/><path d="M13 11v2"/></svg>"""
 private val iconInstructorSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>"""
+private val iconCarSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 14 10s-4.7.6-5.5 1.1C4.2 11.3 2 12.1 2 13v3c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><path d="M9 17h6"/><circle cx="17" cy="17" r="2"/></svg>"""
+private val iconGroupSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>"""
+/** Та же иконка, что у кнопки «Создать группу» во вкладке «Чат». */
+private val iconCreateGroupSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>"""
 private val iconSelectSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>"""
 private val iconEyeSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>"""
 private val iconCreditSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>"""
@@ -726,6 +1343,8 @@ private val iconResetSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="16"
 private val iconCalendarSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>"""
 private val iconClockSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>"""
 private val iconPlaySvg = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>"""
+/** Плей для синей кнопки «Прослушать» в настройках уведомлений. */
+private val iconPlaySvgWhite = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3" fill="#ffffff"/></svg>"""
 private val iconPauseSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>"""
 private val iconStopSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>"""
 private val iconLateSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>"""
@@ -937,6 +1556,7 @@ private var examTimerIntervalId: Int? = null
 private var drivingTimerIntervalId: Int? = null
 private var cadetWindowsPollIntervalId: Int = 0
 private var instructorSessionsPollIntervalId: Int = 0
+private var adminSchedulePollIntervalId: Int = 0
 /** Сессии, по которым уже вызвано завершение по таймеру (чтобы не вызывать повторно). */
 private val sessionCompletionRequestedIds = mutableSetOf<String>()
 
@@ -945,58 +1565,81 @@ private fun clearDrivingTimer() {
     drivingTimerIntervalId = null
 }
 
-private fun startDrivingTimers() {
-    clearDrivingTimer()
-    drivingTimerIntervalId = js("setInterval").unsafeCast<(Any?, Int) -> Int>().invoke({
-        val blocks = document.querySelectorAll(".sd-sch-timer-block")
-        val totalMs = (LESSON_DURATION_MS).toDouble()
-        val now = js("Date.now()").unsafeCast<Double>().toLong()
-        for (i in 0 until blocks.length) {
-            val el = blocks.item(i) as? org.w3c.dom.Element ?: continue
-            val paused = el.getAttribute("data-paused") == "true"
-            val remaining = if (paused) {
-                (el.getAttribute("data-remaining-ms") ?: "0").toLongOrNull() ?: 0L
-            } else {
-                val endMs = (el.getAttribute("data-end-ms") ?: "0").toLongOrNull() ?: 0L
-                (endMs - now).coerceAtLeast(0L)
-            }
-            val valEl = el.querySelector(".sd-sch-timer-value")
-            val fillEl = el.querySelector(".sd-sch-timer-bar-fill")
-            val thumbEl = el.querySelector(".sd-sch-timer-bar-thumb") as? org.w3c.dom.HTMLElement
-            if (remaining <= 0 && !paused) {
-                valEl?.textContent = "Завершено"
-                (fillEl as? org.w3c.dom.HTMLElement)?.style?.width = "0%"
-                thumbEl?.style?.left = "0%"
-                val sessionId = el.getAttribute("data-session-id")
-                if (sessionId != null && sessionId !in sessionCompletionRequestedIds) {
-                    sessionCompletionRequestedIds.add(sessionId)
-                    completeDrivingSession(sessionId) { err ->
-                        if (err != null) updateState { networkError = err }
-                        val uid = appState.user?.id ?: return@completeDrivingSession
-                        if (appState.user?.role == "instructor") {
-                            getOpenWindowsForInstructor(uid) { wins ->
-                                getSessionsForInstructor(uid) { sess ->
-                                    getBalanceHistory(uid) { hist ->
-                                        updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
-                                        notifyNewBalanceOpsForCurrentUser(hist)
-                                    }
+/** Один кадр отрисовки таймера вождения (остаток, полоса, ползунок). */
+private fun drivingTimerTick() {
+    val blocks = document.querySelectorAll(".sd-sch-timer-block")
+    val totalMs = (LESSON_DURATION_MS).toDouble()
+    val now = js("Date.now()").unsafeCast<Double>().toLong()
+    for (i in 0 until blocks.length) {
+        val el = blocks.item(i) as? org.w3c.dom.Element ?: continue
+        val paused = el.getAttribute("data-paused") == "true"
+        val remaining = if (paused) {
+            (el.getAttribute("data-remaining-ms") ?: "0").toLongOrNull() ?: 0L
+        } else {
+            val endMs = (el.getAttribute("data-end-ms") ?: "0").toLongOrNull() ?: 0L
+            (endMs - now).coerceAtLeast(0L)
+        }
+        val valEl = el.querySelector(".sd-sch-timer-value")
+        val fillEl = el.querySelector(".sd-sch-timer-bar-fill")
+        val thumbEl = el.querySelector(".sd-sch-timer-bar-thumb") as? org.w3c.dom.HTMLElement
+        if (remaining <= 0 && !paused) {
+            valEl?.textContent = "Завершено"
+            (fillEl as? org.w3c.dom.HTMLElement)?.style?.width = "0%"
+            thumbEl?.style?.left = "0%"
+            val sessionId = el.getAttribute("data-session-id")
+            if (sessionId != null && sessionId !in sessionCompletionRequestedIds) {
+                sessionCompletionRequestedIds.add(sessionId)
+                completeDrivingSession(sessionId) { err ->
+                    if (err != null) {
+                        sessionCompletionRequestedIds.remove(sessionId)
+                        updateState { networkError = err }
+                        return@completeDrivingSession
+                    }
+                    val uid = appState.user?.id ?: return@completeDrivingSession
+                    if (appState.user?.role == "instructor") {
+                        getOpenWindowsForInstructor(uid) { wins ->
+                            getSessionsForInstructor(uid) { sess ->
+                                getBalanceHistory(uid) { hist ->
+                                    updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                                    getCurrentUser { newUser, _ -> if (newUser != null) updateState { user = newUser } }
+                                    notifyNewBalanceOpsForCurrentUser(hist)
                                 }
                             }
                         }
                     }
                 }
-            } else {
-                val pct = (remaining.toDouble() / totalMs * 100.0).coerceIn(0.0, 100.0)
-                val mins = remaining / 60000L
-                val secs = (remaining % 60000L) / 1000L
-                val mm = if (mins < 10) "0$mins" else "$mins"
-                val ss = if (secs < 10) "0$secs" else "$secs"
-                valEl?.textContent = if (paused) "$mm:$ss (пауза)" else "$mm:$ss"
-                (fillEl as? org.w3c.dom.HTMLElement)?.style?.width = "$pct%"
-                thumbEl?.style?.left = "$pct%"
             }
+        } else {
+            val pct = (remaining.toDouble() / totalMs * 100.0).coerceIn(0.0, 100.0)
+            val mins = remaining / 60000L
+            val secs = (remaining % 60000L) / 1000L
+            val mm = if (mins < 10) "0$mins" else "$mins"
+            val ss = if (secs < 10) "0$secs" else "$secs"
+            valEl?.textContent = if (paused) "$mm:$ss (пауза)" else "$mm:$ss"
+            (fillEl as? org.w3c.dom.HTMLElement)?.style?.width = "$pct%"
+            thumbEl?.style?.left = "$pct%"
         }
+    }
+}
+
+/**
+ * Запускает интервал обновления таймера вождения. Не перезапускает интервал при каждом рендере —
+ * иначе DOM с --:-- ждёт до 1 с до первого тика и ползунок «прыгает» влево.
+ */
+private fun startDrivingTimers() {
+    val blocks = document.querySelectorAll(".sd-sch-timer-block")
+    if (blocks.length == 0) {
+        clearDrivingTimer()
+        return
+    }
+    if (drivingTimerIntervalId != null) {
+        drivingTimerTick()
+        return
+    }
+    drivingTimerIntervalId = js("setInterval").unsafeCast<(Any?, Int) -> Int>().invoke({
+        drivingTimerTick()
     }, 1000)
+    drivingTimerTick()
 }
 
 private fun clearExamTimer() {
@@ -1252,6 +1895,39 @@ private fun getDatetimeLocalMin(): String {
     return js("(function(){ var d=new Date(); var p=function(n){ return (n<10?'0':'')+n; }; return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes()); })()").unsafeCast<String>()
 }
 
+/** Сигнатура списков для опроса: не вызывать updateState, если данные не изменились — иначе перерисовка рвёт открытый select/datetime. */
+private fun recordingPollSignature(wins: List<InstructorOpenWindow>, sess: List<DrivingSession>): String {
+    val w = wins.sortedBy { it.id }.joinToString(";") { "${it.id}:${it.dateTimeMillis}:${it.status}" }
+    val s = sess.sortedBy { it.id }.joinToString(";") {
+        "${it.id}:${it.status}:${it.startTimeMillis}:${it.cadetId}:${it.instructorConfirmed}:${it.openWindowId}"
+    }
+    return "$w|$s"
+}
+
+/** Сигнатура карты расписания админа для бейджа и опроса (без лишних перерисовок). */
+private fun computeAdminScheduleSignature(map: Map<String, List<DrivingSession>>): String {
+    return map.entries.sortedBy { it.key }.joinToString("|") { (iid, list) ->
+        val s = list.sortedBy { it.id }.joinToString(";") {
+            "${it.id}:${it.status}:${it.startTimeMillis}:${it.cadetId}"
+        }
+        "$iid:$s"
+    }
+}
+
+/** Клик по полям формы «Запись» (select / datetime-local / внутри .sd-rec-picker-wrap) — не вызывать unlockCadetNotificationAudio: первый вызов делает updateState и перерисовывает #sd-card, из-за чего закрывается нативный список и календарь. */
+private fun shouldSkipAudioUnlockForRecordingFormClick(target: org.w3c.dom.Element, closestSel: (String) -> org.w3c.dom.Element?): Boolean {
+    // Вся вкладка «Запись» — любой клик здесь не должен дергать unlock (и любые вложенные SVG/span).
+    if (closestSel(".sd-rec-wrap") != null) return true
+    val tag = target.tagName.uppercase()
+    if (tag == "SELECT" || tag == "OPTION") return true
+    if (tag == "INPUT") {
+        val t = (target as? HTMLInputElement)?.type?.lowercase() ?: ""
+        if (t == "datetime-local" || t == "date" || t == "time") return true
+    }
+    if (closestSel(".sd-rec-picker-wrap") != null) return true
+    return false
+}
+
 /** Проверка: занято ли время (сессии и окна по 1.5 ч). Возвращает сообщение об ошибке или null. */
 private fun findOccupiedMessage(
     selectedMs: Long,
@@ -1295,6 +1971,63 @@ private fun formatTimeOnly(ms: Long?): String {
     if (ms == null || ms <= 0) return "—"
     val d = js("new Date(ms)")
     return js("d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })").unsafeCast<String>()
+}
+
+private fun weekdayNameLongRu(ms: Long?): String {
+    if (ms == null || ms <= 0) return "—"
+    val d = js("new Date(ms)")
+    return js("d.toLocaleDateString('ru-RU', { weekday: 'long' })").unsafeCast<String>()
+}
+
+/** Ключ сортировки ГГГГ-ММ для группировки истории по месяцам. */
+private fun monthSortKeyFromMillis(ms: Long): String {
+    if (ms <= 0) return "0000-00"
+    val d = js("new Date(ms)")
+    val y = d.getFullYear() as Int
+    val m = (d.getMonth() as Int) + 1
+    return "$y-${m.toString().padStart(2, '0')}"
+}
+
+/** Подзаголовок месяца в истории: «март, 26г.» */
+private fun monthYearTitleRu(ms: Long): String {
+    if (ms <= 0) return "—"
+    val d = js("new Date(ms)")
+    val months = listOf(
+        "январь", "февраль", "март", "апрель", "май", "июнь",
+        "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+    )
+    val mi = (d.getMonth() as Int).coerceIn(0, 11)
+    val y = d.getFullYear() as Int
+    val yy = (y % 100).toString().padStart(2, '0')
+    return "${months[mi]}, ${yy}г."
+}
+
+/** Последовательное удаление сессий истории (завершённые/отменённые). */
+private fun deleteInstructorHistorySessionsSequential(sessionIds: List<String>, onDone: (String?) -> Unit) {
+    if (sessionIds.isEmpty()) {
+        onDone(null)
+        return
+    }
+    var i = 0
+    fun step() {
+        deleteDrivingSession(sessionIds[i]) { err ->
+            if (err != null) {
+                onDone(err)
+                return@deleteDrivingSession
+            }
+            i++
+            if (i >= sessionIds.size) onDone(null) else step()
+        }
+    }
+    step()
+}
+
+/** Нижняя панель вкладок по роли (индексы должны совпадать везде). */
+private fun getTabsForUserRole(role: String): List<String> = when (role) {
+    "admin" -> listOf("Главная", "Баланс", "Расписание", "Чат", "История")
+    "instructor" -> listOf("Главная", "Запись", "Чат", "Билеты", "История")
+    "cadet" -> listOf("Главная", "Запись", "Чат", "Билеты", "История")
+    else -> listOf("Главная")
 }
 
 /** Краткое «на ДД.ММ в ЧЧ:ММ» для текста уведомлений (пустая строка если ms не задано). */
@@ -1342,6 +2075,7 @@ private fun showCadetNewWindowNotification(windowDateMs: Long? = null) {
     updateState {
         notifications = newList
         selectedTabIndex = 1
+        chatSettingsOpen = false
     }
     appState.user?.id?.let { uid ->
         saveNotificationsToStorage(uid, newList)
@@ -1362,6 +2096,9 @@ private fun showCadetNewWindowNotification(windowDateMs: Long? = null) {
 }
 
 private const val NOTIFICATIONS_STORAGE_KEY_PREFIX = "sd_notifications_"
+/** Id сессий вождения, о которых курсант уже получил уведомление «Инструктор записал вас…» (чтобы показывать и сохранять при первом открытии, не только по опросу). */
+private const val CADET_INSTRUCTOR_BOOKING_SESSION_IDS_PREFIX = "sd_cadet_instructor_booking_session_ids_"
+private const val MAX_CADET_INSTRUCTOR_BOOKING_SESSION_IDS = 500
 
 /** Ключ в localStorage: включены ли звуковые уведомления (true/false). Отсутствие ключа = первый запуск. */
 private const val SOUND_NOTIFICATIONS_ENABLED_KEY = "sd_sound_notifications_enabled"
@@ -1497,6 +2234,27 @@ private fun saveNotificationsToStorage(userId: String, list: List<AppNotificatio
     } catch (_: Throwable) { }
 }
 
+private fun loadCadetInstructorBookingNotifiedSessionIds(userId: String): MutableSet<String> {
+    return try {
+        val raw = window.asDynamic().localStorage?.getItem(CADET_INSTRUCTOR_BOOKING_SESSION_IDS_PREFIX + userId) as? String ?: return mutableSetOf()
+        if (raw.isBlank()) return mutableSetOf()
+        val arr = js("(function(r){ return JSON.parse(r); })").unsafeCast<(String) -> dynamic>().invoke(raw)
+        val len = (arr?.length as? Number)?.toInt() ?: 0
+        val getAt = js("(function(a, i){ return a[i]; })").unsafeCast<(Any, Int) -> Any?>()
+        (0 until len).mapNotNull { i ->
+            (if (arr != null) getAt(arr, i) else null)?.unsafeCast<dynamic>()?.toString()?.takeIf { it.isNotBlank() }
+        }.toMutableSet()
+    } catch (_: Throwable) { mutableSetOf() }
+}
+
+private fun saveCadetInstructorBookingNotifiedSessionIds(userId: String, ids: MutableSet<String>) {
+    try {
+        val list = ids.toList().takeLast(MAX_CADET_INSTRUCTOR_BOOKING_SESSION_IDS)
+        val json = "[" + list.joinToString(",") { "\"" + escapeJsonString(it) + "\"" } + "]"
+        window.asDynamic().localStorage?.setItem(CADET_INSTRUCTOR_BOOKING_SESSION_IDS_PREFIX + userId, json)
+    } catch (_: Throwable) { }
+}
+
 /** Показать уведомление снизу экрана и сохранить в список уведомлений (и в localStorage). */
 private fun showNotification(text: String) {
     val now = js("Date.now()").unsafeCast<Double>().toLong()
@@ -1524,6 +2282,7 @@ private val NOTIFICATION_SOUND_OPTIONS = listOf(
 )
 private const val NOTIFICATION_SOUND_STORAGE_KEY = "sd_notification_sound"
 private const val CHAT_AVATAR_STORAGE_KEY_PREFIX = "sd_chat_avatar_"
+private const val CHAT_ADMIN_FILE_MAX_BYTES = 8 * 1024 * 1024
 
 private fun getNotificationSoundFilename(): String =
     (window.asDynamic().localStorage?.getItem(NOTIFICATION_SOUND_STORAGE_KEY) as? String)?.takeIf { it in NOTIFICATION_SOUND_OPTIONS } ?: "iphone1"
@@ -1557,7 +2316,10 @@ private fun getOrCreateCadetNotificationAudio(): dynamic {
 private fun unlockCadetNotificationAudio() {
     if (cadetNotificationAudioUnlocked) return
     cadetNotificationAudioUnlocked = true
-    updateState { soundAudioUnlocked = true }
+    // Не вызываем updateState, если флаг уже true — иначе лишняя перерисовка #sd-card.
+    if (!appState.soundAudioUnlocked) {
+        updateState { soundAudioUnlocked = true }
+    }
     try {
         val audio = getOrCreateCadetNotificationAudio()
         audio.currentTime = 0.0
@@ -1641,7 +2403,7 @@ private fun setupChatNotificationsForContact(uid: String, contactId: String) {
         if (ts <= 0L) return@listener
         val isInitialLoad = ts < subscribeTimeMs - 2000
         if (isInitialLoad) return@listener
-        val isViewingThisChat = (appState.selectedTabIndex == 2 && appState.selectedChatContactId == contactId)
+        val isViewingThisChat = (appState.selectedTabIndex == 2 && appState.selectedChatContactId == contactId && !appState.chatSettingsOpen)
         if (isViewingThisChat) {
             setChatLastSeenMs(uid, contactId, ts)
             updateState { if (chatUnreadCounts.containsKey(contactId)) chatUnreadCounts = chatUnreadCounts - contactId }
@@ -1662,18 +2424,93 @@ private fun setupChatNotificationsForContact(uid: String, contactId: String) {
     }
 }
 
-private fun subscribeChatNotifications(uid: String, contacts: List<User>) {
-    val ids = contacts.map { it.id }.filter { it.isNotBlank() }.toSet()
-    val toRemove = chatNotifUnsubByContactId.keys.filter { it !in ids }
-    toRemove.forEach { id -> chatNotifUnsubByContactId.remove(id)?.invoke() }
-    ids.forEach { cid -> setupChatNotificationsForContact(uid, cid) }
-}
-
 private fun clearChatUnread(uid: String, contactId: String) {
     val lastTs = appState.chatMessages.lastOrNull()?.timestamp ?: js("Date.now()").unsafeCast<Double>().toLong()
     setChatLastSeenMs(uid, contactId, lastTs)
     updateState { if (chatUnreadCounts.containsKey(contactId)) chatUnreadCounts = chatUnreadCounts - contactId }
     setupChatNotificationsForContact(uid, contactId)
+}
+
+private fun chatUnreadKeyForGroup(groupId: String) = "g_$groupId"
+
+private fun chatLastSeenKeyGroup(uid: String, groupId: String) = "sd_chat_last_seen_${uid}_g_$groupId"
+
+private fun getChatLastSeenMsForGroup(uid: String, groupId: String): Long {
+    return try {
+        val v = js("window.localStorage.getItem(arguments[0])")
+            .unsafeCast<(String) -> String?>()
+            .invoke(chatLastSeenKeyGroup(uid, groupId))
+        v?.toLongOrNull() ?: 0L
+    } catch (_: Throwable) { 0L }
+}
+
+private fun setChatLastSeenMsForGroup(uid: String, groupId: String, ms: Long) {
+    try {
+        js("window.localStorage.setItem(arguments[0], arguments[1])")
+            .unsafeCast<(String, String) -> Unit>()
+            .invoke(chatLastSeenKeyGroup(uid, groupId), ms.toString())
+    } catch (_: Throwable) { }
+}
+
+private fun setupChatNotificationsForGroup(uid: String, groupId: String) {
+    chatNotifUnsubByGroupId.remove(groupId)?.invoke()
+    val db = getDatabase() ?: return
+    val roomId = groupChatRoomId(groupId)
+    val lastSeen = getChatLastSeenMsForGroup(uid, groupId)
+    val ref = db.ref("${com.example.startdrive.shared.FirebasePaths.CHATS}/$roomId/${com.example.startdrive.shared.FirebasePaths.MESSAGES}")
+        .orderByChild("timestamp")
+        .startAt((lastSeen + 1).toDouble())
+    val subscribeTimeMs = js("Date.now()").unsafeCast<Double>().toLong()
+    val gKey = chatUnreadKeyForGroup(groupId)
+    val listener: (dynamic) -> Unit = listener@{ snap: dynamic ->
+        val m = snap?.`val`()
+        val senderId = (m?.senderId as? String) ?: ""
+        val tsAny = m?.timestamp
+        val ts = when (tsAny) {
+            is Number -> tsAny.toLong()
+            else -> (tsAny?.unsafeCast<Double>())?.toLong() ?: 0L
+        }
+        if (ts <= 0L) return@listener
+        val isInitialLoad = ts < subscribeTimeMs - 2000
+        if (isInitialLoad) return@listener
+        val isViewingThisChat = (appState.selectedTabIndex == 2 && appState.selectedChatGroupId == groupId && !appState.chatSettingsOpen)
+        if (isViewingThisChat) {
+            setChatLastSeenMsForGroup(uid, groupId, ts)
+            updateState { if (chatUnreadCounts.containsKey(gKey)) chatUnreadCounts = chatUnreadCounts - gKey }
+        } else if (senderId.isNotBlank() && senderId != uid) {
+            updateState {
+                val prev = chatUnreadCounts[gKey] ?: 0
+                chatUnreadCounts = chatUnreadCounts + (gKey to (prev + 1))
+            }
+            if (getSoundNotificationsEnabled() != false) {
+                unlockChatNotificationAudio()
+                playChatMessageSound()
+            }
+        }
+    }
+    ref.on("child_added", listener)
+    chatNotifUnsubByGroupId[groupId] = {
+        try { ref.off("child_added", listener) } catch (_: Throwable) { }
+    }
+}
+
+private fun subscribeChatNotifications(uid: String, contacts: List<User>) {
+    val ids = contacts.map { it.id }.filter { it.isNotBlank() }.toSet()
+    val toRemove = chatNotifUnsubByContactId.keys.filter { it !in ids }
+    toRemove.forEach { id -> chatNotifUnsubByContactId.remove(id)?.invoke() }
+    ids.forEach { cid -> setupChatNotificationsForContact(uid, cid) }
+    val gIds = appState.chatGroups.map { it.id }.filter { it.isNotBlank() }.toSet()
+    val toRemoveG = chatNotifUnsubByGroupId.keys.filter { it !in gIds }
+    toRemoveG.forEach { id -> chatNotifUnsubByGroupId.remove(id)?.invoke() }
+    gIds.forEach { gid -> setupChatNotificationsForGroup(uid, gid) }
+}
+
+private fun clearChatUnreadForGroup(uid: String, groupId: String) {
+    val gKey = chatUnreadKeyForGroup(groupId)
+    val lastTs = appState.chatMessages.lastOrNull()?.timestamp ?: js("Date.now()").unsafeCast<Double>().toLong()
+    setChatLastSeenMsForGroup(uid, groupId, lastTs)
+    updateState { if (chatUnreadCounts.containsKey(gKey)) chatUnreadCounts = chatUnreadCounts - gKey }
+    setupChatNotificationsForGroup(uid, groupId)
 }
 
 /** Короткий звуковой сигнал через Web Audio API (два «динь-динь», всегда слышно). */
@@ -1714,6 +2551,1110 @@ private fun playInstruktorDobavilOknoSound() {
         audio.currentTime = 0.0
         audio.play()?.catch { _ -> Unit }
     } catch (_: Throwable) { }
+}
+
+/**
+ * Курсант: новые записи на вождение инструктором — сохраняем в «Уведомления» и localStorage (как [showNotification]),
+ * без дубля при первом заходе после записи (учёт по id сессии).
+ */
+private fun notifyCadetNewInstructorScheduledSessions(userId: String, sessions: List<DrivingSession>) {
+    val scheduled = sessions.filter { it.status == "scheduled" && it.id.isNotBlank() && it.cadetId == userId }
+    if (scheduled.isEmpty()) return
+    val known = loadCadetInstructorBookingNotifiedSessionIds(userId)
+    val newSessions = scheduled.filter { it.id !in known }.sortedBy { it.startTimeMillis ?: 0L }
+    if (newSessions.isEmpty()) return
+    val now = js("Date.now()").unsafeCast<Double>().toLong()
+    var list = appState.notifications
+    newSessions.forEachIndexed { idx, s ->
+        val text = "Инструктор записал вас на вождение" + formatDayTimeShort(s.startTimeMillis)
+        list = list + AppNotification(dateTimeMs = now + idx, text = text)
+        known.add(s.id)
+    }
+    saveCadetInstructorBookingNotifiedSessionIds(userId, known)
+    val firstText = "Инструктор записал вас на вождение" + formatDayTimeShort(newSessions.first().startTimeMillis)
+    updateState {
+        notifications = list
+        if (notificationsViewOpen) notificationsReadCount = list.size
+        selectedTabIndex = 1
+        chatSettingsOpen = false
+    }
+    saveNotificationsToStorage(userId, list)
+    showToast(firstText)
+    if (getSoundNotificationsEnabled() == true) playInstruktorDobavilOknoSound()
+}
+
+/** Обновляет карту «курсант id → число завершённых вождений» для главной админки. */
+private fun refreshAdminCadetCompletedDriveCounts() {
+    getCompletedDrivingSessionsForAdmin { sessions ->
+        val counts = sessions
+            .filter { it.cadetId.isNotBlank() }
+            .groupingBy { it.cadetId }
+            .eachCount()
+        updateState { adminCadetCompletedDriveCounts = counts }
+    }
+}
+
+private fun refreshCadetGroups() {
+    getCadetGroups { list -> updateState { cadetGroups = list } }
+}
+
+private fun refreshChatGroups() {
+    val uid = appState.user?.id ?: return
+    getChatGroupsForUser(uid) { list ->
+        updateState { chatGroups = list }
+        val u = appState.user ?: return@getChatGroupsForUser
+        if (appState.selectedTabIndex == 2 && appState.chatContacts.isNotEmpty()) {
+            subscribeChatNotifications(u.id, appState.chatContacts)
+        }
+    }
+}
+
+/** Вождения + группы при загрузке главной админки и после действий со списком. */
+private fun refreshAdminHomeAuxiliaryData() {
+    refreshAdminCadetCompletedDriveCounts()
+    refreshCadetGroups()
+}
+
+private fun formatDdMmYyShort(ms: Long): String {
+    if (ms <= 0L) return "—"
+    val d = js("new Date(ms)").unsafeCast<dynamic>()
+    val day = (d.getDate() as Int).toString().padStart(2, '0')
+    val month = ((d.getMonth() as Int) + 1).toString().padStart(2, '0')
+    val y = (d.getFullYear() as Int) % 100
+    return "$day.$month.${y.toString().padStart(2, '0')}"
+}
+
+private fun cadetGroupDisplayTextEscaped(g: CadetGroup?): String {
+    if (g == null || g.id.isBlank()) return "не выбрана"
+    val n = g.numberLabel.escapeHtml()
+    val df = g.dateFromMillis
+    val dt = g.dateToMillis
+    if (df == null || dt == null) return "№ $n · без срока"
+    val from = formatDdMmYyShort(df)
+    val to = formatDdMmYyShort(dt)
+    if (from == "—" || to == "—") return "№ $n · без срока"
+    return "№ $n · с $from по $to"
+}
+
+private fun formatMillisToIsoDate(ms: Long): String {
+    val d = js("new Date(ms)").unsafeCast<dynamic>()
+    val y = d.getFullYear() as Int
+    val m = ((d.getMonth() as Int) + 1).toString().padStart(2, '0')
+    val day = (d.getDate() as Int).toString().padStart(2, '0')
+    return "$y-$m-$day"
+}
+
+/** Парсинг дд.мм.гг в локальные миллисекунды (начало дня). */
+private fun parseDdMmYyToMillis(s: String): Long? {
+    val t = s.trim()
+    val p = t.split('.').map { it.trim() }
+    if (p.size != 3) return null
+    val day = p[0].toIntOrNull() ?: return null
+    val month = p[1].toIntOrNull() ?: return null
+    var year = p[2].toIntOrNull() ?: return null
+    if (year < 100) year += 2000
+    if (month !in 1..12 || day !in 1..31) return null
+    val mkDate = js("(function(y,m,d){ return new Date(y,m-1,d); })").unsafeCast<(Int, Int, Int) -> dynamic>()
+    val d = mkDate(year, month, day)
+    if ((d.getDate() as Int) != day || (d.getMonth() as Int) != month - 1) return null
+    return (d.getTime() as Double).toLong()
+}
+
+/** Значение `<input type="date">` (гггг-мм-дд) → миллисекунды начала дня. */
+private fun parseIsoDateToMillis(iso: String): Long? {
+    val t = iso.trim()
+    if (t.isBlank()) return null
+    val p = t.split('-')
+    if (p.size != 3) return null
+    val y = p[0].toIntOrNull() ?: return null
+    val m = p[1].toIntOrNull() ?: return null
+    val d = p[2].toIntOrNull() ?: return null
+    if (m !in 1..12 || d !in 1..31) return null
+    val mkDate = js("(function(y,m,d){ return new Date(y,m-1,d); })").unsafeCast<(Int, Int, Int) -> dynamic>()
+    val date = mkDate(y, m, d)
+    if ((date.getDate() as Int) != d || (date.getMonth() as Int) != m - 1) return null
+    return (date.getTime() as Double).toLong()
+}
+
+private fun removeAdminCadetGroupModalsFromRoot() {
+    document.getElementById("sd-admin-add-group-overlay")?.let { el -> el.parentNode?.removeChild(el) }
+    document.getElementById("sd-admin-cadet-group-picker-overlay")?.let { el -> el.parentNode?.removeChild(el) }
+}
+
+private fun renderChatGroupModalHtml(): String {
+    val isEdit = appState.adminChatGroupEditId != null
+    val title = if (isEdit) "Редактировать группу" else "Создать группу"
+    val btnSave = if (isEdit) "Сохранить" else "Создать"
+    val nameVal = appState.adminChatGroupDraftName.escapeHtml()
+    val uid = appState.user?.id ?: ""
+    val editG = appState.adminChatGroupEditId?.let { eid -> appState.chatGroups.find { it.id == eid } }
+    val nameForAvatarInitials = (editG?.name ?: appState.adminChatGroupDraftName).trim()
+    val avatarInitialsEsc = groupChatNameInitials(nameForAvatarInitials).escapeHtml()
+    val existingAvatarUrl = editG?.chatAvatarUrl?.takeIf { it.isNotBlank() }
+    val groupIdEsc = (editG?.id ?: "").escapeHtml()
+    val avatarPreviewInner = if (existingAvatarUrl != null) {
+        """<img src="${existingAvatarUrl.escapeHtml()}" alt="" id="sd-group-chat-avatar-img" class="sd-settings-avatar-img sd-avatar-img" data-group-id="$groupIdEsc" />"""
+    } else {
+        """<span class="sd-settings-avatar-placeholder" id="sd-group-chat-avatar-placeholder">$avatarInitialsEsc</span>"""
+    }
+    val pickOpts = appState.chatContacts
+        .filter { it.id !in appState.adminChatGroupDraftMemberIds && it.id != uid }
+        .sortedBy { it.fullName }
+        .joinToString("") { u ->
+            val roleLabel = when (u.role) { "instructor" -> "Инструктор" "cadet" -> "Курсант" else -> u.role }.escapeHtml()
+            """<option value="${u.id.escapeHtml()}">${formatShortName(u.fullName).escapeHtml()} · $roleLabel</option>"""
+        }
+    val chips = appState.adminChatGroupDraftMemberIds.joinToString("") { mid ->
+        val u = appState.chatContacts.find { it.id == mid }
+        val label = (u?.let { formatShortName(it.fullName) } ?: mid).escapeHtml()
+        """<span class="sd-chat-group-chip">$label <button type="button" class="sd-chat-group-chip-remove" data-remove-member="${mid.escapeHtml()}" title="Удалить">×</button></span>"""
+    }
+    val avatarSection = """<div class="sd-settings-block sd-chat-group-avatar-block">
+       <h3 class="sd-settings-block-title">Аватар группы</h3>
+       <div class="sd-settings-avatar-wrap">
+         <div class="sd-settings-avatar-preview" id="sd-group-chat-avatar-preview">
+           $avatarPreviewInner
+         </div>
+         <input type="file" id="sd-group-chat-avatar-file" class="sd-settings-avatar-file" accept="image/*" />
+         <label for="sd-group-chat-avatar-file" class="sd-btn sd-btn-secondary sd-settings-avatar-label">Выбрать фото</label>
+         <button type="button" id="sd-group-chat-avatar-remove" class="sd-btn sd-btn-secondary sd-settings-avatar-remove">Удалить аватар</button>
+       </div>
+       <div class="sd-avatar-crop-editor sd-hidden" id="sd-group-chat-avatar-crop-editor">
+         <p class="sd-avatar-crop-hint">Перетащите фото и измените масштаб. В круге будет виден аватар.</p>
+         <div class="sd-avatar-crop-stage">
+           <div class="sd-avatar-crop-overlay" id="sd-group-chat-avatar-crop-overlay" aria-hidden="true"></div>
+           <div class="sd-avatar-crop-frame" id="sd-group-chat-avatar-crop-frame">
+             <img id="sd-group-chat-avatar-crop-img" class="sd-avatar-crop-img" alt="" draggable="false" />
+           </div>
+         </div>
+         <div class="sd-avatar-crop-controls">
+           <div class="sd-avatar-crop-scale-row">
+             <span class="sd-avatar-crop-scale-label">Масштаб</span>
+             <input type="range" id="sd-group-chat-avatar-crop-scale" class="sd-avatar-crop-scale" min="0.5" max="2" step="0.05" value="1" title="Масштаб" />
+           </div>
+           <div class="sd-avatar-crop-buttons">
+             <button type="button" id="sd-group-chat-avatar-crop-cancel" class="sd-btn sd-btn-secondary">Отмена</button>
+             <button type="button" id="sd-group-chat-avatar-crop-apply" class="sd-btn sd-btn-primary">Готово</button>
+           </div>
+         </div>
+       </div>
+       </div>"""
+    return """<div class="sd-modal-overlay" id="sd-chat-group-modal-overlay">
+        <div class="sd-modal sd-chat-group-modal" id="sd-chat-group-modal-dialog">
+            <h3 class="sd-modal-title">$title</h3>
+            $avatarSection
+            <label class="sd-auth-label" for="sd-chat-group-name">Название группы</label>
+            <input type="text" id="sd-chat-group-name" class="sd-auth-input" maxlength="120" autocomplete="off" value="$nameVal" />
+            <p class="sd-auth-label">Добавить контакты</p>
+            <div class="sd-chat-group-add-row">
+                <select id="sd-chat-group-pick" class="sd-auth-input sd-chat-group-pick"><option value="">— выберите контакт —</option>$pickOpts</select>
+                <button type="button" id="sd-chat-group-add-member" class="sd-btn sd-btn-secondary">Добавить</button>
+            </div>
+            <div class="sd-chat-group-chips" id="sd-chat-group-chips">$chips</div>
+            <p class="sd-modal-actions">
+                <button type="button" id="sd-chat-group-cancel" class="sd-btn sd-btn-secondary">Отменить</button>
+                <button type="button" id="sd-chat-group-save" class="sd-btn sd-btn-primary">$btnSave</button>
+            </p>
+        </div>
+    </div>"""
+}
+
+private fun renderChatGroupDeleteConfirmHtml(): String {
+    val gid = appState.adminChatGroupDeleteConfirmId?.escapeHtml() ?: ""
+    return """<div class="sd-modal-overlay" id="sd-chat-group-delete-overlay" data-gid="$gid">
+        <div class="sd-modal sd-chat-group-delete-modal">
+            <h3 class="sd-modal-title">Вы уверены?</h3>
+            <p class="sd-modal-actions">
+                <button type="button" id="sd-chat-group-delete-yes" class="sd-btn sd-btn-danger">Да</button>
+                <button type="button" id="sd-chat-group-delete-no" class="sd-btn sd-btn-secondary">Нет</button>
+            </p>
+        </div>
+    </div>"""
+}
+
+private fun wireChatGroupModalControls(root: org.w3c.dom.Element) {
+    document.getElementById("sd-chat-group-cancel")?.addEventListener("click", {
+        clearGroupChatAvatarPending()
+        updateState {
+            adminChatGroupModalOpen = false
+            adminChatGroupEditId = null
+            adminChatGroupDraftName = ""
+            adminChatGroupDraftMemberIds = emptyList()
+        }
+    })
+    document.getElementById("sd-chat-group-add-member")?.addEventListener("click", {
+        val sel = document.getElementById("sd-chat-group-pick") as? HTMLSelectElement ?: return@addEventListener
+        val id = (sel.value ?: "").trim()
+        if (id.isBlank()) return@addEventListener
+        val nameInp = document.getElementById("sd-chat-group-name") as? HTMLInputElement
+        val name = nameInp?.value?.trim() ?: ""
+        updateState {
+            if (id !in adminChatGroupDraftMemberIds) adminChatGroupDraftMemberIds = adminChatGroupDraftMemberIds + id
+            adminChatGroupDraftName = name
+        }
+        sel.value = ""
+    })
+    document.getElementById("sd-chat-group-modal-overlay")?.addEventListener("click", { e: dynamic ->
+        val t = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+        if (t.id == "sd-chat-group-modal-overlay") {
+            clearGroupChatAvatarPending()
+            updateState {
+                adminChatGroupModalOpen = false
+                adminChatGroupEditId = null
+                adminChatGroupDraftName = ""
+                adminChatGroupDraftMemberIds = emptyList()
+            }
+        }
+    })
+    document.getElementById("sd-chat-group-modal-dialog")?.addEventListener("click", { e: dynamic ->
+        val t = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+        val rm = t.closest("[data-remove-member]") as? org.w3c.dom.Element ?: return@addEventListener
+        val mid = rm.getAttribute("data-remove-member") ?: return@addEventListener
+        val nameInp = document.getElementById("sd-chat-group-name") as? HTMLInputElement
+        val name = nameInp?.value?.trim() ?: ""
+        updateState {
+            adminChatGroupDraftMemberIds = adminChatGroupDraftMemberIds.filter { it != mid }
+            adminChatGroupDraftName = name
+        }
+    })
+    document.getElementById("sd-chat-group-save")?.addEventListener("click", {
+        val adminUid = appState.user?.id ?: return@addEventListener
+        if (appState.user?.role != "admin") return@addEventListener
+        val nameInp = document.getElementById("sd-chat-group-name") as? HTMLInputElement ?: return@addEventListener
+        val name = nameInp.value.trim()
+        if (name.isBlank()) {
+            updateState { networkError = "Введите название группы." }
+            return@addEventListener
+        }
+        val members = appState.adminChatGroupDraftMemberIds
+        val editId = appState.adminChatGroupEditId
+        fun closeModalSuccess() {
+            refreshChatGroups()
+            clearGroupChatAvatarPending()
+            updateState {
+                adminChatGroupModalOpen = false
+                adminChatGroupEditId = null
+                adminChatGroupDraftName = ""
+                adminChatGroupDraftMemberIds = emptyList()
+            }
+        }
+        if (editId != null) {
+            updateChatGroup(editId, name, members, adminUid) { err ->
+                if (err != null) updateState { networkError = err }
+                else applyGroupAvatarAfterFirebaseSave(editId) { closeModalSuccess() }
+            }
+        } else {
+            addChatGroup(name, members, adminUid) { err, newId ->
+                if (err != null) updateState { networkError = err }
+                else if (newId != null) applyGroupAvatarAfterFirebaseSave(newId) { closeModalSuccess() }
+                else closeModalSuccess()
+            }
+        }
+    })
+    wireGroupChatAvatarModalControls(root)
+}
+
+private fun wireGroupChatAvatarModalControls(root: org.w3c.dom.Element) {
+    val cropState = groupModalCropState
+    val cropDataUrlHolder = groupModalCropDataUrlHolder
+    val updateCropImgTransform = {
+        document.getElementById("sd-group-chat-avatar-crop-img")?.unsafeCast<org.w3c.dom.HTMLElement>()?.style?.setProperty(
+            "transform", "translate(-50%,-50%) translate(${cropState[0]}px,${cropState[1]}px) scale(${cropState[2]})"
+        )
+    }
+    document.getElementById("sd-group-chat-avatar-file")?.addEventListener("change", { ev: dynamic ->
+        val target = ev?.target?.unsafeCast<dynamic>()
+        val getFirstFile = js("(function(f){ return f && f[0]; })").unsafeCast<(dynamic) -> dynamic>()
+        val file = getFirstFile(target?.files)
+        if (file != null) {
+            val reader = js("new FileReader()").unsafeCast<dynamic>()
+            reader.onload = {
+                val dataUrl = reader.result as? String
+                if (dataUrl != null) {
+                    cropDataUrlHolder[0] = dataUrl
+                    val editor = document.getElementById("sd-group-chat-avatar-crop-editor")?.unsafeCast<org.w3c.dom.HTMLElement>()
+                    val cropImg = document.getElementById("sd-group-chat-avatar-crop-img")?.unsafeCast<org.w3c.dom.HTMLImageElement>()
+                    val frame = document.getElementById("sd-group-chat-avatar-crop-frame")
+                    val scaleInput = document.getElementById("sd-group-chat-avatar-crop-scale") as? HTMLInputElement
+                    if (editor != null && cropImg != null && frame != null) {
+                        editor.classList.remove("sd-hidden")
+                        cropImg.src = dataUrl
+                        cropImg.onload = {
+                            val nw = cropImg.naturalWidth.toDouble().coerceAtLeast(1.0)
+                            val nh = cropImg.naturalHeight.toDouble().coerceAtLeast(1.0)
+                            val containScale = (200.0 / nw).coerceAtMost(200.0 / nh).coerceAtMost(1.0)
+                            cropImg.style.setProperty("width", cropImg.naturalWidth.toString() + "px")
+                            cropImg.style.setProperty("height", cropImg.naturalHeight.toString() + "px")
+                            cropImg.style.setProperty("object-fit", "none")
+                            cropState[0] = 0.0
+                            cropState[1] = 0.0
+                            cropState[2] = containScale
+                            scaleInput?.value = containScale.toString()
+                            scaleInput?.setAttribute("value", containScale.toString())
+                            updateCropImgTransform()
+                        }
+                    }
+                }
+            }
+            reader.readAsDataURL(file)
+        }
+    })
+    fun syncCropScaleSlider() {
+        (document.getElementById("sd-group-chat-avatar-crop-scale") as? HTMLInputElement)?.let { it.value = cropState[2].toString(); it.setAttribute("value", cropState[2].toString()) }
+    }
+    document.getElementById("sd-group-chat-avatar-crop-scale")?.addEventListener("input", {
+        val input = document.getElementById("sd-group-chat-avatar-crop-scale") as? HTMLInputElement ?: return@addEventListener
+        val v = input.value.toDoubleOrNull() ?: 1.0
+        cropState[2] = v.coerceIn(0.5, 2.0)
+        updateCropImgTransform()
+    })
+    fun getClientXY(e: dynamic): Pair<Double, Double> {
+        val tx = (e?.touches?.get(0) ?: e)?.clientX as? Number
+        val ty = (e?.touches?.get(0) ?: e)?.clientY as? Number
+        return Pair((tx?.toDouble() ?: (e?.clientX as? Number)?.toDouble() ?: 0.0), (ty?.toDouble() ?: (e?.clientY as? Number)?.toDouble() ?: 0.0))
+    }
+    fun getTouchDistance(e: dynamic): Double {
+        val t = e?.touches
+        if (t == null || (t.asDynamic().length as Int) < 2) return 0.0
+        val x1 = (t.asDynamic()[0].clientX as Number).toDouble()
+        val y1 = (t.asDynamic()[0].clientY as Number).toDouble()
+        val x2 = (t.asDynamic()[1].clientX as Number).toDouble()
+        val y2 = (t.asDynamic()[1].clientY as Number).toDouble()
+        return kotlin.math.sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1))
+    }
+    document.getElementById("sd-group-chat-avatar-crop-frame")?.addEventListener("mousedown", { e: dynamic ->
+        groupModalCropDragging = true
+        groupModalCropPinching = false
+        val (x, y) = getClientXY(e)
+        groupModalCropDragStartX = x
+        groupModalCropDragStartY = y
+        groupModalCropDragOffsetStartX = cropState[0]
+        groupModalCropDragOffsetStartY = cropState[1]
+        (e as? org.w3c.dom.events.Event)?.preventDefault()
+    })
+    document.getElementById("sd-group-chat-avatar-crop-frame")?.addEventListener("touchstart", { e: dynamic ->
+        val touchCount = (e?.touches?.asDynamic()?.length as? Int) ?: 0
+        if (touchCount >= 2) {
+            groupModalCropPinching = true
+            groupModalCropDragging = false
+            groupModalCropPinchStartDist = getTouchDistance(e).coerceAtLeast(1.0)
+            groupModalCropPinchStartScale = cropState[2]
+        } else {
+            groupModalCropDragging = true
+            groupModalCropPinching = false
+            val (x, y) = getClientXY(e)
+            groupModalCropDragStartX = x
+            groupModalCropDragStartY = y
+            groupModalCropDragOffsetStartX = cropState[0]
+            groupModalCropDragOffsetStartY = cropState[1]
+        }
+        (e as? org.w3c.dom.events.Event)?.preventDefault()
+    })
+    if (!groupChatAvatarRootListenersBound) {
+        groupChatAvatarRootListenersBound = true
+        root.addEventListener("mousemove", { e: dynamic ->
+            if (!groupModalCropDragging) return@addEventListener
+            val (x, y) = getClientXY(e)
+            cropState[0] = groupModalCropDragOffsetStartX + (x - groupModalCropDragStartX)
+            cropState[1] = groupModalCropDragOffsetStartY + (y - groupModalCropDragStartY)
+            updateCropImgTransform()
+        })
+        root.addEventListener("touchmove", { e: dynamic ->
+            val touchCount = (e?.touches?.asDynamic()?.length as? Int) ?: 0
+            if (groupModalCropPinching && touchCount >= 2) {
+                val d = getTouchDistance(e).coerceAtLeast(1.0)
+                val newScale = (groupModalCropPinchStartScale * d / groupModalCropPinchStartDist).coerceIn(0.5, 2.0)
+                cropState[2] = newScale
+                syncCropScaleSlider()
+                updateCropImgTransform()
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+            } else if (groupModalCropDragging && touchCount >= 1) {
+                val (x, y) = getClientXY(e)
+                cropState[0] = groupModalCropDragOffsetStartX + (x - groupModalCropDragStartX)
+                cropState[1] = groupModalCropDragOffsetStartY + (y - groupModalCropDragStartY)
+                updateCropImgTransform()
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+            }
+        })
+        root.addEventListener("mouseup", { _: dynamic -> groupModalCropDragging = false })
+        root.addEventListener("touchend", { e: dynamic ->
+            groupModalCropDragging = false
+            val touchCount = (e?.touches?.asDynamic()?.length as? Int) ?: 0
+            if (touchCount < 2) groupModalCropPinching = false
+        })
+    }
+    document.getElementById("sd-group-chat-avatar-crop-apply")?.addEventListener("click", {
+        val dataUrl = cropDataUrlHolder[0] ?: return@addEventListener
+        val cropImg = document.getElementById("sd-group-chat-avatar-crop-img") as? org.w3c.dom.HTMLImageElement ?: return@addEventListener
+        if (cropImg.naturalWidth == 0) return@addEventListener
+        val scale = cropState[2]
+        val ox = cropState[0]
+        val oy = cropState[1]
+        val nw = cropImg.naturalWidth.toDouble()
+        val nh = cropImg.naturalHeight.toDouble()
+        val canvas = document.createElement("canvas").unsafeCast<org.w3c.dom.HTMLCanvasElement>()
+        val size = 200
+        canvas.width = size
+        canvas.height = size
+        val ctx = canvas.getContext("2d")?.unsafeCast<dynamic>() ?: return@addEventListener
+        ctx.save()
+        ctx.fillStyle = "rgba(0,0,0,0.06)"
+        ctx.fillRect(0.0, 0.0, size.toDouble(), size.toDouble())
+        ctx.beginPath()
+        ctx.arc(size / 2.0, size / 2.0, size / 2.0, 0.0, 6.283185307179586)
+        ctx.closePath()
+        ctx.clip()
+        ctx.translate(size / 2.0 + ox, size / 2.0 + oy)
+        ctx.scale(scale, scale)
+        ctx.drawImage(cropImg, -nw / 2.0, -nh / 2.0, nw, nh)
+        ctx.restore()
+        val resultDataUrl = try { canvas.toDataURL("image/png") } catch (_: Throwable) { "" }
+        val finalDataUrl = if (resultDataUrl.isNotEmpty()) resultDataUrl else dataUrl
+        document.getElementById("sd-group-chat-avatar-crop-editor")?.unsafeCast<org.w3c.dom.HTMLElement>()?.classList?.add("sd-hidden")
+        cropDataUrlHolder[0] = null
+        groupChatAvatarPendingRemove = false
+        groupChatAvatarPendingDataUrl = finalDataUrl
+        val preview = document.getElementById("sd-group-chat-avatar-preview") ?: return@addEventListener
+        preview.querySelector(".sd-settings-avatar-placeholder")?.remove()
+        var img = preview.querySelector(".sd-settings-avatar-img") as? org.w3c.dom.HTMLElement
+        if (img == null) {
+            img = document.createElement("img").unsafeCast<org.w3c.dom.HTMLElement>()
+            img.className = "sd-settings-avatar-img sd-avatar-img"
+            img.setAttribute("alt", "")
+            img.id = "sd-group-chat-avatar-img"
+            preview.appendChild(img)
+        }
+        img.setAttribute("src", finalDataUrl)
+        document.getElementById("sd-group-chat-avatar-file")?.let { it.unsafeCast<dynamic>().value = "" }
+    })
+    document.getElementById("sd-group-chat-avatar-crop-cancel")?.addEventListener("click", {
+        document.getElementById("sd-group-chat-avatar-crop-editor")?.unsafeCast<org.w3c.dom.HTMLElement>()?.classList?.add("sd-hidden")
+        cropDataUrlHolder[0] = null
+        document.getElementById("sd-group-chat-avatar-file")?.let { it.unsafeCast<dynamic>().value = "" }
+    })
+    document.getElementById("sd-group-chat-avatar-remove")?.addEventListener("click", {
+        groupChatAvatarPendingRemove = true
+        groupChatAvatarPendingDataUrl = null
+        val preview = document.getElementById("sd-group-chat-avatar-preview") ?: return@addEventListener
+        preview.querySelector(".sd-settings-avatar-img")?.remove()
+        val nameInp = document.getElementById("sd-chat-group-name") as? HTMLInputElement
+        val name = nameInp?.value?.trim() ?: ""
+        val placeholder = document.createElement("span").unsafeCast<org.w3c.dom.HTMLElement>()
+        placeholder.className = "sd-settings-avatar-placeholder"
+        placeholder.id = "sd-group-chat-avatar-placeholder"
+        placeholder.textContent = groupChatNameInitials(name)
+        preview.querySelector("#sd-group-chat-avatar-placeholder")?.remove()
+        preview.appendChild(placeholder)
+        document.getElementById("sd-group-chat-avatar-file")?.let { it.unsafeCast<dynamic>().value = "" }
+    })
+}
+
+private fun appendChatGroupModalsIfNeeded(root: org.w3c.dom.Element) {
+    if (appState.user?.role != "admin") {
+        document.getElementById("sd-chat-group-modal-overlay")?.remove()
+        document.getElementById("sd-chat-group-delete-overlay")?.remove()
+        return
+    }
+    val showModal = appState.adminChatGroupModalOpen || appState.adminChatGroupEditId != null
+    if (showModal) {
+        val ex = document.getElementById("sd-chat-group-modal-overlay")
+        val sig = "${appState.adminChatGroupEditId}|${appState.adminChatGroupDraftMemberIds.joinToString(",")}"
+        if (ex == null || ex.getAttribute("data-sig") != sig) {
+            ex?.remove()
+            val wrap = document.createElement("div")
+            wrap.innerHTML = renderChatGroupModalHtml()
+            val el = wrap.firstElementChild ?: return
+            el.setAttribute("data-sig", sig)
+            root.appendChild(el)
+            wireChatGroupModalControls(root)
+        }
+    } else {
+        document.getElementById("sd-chat-group-modal-overlay")?.remove()
+    }
+    val delId = appState.adminChatGroupDeleteConfirmId
+    if (delId != null) {
+        val ex = document.getElementById("sd-chat-group-delete-overlay")
+        if (ex == null || ex.getAttribute("data-gid") != delId) {
+            ex?.remove()
+            val wrap = document.createElement("div")
+            wrap.innerHTML = renderChatGroupDeleteConfirmHtml()
+            val el = wrap.firstElementChild ?: return
+            root.appendChild(el)
+            document.getElementById("sd-chat-group-delete-yes")?.addEventListener("click", {
+                val gid = appState.adminChatGroupDeleteConfirmId ?: return@addEventListener
+                deleteChatGroup(gid) { err ->
+                    if (err != null) updateState { networkError = err; adminChatGroupDeleteConfirmId = null }
+                    else {
+                        val wasOpen = appState.selectedChatGroupId == gid
+                        refreshChatGroups()
+                        updateState {
+                            adminChatGroupDeleteConfirmId = null
+                            if (wasOpen) {
+                                selectedChatGroupId = null
+                                chatMessages = emptyList()
+                            }
+                        }
+                        unsubscribeChat()
+                    }
+                }
+            })
+            document.getElementById("sd-chat-group-delete-no")?.addEventListener("click", {
+                updateState { adminChatGroupDeleteConfirmId = null }
+            })
+            document.getElementById("sd-chat-group-delete-overlay")?.addEventListener("click", { e: dynamic ->
+                val t = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+                if (t.id == "sd-chat-group-delete-overlay") updateState { adminChatGroupDeleteConfirmId = null }
+            })
+        }
+    } else {
+        document.getElementById("sd-chat-group-delete-overlay")?.remove()
+    }
+}
+
+/** Модалка выбора причины отмены вождения — вне #sd-card, чтобы опрос/рендер не уничтожали DOM и не вызывали мигание. */
+private fun instructorCancelReasonModalOverlayHtml(): String = """<div class="sd-modal-overlay sd-hidden" id="sd-instructor-cancel-reason-modal"><div class="sd-modal"><h3 class="sd-modal-title">Выберите причину отмены:</h3><div class="sd-rate-options-instructor sd-cancel-reason-options"><label class="sd-radio"><input type="radio" name="sd-cancel-reason" value="Курсант не явился" checked /> Курсант не явился</label><label class="sd-radio"><input type="radio" name="sd-cancel-reason" value="ТС на ремонте" /> ТС на ремонте</label><label class="sd-radio"><input type="radio" name="sd-cancel-reason" value="__OTHER__" /> Другая причина</label></div><div id="sd-cancel-reason-other-wrap" class="sd-cancel-reason-other-wrap sd-hidden"><label class="sd-auth-label" for="sd-cancel-reason-other-text">Укажите причину</label><textarea id="sd-cancel-reason-other-text" class="sd-auth-input sd-cancel-reason-other-text" rows="3" maxlength="500" placeholder="Кратко опишите причину"></textarea></div><p class="sd-modal-actions"><button type="button" id="sd-instructor-cancel-reason-confirm" class="sd-btn sd-btn-primary">Подтвердить</button><button type="button" id="sd-instructor-cancel-reason-cancel" class="sd-btn sd-btn-secondary">Отмена</button></p></div></div>"""
+
+/** Подтверждение отмены на главной, если запись ещё не подтверждена курсантом. */
+private fun instructorHomeCancelUnconfirmedModalOverlayHtml(): String = """<div class="sd-modal-overlay sd-hidden" id="sd-home-cancel-unconfirmed-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вы уверены?</h3><p class="sd-muted">Запись ещё не подтверждена курсантом.</p><p class="sd-modal-actions"><button type="button" id="sd-home-cancel-unconfirmed-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-home-cancel-unconfirmed-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>"""
+
+private fun appendInstructorCancelReasonModalIfNeeded(root: org.w3c.dom.Element) {
+    if (appState.screen != AppScreen.Instructor || appState.user?.role != "instructor") {
+        document.getElementById("sd-instructor-cancel-reason-modal")?.remove()
+        document.getElementById("sd-home-cancel-unconfirmed-modal")?.remove()
+        return
+    }
+    if (document.getElementById("sd-instructor-cancel-reason-modal") == null) {
+        val wrap = document.createElement("div")
+        wrap.innerHTML = instructorCancelReasonModalOverlayHtml()
+        val el = wrap.firstElementChild ?: return
+        root.appendChild(el)
+        wireInstructorCancelReasonModalListeners(root)
+    }
+    if (document.getElementById("sd-home-cancel-unconfirmed-modal") == null) {
+        val wrap2 = document.createElement("div")
+        wrap2.innerHTML = instructorHomeCancelUnconfirmedModalOverlayHtml()
+        val el2 = wrap2.firstElementChild ?: return
+        root.appendChild(el2)
+        wireInstructorHomeCancelUnconfirmedModalListeners()
+    }
+}
+
+private fun wireInstructorHomeCancelUnconfirmedModalListeners() {
+    document.getElementById("sd-home-cancel-unconfirmed-yes")?.addEventListener("click", {
+        val usr = appState.user ?: return@addEventListener
+        if (usr.role != "instructor") return@addEventListener
+        val modal = document.getElementById("sd-home-cancel-unconfirmed-modal") ?: return@addEventListener
+        val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
+        modal.classList.add("sd-hidden")
+        val session = appState.recordingSessions.find { it.id == sessionId }
+        val startMs = session?.startTimeMillis
+        val cadetShortName = appState.instructorCadets.find { it.id == session?.cadetId }?.fullName?.let { formatShortName(it) } ?: "Курсант"
+        cancelByInstructor(sessionId, "—") { err ->
+            if (err != null) updateState { networkError = err }
+            else {
+                showNotification("Вождение отменено" + formatDayTimeShort(startMs) + ". Курсант: $cadetShortName")
+                getOpenWindowsForInstructor(usr.id) { wins ->
+                    getSessionsForInstructor(usr.id) { sess ->
+                        getBalanceHistory(usr.id) { hist ->
+                            updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                            notifyNewBalanceOpsForCurrentUser(hist)
+                        }
+                    }
+                }
+            }
+        }
+    })
+    document.getElementById("sd-home-cancel-unconfirmed-no")?.addEventListener("click", {
+        document.getElementById("sd-home-cancel-unconfirmed-modal")?.let { m -> m.classList.add("sd-hidden") }
+    })
+}
+
+private fun wireInstructorCancelReasonModalListeners(root: org.w3c.dom.Element) {
+    document.getElementById("sd-instructor-cancel-reason-modal")?.addEventListener("change", { ev ->
+        val target = ev.target as? HTMLInputElement ?: return@addEventListener
+        if (target.name == "sd-cancel-reason") {
+            val otherWrap = document.getElementById("sd-cancel-reason-other-wrap")
+            if (target.value == "__OTHER__") {
+                otherWrap?.classList?.remove("sd-hidden")
+            } else {
+                otherWrap?.classList?.add("sd-hidden")
+            }
+        }
+        if (target.name != "sd-cancel-reason" || target.value != "Курсант не явился") return@addEventListener
+        val modal = document.getElementById("sd-instructor-cancel-reason-modal") ?: return@addEventListener
+        val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
+        val session = appState.recordingSessions.find { it.id == sessionId } ?: return@addEventListener
+        val now = js("Date.now()").unsafeCast<Double>().toLong()
+        val startMs = session.startTimeMillis ?: 0L
+        val timeNotReached = startMs > 0 && now < startMs
+        if (timeNotReached) {
+            showNotification("Выбрать причину не возможно, еще не настало время вождения!")
+            document.querySelector("input[name=sd-cancel-reason][value=\"ТС на ремонте\"]")?.unsafeCast<HTMLInputElement>()?.let { it.checked = true }
+            document.getElementById("sd-cancel-reason-other-wrap")?.classList?.add("sd-hidden")
+            return@addEventListener
+        }
+        if (session.instructorConfirmed != true) {
+            showNotification("Выбрать причину не возможно, курсант не подтвердил вождение!")
+            document.querySelector("input[name=sd-cancel-reason][value=\"ТС на ремонте\"]")?.unsafeCast<HTMLInputElement>()?.let { it.checked = true }
+            document.getElementById("sd-cancel-reason-other-wrap")?.classList?.add("sd-hidden")
+            return@addEventListener
+        }
+    })
+    document.getElementById("sd-instructor-cancel-reason-confirm")?.addEventListener("click", {
+        val usr = appState.user ?: return@addEventListener
+        if (usr.role != "instructor") return@addEventListener
+        val modal = document.getElementById("sd-instructor-cancel-reason-modal") ?: return@addEventListener
+        val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
+        val selected = document.querySelector("input[name=sd-cancel-reason]:checked") as? HTMLInputElement
+        val rawVal = selected?.value?.takeIf { it.isNotBlank() }
+        val reason = when (rawVal) {
+            "__OTHER__" -> {
+                val t = (document.getElementById("sd-cancel-reason-other-text") as? HTMLTextAreaElement)?.value?.trim()
+                if (t.isNullOrBlank()) "Другая причина" else t
+            }
+            null -> "—"
+            else -> rawVal
+        }
+        modal.classList.add("sd-hidden")
+        document.getElementById("sd-cancel-reason-other-wrap")?.classList?.add("sd-hidden")
+        (document.getElementById("sd-cancel-reason-other-text") as? HTMLTextAreaElement)?.value = ""
+        val session = appState.recordingSessions.find { it.id == sessionId }
+        val startMs = session?.startTimeMillis
+        val cadetShortName = appState.instructorCadets.find { it.id == session?.cadetId }?.fullName?.let { formatShortName(it) } ?: "Курсант"
+        cancelByInstructor(sessionId, reason) { err ->
+            if (err != null) updateState { networkError = err }
+            else {
+                showNotification("Вождение отменено" + formatDayTimeShort(startMs) + ". Курсант: $cadetShortName")
+                getOpenWindowsForInstructor(usr.id) { wins ->
+                    getSessionsForInstructor(usr.id) { sess ->
+                        getBalanceHistory(usr.id) { hist ->
+                            updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                            notifyNewBalanceOpsForCurrentUser(hist)
+                        }
+                    }
+                }
+            }
+        }
+    })
+    document.getElementById("sd-instructor-cancel-reason-cancel")?.addEventListener("click", {
+        document.getElementById("sd-cancel-reason-other-wrap")?.classList?.add("sd-hidden")
+        (document.getElementById("sd-cancel-reason-other-text") as? HTMLTextAreaElement)?.value = ""
+        document.getElementById("sd-instructor-cancel-reason-modal")?.let { m -> m.classList.add("sd-hidden") }
+    })
+}
+
+/** Модалка «Опаздываю» — вне #sd-card, чтобы не моргала при опросе/рендере. */
+private fun instructorRunningLateModalOverlayHtml(): String = """<div class="sd-modal-overlay sd-hidden" id="sd-running-late-modal"><div class="sd-modal"><h3 class="sd-modal-title">Опаздываю</h3><p>Выберите задержку:</p><div class="sd-running-late-options"><label class="sd-radio"><input type="radio" name="sd-late-mins" value="5" /> 5 мин.</label><label class="sd-radio"><input type="radio" name="sd-late-mins" value="10" /> 10 мин.</label><label class="sd-radio"><input type="radio" name="sd-late-mins" value="15" /> 15 мин.</label></div><p class="sd-modal-actions"><button type="button" id="sd-running-late-confirm" class="sd-btn sd-btn-primary">Подтвердить</button><button type="button" id="sd-running-late-cancel" class="sd-btn sd-btn-secondary">Отмена</button></p></div></div>"""
+
+private fun appendInstructorRunningLateModalIfNeeded(root: org.w3c.dom.Element) {
+    if (appState.screen != AppScreen.Instructor || appState.user?.role != "instructor") {
+        document.getElementById("sd-running-late-modal")?.remove()
+        return
+    }
+    if (document.getElementById("sd-running-late-modal") != null) return
+    val wrap = document.createElement("div")
+    wrap.innerHTML = instructorRunningLateModalOverlayHtml()
+    val el = wrap.firstElementChild ?: return
+    root.appendChild(el)
+    wireInstructorRunningLateModalListeners()
+}
+
+private fun wireInstructorRunningLateModalListeners() {
+    document.getElementById("sd-running-late-confirm")?.addEventListener("click", {
+        val usr = appState.user ?: return@addEventListener
+        if (usr.role != "instructor") return@addEventListener
+        val modal = document.getElementById("sd-running-late-modal") ?: return@addEventListener
+        val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
+        val checkedEl = document.querySelector("input[name=\"sd-late-mins\"]:checked")?.asDynamic()
+        val delay = (checkedEl?.value as? String)?.toIntOrNull() ?: run { showToast("Выберите задержку"); return@addEventListener }
+        val originalStart = appState.recordingSessions.find { it.id == sessionId }?.startTimeMillis ?: 0L
+        val delayMs = delay * 60L * 1000L
+        val untilMs = js("Date.now()").unsafeCast<Double>().toLong() + delayMs
+        updateState { instructorRunningLateUntilMs = untilMs }
+        setInstructorRunningLate(sessionId, delay) { err ->
+            if (err != null) {
+                updateState { networkError = err; instructorRunningLateUntilMs = 0L }
+                return@setInstructorRunningLate
+            }
+            getSessionsForInstructor(usr.id) { sess ->
+                val toShift = sess.filter { it.id != sessionId && it.status == "scheduled" && it.startTimeMillis != null && it.startTimeMillis!! > originalStart && it.startTimeMillis!! <= originalStart + delayMs }
+                fun shiftNext(remaining: List<DrivingSession>) {
+                    if (remaining.isEmpty()) {
+                        getSessionsForInstructor(usr.id) { s -> updateState { recordingSessions = s } }
+                        showNotification("Опаздываю: сдвиг на $delay мин." + formatDayTimeShort(originalStart))
+                        modal.classList.add("sd-hidden")
+                        return
+                    }
+                    val sess = remaining.first()
+                    updateSessionStartTime(sess.id, (sess.startTimeMillis ?: 0L) + delayMs) {
+                        shiftNext(remaining.drop(1))
+                    }
+                }
+                shiftNext(toShift)
+            }
+        }
+    })
+    document.getElementById("sd-running-late-cancel")?.addEventListener("click", {
+        document.getElementById("sd-running-late-modal")?.let { m -> m.classList.add("sd-hidden") }
+    })
+}
+
+/** Подтверждение отмены занятия на вкладке «Запись» (инструктор/курсант) — вне #sd-card. */
+private fun recCancelSessionConfirmModalOverlayHtml(): String = """<div class="sd-modal-overlay sd-hidden" id="sd-rec-cancel-session-confirm-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вы уверены?</h3><p class="sd-modal-actions"><button type="button" id="sd-rec-cancel-session-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-rec-cancel-session-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>"""
+
+private fun appendRecCancelSessionConfirmModalIfNeeded(root: org.w3c.dom.Element) {
+    if (appState.screen != AppScreen.Instructor && appState.screen != AppScreen.Cadet) {
+        document.getElementById("sd-rec-cancel-session-confirm-modal")?.remove()
+        return
+    }
+    if (document.getElementById("sd-rec-cancel-session-confirm-modal") != null) return
+    val wrap = document.createElement("div")
+    wrap.innerHTML = recCancelSessionConfirmModalOverlayHtml()
+    val el = wrap.firstElementChild ?: return
+    root.appendChild(el)
+    wireRecCancelSessionConfirmModalListeners()
+}
+
+private fun wireRecCancelSessionConfirmModalListeners() {
+    document.getElementById("sd-rec-cancel-session-yes")?.addEventListener("click", {
+        val usr = appState.user ?: return@addEventListener
+        if (usr.role != "instructor" && usr.role != "cadet") return@addEventListener
+        val modal = document.getElementById("sd-rec-cancel-session-confirm-modal") ?: return@addEventListener
+        val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
+        val session = appState.recordingSessions.find { it.id == sessionId }
+        val startMs = session?.startTimeMillis
+        val cadetShortNameForNotif = if (usr.role == "instructor") appState.instructorCadets.find { it.id == session?.cadetId }?.fullName?.let { formatShortName(it) } ?: "Курсант" else null
+        modal.classList.add("sd-hidden")
+        val onSuccess = {
+            showNotification("Вождение отменено" + formatDayTimeShort(startMs) + (if (cadetShortNameForNotif != null) ". Курсант: $cadetShortNameForNotif" else ""))
+            if (usr.role == "cadet") {
+                val instId = usr.assignedInstructorId ?: ""
+                getOpenWindowsForCadet(instId) { wins ->
+                    getSessionsForCadet(usr.id) { sess ->
+                        updateState { recordingOpenWindows = wins; recordingSessions = sess }
+                    }
+                }
+            } else {
+                getOpenWindowsForInstructor(usr.id) { wins ->
+                    getSessionsForInstructor(usr.id) { sess ->
+                        getBalanceHistory(usr.id) { hist ->
+                            updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                            notifyNewBalanceOpsForCurrentUser(hist)
+                        }
+                    }
+                }
+            }
+        }
+        if (usr.role == "cadet") {
+            cancelByCadet(sessionId) { err ->
+                if (err != null) updateState { networkError = err }
+                else onSuccess()
+            }
+        } else {
+            cancelByInstructor(sessionId, "—") { err ->
+                if (err != null) updateState { networkError = err }
+                else onSuccess()
+            }
+        }
+    })
+    document.getElementById("sd-rec-cancel-session-no")?.addEventListener("click", {
+        document.getElementById("sd-rec-cancel-session-confirm-modal")?.let { m -> m.classList.add("sd-hidden") }
+    })
+}
+
+private fun wireAdminAddGroupModalControls() {
+    val chk = document.getElementById("sd-admin-group-no-date") as? HTMLInputElement ?: return
+    val from = document.getElementById("sd-admin-group-from") as? HTMLInputElement
+    val to = document.getElementById("sd-admin-group-to") as? HTMLInputElement
+    val wrap = document.querySelector(".sd-admin-group-dates")
+    fun sync() {
+        val noDate = chk.checked
+        from?.asDynamic()?.disabled = noDate
+        to?.asDynamic()?.disabled = noDate
+        wrap?.classList?.toggle("sd-admin-group-dates-muted", noDate)
+    }
+    chk.addEventListener("change", { sync() })
+    sync()
+}
+
+private fun renderAdminAddGroupModalHtml(): String {
+    val editId = appState.adminEditingGroupId
+    val g = editId?.let { id -> appState.cadetGroups.find { it.id == id } }
+    val title = if (g != null) "Редактировать группу" else "Новая группа"
+    val numVal = (g?.numberLabel ?: "").escapeHtml()
+    val noDateChecked = g != null && (g.dateFromMillis == null || g.dateToMillis == null)
+    val fromVal = g?.dateFromMillis?.let { formatMillisToIsoDate(it) } ?: ""
+    val toVal = g?.dateToMillis?.let { formatMillisToIsoDate(it) } ?: ""
+    val datesDisabledAttr = if (noDateChecked) " disabled" else ""
+    val noDateCheckedAttr = if (noDateChecked) " checked" else ""
+    val datesMutedClass = if (noDateChecked) " sd-admin-group-dates-muted" else ""
+    return """<div class="sd-modal-overlay" id="sd-admin-add-group-overlay">
+        <div class="sd-modal sd-admin-group-modal" id="sd-admin-add-group-dialog">
+            <h3 class="sd-modal-title">$title</h3>
+            <div class="sd-admin-group-fields">
+                <label class="sd-auth-label" for="sd-admin-group-number">№ группы</label>
+                <input type="text" id="sd-admin-group-number" class="sd-auth-input" maxlength="64" placeholder="Число или текст" autocomplete="off" value="$numVal" />
+                <label class="sd-auth-label">Срок обучения</label>
+                <div class="sd-admin-group-no-date-row">
+                    <label class="sd-switch sd-switch-no-date">
+                        <input type="checkbox" id="sd-admin-group-no-date"$noDateCheckedAttr />
+                        <span class="sd-switch-slider" aria-hidden="true"></span>
+                        <span class="sd-switch-label">Без срока обучения</span>
+                    </label>
+                </div>
+                <div class="sd-admin-group-dates$datesMutedClass">
+                    <span class="sd-muted">с</span>
+                    <input type="date" id="sd-admin-group-from" class="sd-auth-input sd-admin-group-date-inp" value="$fromVal"$datesDisabledAttr />
+                    <span class="sd-muted">по</span>
+                    <input type="date" id="sd-admin-group-to" class="sd-auth-input sd-admin-group-date-inp" value="$toVal"$datesDisabledAttr />
+                </div>
+            </div>
+            <p class="sd-modal-actions">
+                <button type="button" id="sd-admin-add-group-cancel" class="sd-btn sd-btn-secondary">Отменить</button>
+                <button type="button" id="sd-admin-add-group-save" class="sd-btn sd-btn-primary">Сохранить</button>
+            </p>
+        </div>
+    </div>"""
+}
+
+private fun renderAdminPickGroupModalHtml(cadetId: String): String {
+    val groups = appState.cadetGroups
+    val groupBtns = groups.joinToString("") { g ->
+        val label = cadetGroupDisplayTextEscaped(g)
+        """<button type="button" class="sd-btn sd-btn-secondary sd-admin-pick-group-item" data-admin-pick-group="${g.id.escapeHtml()}">$label</button>"""
+    }
+    val emptyHint = if (groups.isEmpty()) """<p class="sd-muted sd-admin-pick-group-empty">Нет групп. Создайте через «Добавить группу».</p>""" else ""
+    return """<div class="sd-modal-overlay" id="sd-admin-cadet-group-picker-overlay" data-cadet-id="${cadetId.escapeHtml()}">
+        <div class="sd-modal sd-admin-group-modal" id="sd-admin-cadet-group-picker-dialog">
+            <h3 class="sd-modal-title">Выберите группу</h3>
+            $emptyHint
+            <div class="sd-admin-pick-group-list">
+                <button type="button" class="sd-btn sd-btn-secondary sd-admin-pick-group-item" data-admin-pick-group="">Без группы</button>
+                $groupBtns
+            </div>
+            <p class="sd-modal-actions"><button type="button" id="sd-admin-cadet-group-picker-cancel" class="sd-btn sd-btn-secondary">Отмена</button></p>
+        </div>
+    </div>"""
+}
+
+/**
+ * Модалки групп вешаем на [root], а не в #sd-card — иначе при каждом updateState поля ввода пересоздаются и «моргают».
+ */
+private fun appendAdminCadetGroupModalsIfNeeded(root: org.w3c.dom.Element) {
+    val adminHome = appState.user?.role == "admin" && appState.selectedTabIndex == 0
+    if (!adminHome) {
+        removeAdminCadetGroupModalsFromRoot()
+        return
+    }
+
+    if (appState.adminAddGroupModalOpen) {
+        val ex = document.getElementById("sd-admin-add-group-overlay")
+        val sig = appState.adminEditingGroupId ?: ""
+        val needNew = ex == null || ex.getAttribute("data-modal-sig") != sig
+        if (needNew) {
+            ex?.let { el -> el.parentNode?.removeChild(el) }
+            val wrap = document.createElement("div")
+            wrap.innerHTML = renderAdminAddGroupModalHtml()
+            val el = wrap.firstElementChild ?: return
+            el.setAttribute("data-modal-sig", sig)
+            root.appendChild(el)
+            wireAdminAddGroupModalControls()
+        }
+    } else {
+        document.getElementById("sd-admin-add-group-overlay")?.let { el -> el.parentNode?.removeChild(el) }
+    }
+
+    val pid = appState.adminCadetGroupPickerCadetId
+    if (pid != null) {
+        val groupsSig = appState.cadetGroups.joinToString("|") { "${it.id}:${it.numberLabel}:${it.dateFromMillis}:${it.dateToMillis}:${it.createdAtMillis}" }
+        val ex = document.getElementById("sd-admin-cadet-group-picker-overlay")
+        val needNew = ex == null
+            || ex.getAttribute("data-cadet-id") != pid
+            || ex.getAttribute("data-groups-sig") != groupsSig
+        if (needNew) {
+            ex?.let { el -> el.parentNode?.removeChild(el) }
+            val wrap = document.createElement("div")
+            wrap.innerHTML = renderAdminPickGroupModalHtml(pid)
+            val el = wrap.firstElementChild ?: return
+            el.setAttribute("data-groups-sig", groupsSig)
+            root.appendChild(el)
+        }
+    } else {
+        document.getElementById("sd-admin-cadet-group-picker-overlay")?.let { el -> el.parentNode?.removeChild(el) }
+    }
+}
+
+private fun refreshAdminScheduleData() {
+    fun runWithUsers(users: List<User>) {
+        val instructors = users.filter { it.role == "instructor" }
+        val schedIdx = getTabsForUserRole("admin").indexOf("Расписание")
+        if (instructors.isEmpty()) {
+            updateState {
+                adminScheduleSessionsByInstructorId = emptyMap()
+                adminScheduleLoading = false
+                if (selectedTabIndex == schedIdx && user?.role == "admin") {
+                    adminScheduleSeenSignature = ""
+                }
+            }
+            return
+        }
+        updateState { adminScheduleLoading = true; networkError = null }
+        val tid = window.setTimeout({ updateState { adminScheduleLoading = false } }, 12000)
+        getSessionsForInstructorsMap(instructors.map { it.id }) { map ->
+            window.clearTimeout(tid)
+            val onSched = appState.selectedTabIndex == schedIdx && appState.user?.role == "admin"
+            val sig = computeAdminScheduleSignature(map)
+            updateState {
+                adminScheduleSessionsByInstructorId = map
+                adminScheduleLoading = false
+                if (onSched) adminScheduleSeenSignature = sig
+            }
+        }
+    }
+    val users = appState.adminHomeUsers.ifEmpty { appState.balanceAdminUsers }
+    if (users.isEmpty()) {
+        updateState { adminScheduleLoading = true; networkError = null }
+        getUsers { list ->
+            updateState { adminHomeUsers = list; balanceAdminUsers = list }
+            runWithUsers(list)
+        }
+        return
+    }
+    runWithUsers(users)
+}
+
+private fun renderAdminScheduleTabContent(): String {
+    val loading = appState.adminScheduleLoading
+    val users = appState.adminHomeUsers.ifEmpty { appState.balanceAdminUsers }
+    val instructors = users.filter { it.role == "instructor" }.sortedBy { it.fullName.lowercase() }
+    val map = appState.adminScheduleSessionsByInstructorId
+    val userById = users.associateBy { it.id }
+
+    fun cadetShortName(cadetId: String): String {
+        val u = userById[cadetId]
+        return u?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "—"
+    }
+
+    fun sessionStatusLabel(st: String): String = when (st) {
+        "completed" -> "Завершено"
+        "cancelledByInstructor" -> "Отменено (инструктор)"
+        "cancelledByCadet" -> "Отменено (курсант)"
+        else -> st
+    }
+
+    fun upcomingStatusLabel(st: String): String = when (st) {
+        "scheduled" -> "Запланировано"
+        "inProgress" -> "В процессе"
+        else -> st
+    }
+
+    /** Заголовок дня и таблица №, время, курсант, статус — одинаковый формат для текущих записей и истории. */
+    fun scheduleDayBlocksHtml(
+        sessionsByDate: List<Pair<String, List<DrivingSession>>>,
+        statusFor: (DrivingSession) -> String,
+    ): String {
+        if (sessionsByDate.isEmpty()) return ""
+        return sessionsByDate.joinToString("") { (dateStr, daySessions) ->
+            val sorted = daySessions.sortedBy { it.startTimeMillis ?: 0L }
+            val firstMs = sorted.firstOrNull()?.startTimeMillis
+            val drivingCount = sorted.size
+            val dayTitle = if (firstMs != null && firstMs > 0) {
+                val w = weekdayNameLongRu(firstMs)
+                """${dateStr.escapeHtml()}, ${w.escapeHtml()} (${drivingCount})"""
+            } else {
+                """${dateStr.escapeHtml()} (${drivingCount})"""
+            }
+            val rows = sorted.mapIndexed { idx, s ->
+                val ms = s.startTimeMillis ?: 0L
+                val num = idx + 1
+                val timeStr = formatTimeOnly(ms)
+                val cad = cadetShortName(s.cadetId)
+                val st = statusFor(s)
+                """<tr><td>$num</td><td>${timeStr.escapeHtml()}</td><td>${cad.escapeHtml()}</td><td>${st.escapeHtml()}</td></tr>"""
+            }.joinToString("")
+            """<div class="sd-admin-schedule-day-block">
+                <h5 class="sd-admin-schedule-day-head">$dayTitle</h5>
+                <div class="sd-admin-schedule-table-wrap">
+                    <table class="sd-admin-schedule-table">
+                        <thead><tr><th>№</th><th>Время</th><th>Фамилия И.О. курсанта</th><th>Статус</th></tr></thead>
+                        <tbody>$rows</tbody>
+                    </table>
+                </div>
+            </div>"""
+        }
+    }
+
+    if (loading && map.isEmpty()) {
+        return """<h2>Расписание</h2><p class="sd-loading-text">Загрузка расписания…</p>"""
+    }
+    if (instructors.isEmpty()) {
+        return """<h2>Расписание</h2><p class="sd-muted">Нет инструкторов. Откройте вкладку «Главная» и загрузите пользователей.</p>"""
+    }
+
+    val blocks = instructors.joinToString("") { inst ->
+        val sessions = map[inst.id] ?: emptyList()
+        val upcoming = sessions.filter { it.status == "scheduled" || it.status == "inProgress" }
+            .sortedBy { it.startTimeMillis ?: 0L }
+        val history = sessions.filter {
+            it.status == "completed" || it.status == "cancelledByInstructor" || it.status == "cancelledByCadet"
+        }.sortedByDescending { it.startTimeMillis ?: 0L }
+
+        val byDateUp = upcoming.groupBy { formatDateOnly(it.startTimeMillis) }
+        val upcomingDays: List<Pair<String, List<DrivingSession>>> = byDateUp.entries
+            .sortedBy { e -> e.value.minOfOrNull { s -> s.startTimeMillis ?: 0L } ?: 0L }
+            .map { it.key to it.value }
+
+        val upcomingHtml = if (upcoming.isEmpty()) {
+            """<p class="sd-muted">Нет запланированных занятий.</p>"""
+        } else {
+            scheduleDayBlocksHtml(upcomingDays) { s -> upcomingStatusLabel(s.status) }
+        }
+
+        val byMonth = history.groupBy { s ->
+            val ms = s.startTimeMillis ?: 0L
+            if (ms <= 0) "0000-00" else monthSortKeyFromMillis(ms)
+        }
+        val monthKeys = byMonth.keys.filter { it != "0000-00" }.sortedDescending() +
+            listOf("0000-00").filter { byMonth.containsKey("0000-00") }
+
+        val historyBlock = if (history.isEmpty()) {
+            """<p class="sd-muted">История пуста.</p>"""
+        } else {
+            monthKeys.joinToString("") { mk ->
+                val monthSessions = byMonth[mk] ?: emptyList()
+                val labelMs = monthSessions.maxOfOrNull { it.startTimeMillis ?: 0L } ?: 0L
+                val monthTitle = monthYearTitleRu(labelMs).escapeHtml()
+                val byDateHist = monthSessions.groupBy { formatDateOnly(it.startTimeMillis) }
+                val historyDays: List<Pair<String, List<DrivingSession>>> = byDateHist.entries
+                    .sortedByDescending { e -> e.value.maxOfOrNull { s -> s.startTimeMillis ?: 0L } ?: 0L }
+                    .map { it.key to it.value }
+                """<div class="sd-admin-schedule-month-block"><h4 class="sd-admin-schedule-month-head">$monthTitle</h4>${scheduleDayBlocksHtml(historyDays) { s -> sessionStatusLabel(s.status) }}</div>"""
+            }
+        }
+
+        val instIdEsc = inst.id.escapeHtml()
+        val historySummaryRow = """<span class="sd-admin-schedule-summary-heading">
+                <span class="sd-admin-schedule-summary-title">История вождений (${history.size})</span>
+                <button type="button" class="sd-btn sd-btn-small sd-btn-danger sd-admin-history-clear-btn" data-admin-history-clear="$instIdEsc" title="Удалить все записи истории вождений">Очистить</button>
+            </span>"""
+
+        """<details class="sd-admin-schedule-block sd-admin-schedule-instructor-details" open>
+            <summary class="sd-admin-schedule-instructor-summary">Инструктор: ${formatShortName(inst.fullName).escapeHtml()}</summary>
+            <div class="sd-admin-schedule-instructor-body">
+            <h4 class="sd-admin-schedule-h4">Текущие записи</h4>
+            $upcomingHtml
+            <details class="sd-admin-schedule-details">
+                <summary class="sd-admin-schedule-summary sd-admin-schedule-history-summary">$historySummaryRow</summary>
+                $historyBlock
+            </details>
+            </div>
+        </details>"""
+    }
+
+    val refreshBtn = """<p class="sd-admin-schedule-actions"><button type="button" id="sd-admin-schedule-refresh" class="sd-btn sd-btn-secondary sd-btn-small">Обновить</button></p>"""
+    return """<h2>Расписание</h2>
+        $refreshBtn
+        <div class="sd-admin-schedule-list">$blocks</div>"""
 }
 
 private fun renderAdminHomeContent(): String {
@@ -1811,7 +3752,10 @@ private fun renderAdminHomeContent(): String {
             </div>
         </div>"""
     }
-    val cadetCards = cadets.joinToString("") { u ->
+    fun adminCadetCardHtml(u: User, showGroupLabelOnCard: Boolean = true): String {
+        val driveCount = appState.adminCadetCompletedDriveCounts[u.id] ?: 0
+        val group = u.cadetGroupId?.let { gid -> appState.cadetGroups.find { it.id == gid } }
+        val groupText = cadetGroupDisplayTextEscaped(group)
         val instId = u.assignedInstructorId
         val instName = instId?.let { id -> instructors.find { it.id == id }?.let { formatShortName(it.fullName) } ?: "—" } ?: "—"
         val displayInstText = if (instId != null) instName.escapeHtml() else "Не назначен"
@@ -1822,7 +3766,7 @@ private fun renderAdminHomeContent(): String {
             """<button type="button" class="sd-ucard-tag-btn sd-ucard-tag-btn-warn sd-admin-unlink-right" data-admin-unlink-instructor="${instId.escapeHtml()}" data-admin-unlink-cadet="${u.id.escapeHtml()}" title="Отвязать инструктора">$iconUnlinkSvg</button>"""
         else
             """<button type="button" class="sd-ucard-tag-btn sd-admin-assign-cadet-btn" data-admin-assign-cadet="${u.id.escapeHtml()}" title="Назначить инструктора">$iconUserPlusSvg</button>"""
-        """<div class="sd-ucard sd-ucard-cadet">
+        return """<div class="sd-ucard sd-ucard-cadet">
             <div class="sd-ucard-accent-bar"></div>
             <div class="sd-ucard-top">
                 $cadetAvatarHtml
@@ -1839,6 +3783,8 @@ private fun renderAdminHomeContent(): String {
                 <div class="sd-ucard-row"><span class="sd-ucard-row-icon">$iconPhoneLabelSvg</span>${(u.phone.ifBlank { "Телефон не указан" }).escapeHtml()}</div>
                 <div class="sd-ucard-row"><span class="sd-ucard-row-icon">$iconEmailLabelSvg</span>${(u.email.ifBlank { "—" }).escapeHtml()}</div>
                 <div class="sd-ucard-row sd-ucard-row-stretch"><span class="sd-ucard-row-icon">$iconInstructorSvg</span>Инструктор: <strong>$displayInstText</strong>$unlinkOrAssign</div>
+                <div class="sd-ucard-row"><span class="sd-ucard-row-icon">$iconCarSvg</span>Кол-во вождений: <strong>$driveCount</strong></div>
+                ${if (showGroupLabelOnCard) """<div class="sd-ucard-row sd-ucard-row-stretch"><span class="sd-ucard-row-icon">$iconGroupSvg</span>Группа: <strong>$groupText</strong><button type="button" class="sd-ucard-tag-btn sd-admin-cadet-group-btn" data-admin-cadet-group-pick="${u.id.escapeHtml()}" title="Выбрать группу">$iconSelectSvg</button></div>""" else """<div class="sd-ucard-row sd-ucard-row-stretch"><span class="sd-ucard-row-icon">$iconGroupSvg</span><span class="sd-admin-cadet-group-inline-label">Сменить группу</span><button type="button" class="sd-ucard-tag-btn sd-admin-cadet-group-btn" data-admin-cadet-group-pick="${u.id.escapeHtml()}" title="Выбрать группу">$iconSelectSvg</button></div>"""}
             </div>
             <div class="sd-ucard-footer">
                 <button type="button" class="sd-ucard-foot-btn ${if (u.isActive) "sd-ucard-foot-btn-deact" else "sd-ucard-foot-btn-act"}" data-admin-activate="${u.id.escapeHtml()}" data-admin-active="${u.isActive}" title="${if (u.isActive) "Деактивировать" else "Активировать"}">$iconPowerSvg</button>
@@ -1846,6 +3792,41 @@ private fun renderAdminHomeContent(): String {
             </div>
         </div>"""
     }
+    val groupIds = appState.cadetGroups.map { it.id }.toSet()
+    val cadetGroupSectionsHtml = appState.cadetGroups.joinToString("") { g ->
+        val inGroup = cadets.filter { it.cadetGroupId == g.id }.sortedBy { it.fullName }
+        val title = cadetGroupDisplayTextEscaped(g)
+        val cardsInner = if (inGroup.isEmpty()) {
+            """<p class="sd-muted sd-admin-cadets-empty">В этой группе пока нет курсантов</p>"""
+        } else {
+            inGroup.joinToString("") { adminCadetCardHtml(it, showGroupLabelOnCard = false) }
+        }
+        """<div class="sd-admin-cadets-subsection" data-admin-cadet-group-section="${g.id.escapeHtml()}">
+            <div class="sd-admin-cadets-subsection-head">
+                <h4 class="sd-admin-cadets-subtitle">$title <span class="sd-admin-cadets-subcount">(${inGroup.size})</span></h4>
+                <div class="sd-admin-cadets-subsection-actions">
+                    <button type="button" class="sd-chat-create-group-btn sd-accent-pill-light sd-admin-group-edit" data-admin-group-edit="${g.id.escapeHtml()}">Редактировать</button>
+                    <button type="button" class="sd-chat-create-group-btn sd-accent-pill-light sd-chat-create-group-btn--danger sd-admin-group-delete" data-admin-group-delete="${g.id.escapeHtml()}">Удалить</button>
+                </div>
+            </div>
+            <div class="sd-admin-cards sd-admin-cards-cadet-group">$cardsInner</div>
+        </div>"""
+    }
+    val unassignedCadets = cadets.filter { u ->
+        val gid = u.cadetGroupId
+        gid.isNullOrBlank() || !groupIds.contains(gid)
+    }.sortedBy { it.fullName }
+    val unassignedCardsInner = if (unassignedCadets.isEmpty()) {
+        """<p class="sd-muted sd-admin-cadets-empty">Нет курсантов без группы</p>"""
+    } else {
+        unassignedCadets.joinToString("") { adminCadetCardHtml(it, showGroupLabelOnCard = true) }
+    }
+    val cadetsGroupedHtml = """<div class="sd-admin-cadets-grouped">$cadetGroupSectionsHtml<div class="sd-admin-cadets-subsection sd-admin-cadets-subsection-unassigned" data-admin-cadet-group-section="">
+        <div class="sd-admin-cadets-subsection-head sd-admin-cadets-subsection-head-single">
+            <h4 class="sd-admin-cadets-subtitle">Не в группе <span class="sd-admin-cadets-subcount">(${unassignedCadets.size})</span></h4>
+        </div>
+        <div class="sd-admin-cards sd-admin-cards-cadet-group">$unassignedCardsInner</div>
+    </div></div>"""
     val instOpen = if (appState.adminInstructorsSectionOpen) " open" else ""
     val cadetOpen = if (appState.adminCadetsSectionOpen) " open" else ""
     val modalId = appState.adminInstructorCadetsModalId
@@ -1858,7 +3839,363 @@ private fun renderAdminHomeContent(): String {
         }
         """<div class="sd-modal-overlay" id="sd-admin-cadets-modal-overlay"><div class="sd-modal sd-admin-cadets-modal"><h3 class="sd-modal-title">Курсанты инструктора: $instName</h3><ul class="sd-instructor-cadets-list">$listItems</ul><p class="sd-modal-actions"><button type="button" id="sd-admin-cadets-modal-close" class="sd-btn sd-assign-close-btn">Закрыть</button></p></div></div>"""
     } else ""
-    return """<h2>Главная</h2>$topSlot$newbiesBlock<details class="sd-block sd-details-block" data-admin-section="instructors"$instOpen><summary class="sd-block-title">Инструкторы (${instructors.size})</summary><div class="sd-admin-cards">$instCards</div></details>$assignBlock<details class="sd-block sd-details-block" data-admin-section="cadets"$cadetOpen><summary class="sd-block-title">Курсанты (${cadets.size})</summary><div class="sd-admin-cards">$cadetCards</div></details>$cadetsModalHtml"""
+    val cadetsToolbarHint = if (appState.cadetGroups.isEmpty()) {
+        """<p class="sd-muted sd-admin-cadets-toolbar-hint">Пока нет групп. Создайте группу — под её названием появятся карточки курсантов.</p>"""
+    } else ""
+    return """<h2>Главная</h2>$topSlot$newbiesBlock<details class="sd-block sd-details-block" data-admin-section="instructors"$instOpen><summary class="sd-block-title">Инструкторы (${instructors.size})</summary><div class="sd-admin-cards">$instCards</div></details>$assignBlock<details class="sd-block sd-details-block" data-admin-section="cadets"$cadetOpen><summary class="sd-block-title">Курсанты (${cadets.size})</summary><div class="sd-admin-cadets-toolbar"><button type="button" id="sd-admin-add-group-btn" class="sd-chat-create-group-btn sd-accent-pill-light sd-admin-add-group-toolbar-btn" title="Добавить группу курсантов" aria-label="Добавить группу">$iconCreateGroupSvg Добавить группу</button>$cadetsToolbarHint</div>$cadetsGroupedHtml</details>$cadetsModalHtml"""
+}
+
+/** День недели: Пн=0 … Вс=6 (локальное время). */
+private fun weekdayIndexMon0Local(ms: Long): Int {
+    val d = js("new Date(ms)").unsafeCast<dynamic>()
+    val day = (d.getDay() as Number).toInt()
+    return if (day == 0) 6 else day - 1
+}
+
+private fun formatFixed1(x: Double): String =
+    js("(function(x){ return Number(x).toFixed(1); })")(x).unsafeCast<String>()
+
+private fun resetInstructorProfileCalculatorCache() {
+    instructorProfileCalcTokensOverride = null
+    instructorProfileCalcRubInput = ""
+    instructorProfileEarnedCalcMountEl?.let { el ->
+        el.parentNode?.removeChild(el)
+    }
+    instructorProfileEarnedCalcMountEl = null
+}
+
+/** Снять узел калькулятора с экрана перед заменой innerHTML #sd-card (сохраняем DOM полей ввода). */
+private fun detachInstructorProfileEarnedCalcMount() {
+    val el = document.getElementById("sd-instr-earned-calc-mount") ?: instructorProfileEarnedCalcMountEl
+    if (el != null) {
+        instructorProfileEarnedCalcMountEl = el
+        el.parentNode?.removeChild(el)
+    }
+}
+
+private fun instructorProfileEarnedCalcHtml(totalEarned: Int): String {
+    val tokensForCalc = instructorProfileCalcTokensDisplayed(totalEarned)
+    val tokensAttr = tokensForCalc.escapeHtml()
+    val rubAttr = instructorProfileCalcRubInput.escapeHtml()
+    val rubTotalLabel = instructorProfileCalcRubTotalLabel(tokensForCalc, instructorProfileCalcRubInput).escapeHtml()
+    return """<div id="sd-instr-earned-calc-mount" class="sd-instr-earned-calc">
+            <div class="sd-instr-earned-calc-grid">
+                <div class="sd-instr-earned-field">
+                    <label class="sd-instr-earned-field-label" for="sd-instr-earned-tokens-input">Талоны</label>
+                    <input type="text" inputmode="numeric" id="sd-instr-earned-tokens-input" class="sd-auth-input sd-instr-earned-input" value="$tokensAttr" maxlength="8" autocomplete="off" />
+                </div>
+                <div class="sd-instr-earned-field">
+                    <label class="sd-instr-earned-field-label" for="sd-instr-rub-per-token">Руб.</label>
+                    <input type="text" inputmode="decimal" id="sd-instr-rub-per-token" class="sd-auth-input sd-instr-earned-input" value="$rubAttr" maxlength="12" placeholder="за 1" autocomplete="off" />
+                </div>
+                <div class="sd-instr-earned-total-col">
+                    <span class="sd-instr-earned-total-label">Итого</span>
+                    <span class="sd-instr-earned-rub-out" id="sd-instr-earned-rub-total">$rubTotalLabel</span>
+                </div>
+            </div>
+        </div>"""
+}
+
+/** Вернуть калькулятор в placeholder после рендера профиля. */
+private fun reattachInstructorProfileEarnedCalcMount(root: Element?) {
+    val placeholder = document.getElementById("sd-instr-earned-calc-placeholder")
+    if (placeholder == null) {
+        instructorProfileEarnedCalcMountEl?.let { el ->
+            document.body?.appendChild(el)
+            el.classList.add("sd-hidden")
+        }
+        return
+    }
+    val hist = appState.historyBalance
+    val totalEarned = hist.filter { it.type == "credit" }.sumOf { it.amount }
+    var mount = instructorProfileEarnedCalcMountEl
+    if (mount == null) {
+        val wrap = document.createElement("div")
+        wrap.innerHTML = instructorProfileEarnedCalcHtml(totalEarned)
+        mount = wrap.firstElementChild as? Element
+        instructorProfileEarnedCalcMountEl = mount
+    } else {
+        mount.classList.remove("sd-hidden")
+    }
+    if (mount != null && mount.parentNode != placeholder) {
+        placeholder.appendChild(mount)
+    }
+}
+
+private fun isInstructorEarnedCalcInputFocused(): Boolean {
+    val a = document.activeElement ?: return false
+    val id = a.unsafeCast<dynamic>().id as? String ?: return false
+    return id == "sd-instr-earned-tokens-input" || id == "sd-instr-rub-per-token"
+}
+
+/** Один глобальный слушатель на document — не теряется при смене #root / #sd-card. */
+private fun ensureInstructorProfileEarnedCalcDelegation() {
+    val w = window.asDynamic()
+    if (w.__sdEarnedCalcDelegation == true) return
+    w.__sdEarnedCalcDelegation = true
+    document.addEventListener("input", { ev ->
+        val t = ev.target as? HTMLInputElement ?: return@addEventListener
+        when (t.id) {
+            "sd-instr-earned-tokens-input" -> {
+                val digits = t.value.filter { it.isDigit() }.take(8)
+                if (t.value != digits) t.value = digits
+                instructorProfileCalcTokensOverride = digits
+                scheduleInstructorEarnedRubDisplayUpdate()
+            }
+            "sd-instr-rub-per-token" -> {
+                var s = t.value.replace(",", ".").filter { it.isDigit() || it == '.' }
+                val firstDot = s.indexOf('.')
+                if (firstDot >= 0) {
+                    s = s.substring(0, firstDot + 1) + s.substring(firstDot + 1).filter { it.isDigit() }.take(2)
+                }
+                if (t.value != s) t.value = s
+                instructorProfileCalcRubInput = s
+                scheduleInstructorEarnedRubDisplayUpdate()
+            }
+        }
+    }, true)
+    // После ухода с поля — один раз перерисовать карточку (актуальные графики/баланс без мигания при вводе).
+    document.addEventListener("focusout", { ev ->
+        val t = ev.target as? org.w3c.dom.HTMLElement ?: return@addEventListener
+        val id = t.id
+        if (id != "sd-instr-earned-tokens-input" && id != "sd-instr-rub-per-token") return@addEventListener
+        scheduleAppRender?.invoke()
+    }, true)
+    // Как у кнопок «Отменить» в <details>: не даём всплывать mousedown/pointerdown, чтобы не ловили лишние обработчики.
+    fun stopPointerIfEarnedCalcMount(ev: dynamic) {
+        val raw = ev?.target as? org.w3c.dom.Node ?: return
+        val inside = js("(function(n){ return n && n.closest && n.closest('#sd-instr-earned-calc-mount'); })")(raw) != null
+        if (inside) {
+            (ev as? org.w3c.dom.events.Event)?.stopPropagation()
+        }
+    }
+    document.addEventListener("mousedown", { ev: dynamic -> stopPointerIfEarnedCalcMount(ev) }, false)
+    document.addEventListener("pointerdown", { ev: dynamic -> stopPointerIfEarnedCalcMount(ev) }, false)
+}
+
+private fun scheduleInstructorEarnedRubDisplayUpdate() {
+    if (instructorEarnedRubRafId != 0) {
+        window.cancelAnimationFrame(instructorEarnedRubRafId)
+    }
+    instructorEarnedRubRafId = window.requestAnimationFrame {
+        instructorEarnedRubRafId = 0
+        updateInstructorEarnedRubDisplay()
+    }
+}
+
+private fun instructorProfileCalcTokensDisplayed(totalEarned: Int): String =
+    when (instructorProfileCalcTokensOverride) {
+        null -> totalEarned.toString()
+        else -> instructorProfileCalcTokensOverride!!
+    }
+
+private fun instructorProfileCalcRubTotalLabel(tokensStr: String, rubStr: String): String {
+    val tok = tokensStr.filter { it.isDigit() }.toIntOrNull() ?: 0
+    val rub = rubStr.replace(",", ".").toDoubleOrNull() ?: 0.0
+    val total = tok * rub
+    val n = js("(function(x){ return Number(x).toFixed(2); })")(total).unsafeCast<String>()
+    return "$n руб."
+}
+
+private fun updateInstructorEarnedRubDisplay() {
+    val tokStr = (document.getElementById("sd-instr-earned-tokens-input") as? HTMLInputElement)?.value ?: ""
+    val tokens = tokStr.filter { it.isDigit() }.toIntOrNull() ?: 0
+    val rubStr = (document.getElementById("sd-instr-rub-per-token") as? HTMLInputElement)?.value ?: ""
+    val rub = rubStr.replace(",", ".").toDoubleOrNull() ?: 0.0
+    val total = tokens * rub
+    val n = js("(function(x){ return Number(x).toFixed(2); })")(total).unsafeCast<String>()
+    document.getElementById("sd-instr-earned-rub-total")?.textContent = "$n руб."
+}
+
+/** Фон conic-gradient для круговой диаграммы оценок (1–5). */
+private fun buildInstructorRatingPieBackground(counts: List<Int>): String {
+    val total = counts.sum()
+    if (total <= 0) return "conic-gradient(#bdbdbd 0deg 360deg)"
+    val colors = listOf("#E53935", "#FF9800", "#FFEB3B", "#8BC34A", "#4CAF50")
+    var angle = 0.0
+    val parts = mutableListOf<String>()
+    for (i in 0..4) {
+        val c = counts[i]
+        if (c > 0) {
+            val sweep = 360.0 * c / total
+            val a1 = angle + sweep
+            parts.add("${colors[i]} ${angle}deg ${a1}deg")
+            angle = a1
+        }
+    }
+    return "conic-gradient(${parts.joinToString(", ")})"
+}
+
+/** Карточка профиля инструктора на главной / в экране «Профиль». */
+private fun instructorHomeProfileCardHtml(user: User, showProfileShortcut: Boolean): String {
+    val svgEmail = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>"""
+    val svgPhoneP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>"""
+    val svgTicketP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M22 10V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2s.9-2 2-2zm-2-1.46c-1.19.69-2 1.99-2 3.46s.81 2.77 2 3.46V18H4v-2.54c1.19-.69 2-1.99 2-3.46 0-1.48-.8-2.77-1.99-3.46L4 6h16v2.54z"/></svg>"""
+    val instrProfileAvatarHtml = avatarBlockHtml("sd-profile-avatar", user, user.id)
+    val iconPerson = """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>"""
+    val profileBtn = if (showProfileShortcut) {
+        """<button type="button" class="sd-instructor-profile-card-btn" id="sd-instructor-profile-open" title="Профиль" aria-label="Профиль">$iconPerson</button>"""
+    } else ""
+    val wrapOpen = if (showProfileShortcut) """<div class="sd-instructor-profile-card-wrap">""" else ""
+    val wrapClose = if (showProfileShortcut) """</div>""" else ""
+    val card = """
+        <div class="sd-profile-card">
+            <div class="sd-profile-accent-bar"></div>
+            <div class="sd-profile-card-shimmer" aria-hidden="true"></div>
+            <div class="sd-profile-hero">
+                $instrProfileAvatarHtml
+                <div class="sd-profile-hero-info">
+                    <p class="sd-profile-fullname">${(user.fullName.ifBlank { "—" }).escapeHtml()}</p>
+                    <span class="sd-profile-role-badge">Инструктор</span>
+                </div>
+            </div>
+            <div class="sd-profile-info-rows">
+                <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgEmail</span><span class="sd-profile-info-label">Email</span><span class="sd-profile-info-value">${(user.email.ifBlank { "—" }).escapeHtml()}</span></div>
+                <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgPhoneP</span><span class="sd-profile-info-label">Телефон</span><span class="sd-profile-info-value">${(user.phone.ifBlank { "—" }).escapeHtml()}</span></div>
+                <div class="sd-profile-info-row sd-profile-info-row-balance"><span class="sd-profile-info-icon">$svgTicketP</span><span class="sd-profile-info-label">Талоны</span><span class="sd-balance-badge">${user.balance}</span></div>
+            </div>
+        </div>"""
+    return wrapOpen + profileBtn + card + wrapClose
+}
+
+/** Экран «Профиль» инструктора: статистика как в Android (рейтинг, заработок, графики). */
+private fun renderInstructorProfileStatsContent(user: User, version: String): String {
+    val sessions = appState.recordingSessions
+    val hist = appState.historyBalance
+    val nowMs = js("Date.now()").unsafeCast<Double>().toLong()
+    val monthAgo = nowMs - 30L * 24 * 60 * 60 * 1000
+    val totalEarned = hist.filter { it.type == "credit" }.sumOf { it.amount }
+    val earnedLast30 = hist.filter { it.type == "credit" && (it.timestampMillis ?: 0L) >= monthAgo }.sumOf { it.amount }
+    val earned30Html = if (earnedLast30 != 0) {
+        val cls = if (earnedLast30 > 0) "sd-instr-earned-delta-pos" else "sd-instr-earned-delta-neg"
+        val txt = if (earnedLast30 > 0) "+$earnedLast30 за 30 дн." else "$earnedLast30 за 30 дн."
+        """<span class="$cls">${txt.escapeHtml()}</span>"""
+    } else ""
+    val completedCount = sessions.count { it.status == "completed" }
+    val rated = sessions.filter { it.status == "completed" && it.cadetRating in 1..5 }
+    val counts = (1..5).map { r -> rated.count { it.cadetRating == r } }
+    val totalRated = counts.sum()
+    val averageStr = if (totalRated > 0) {
+        formatFixed1(rated.sumOf { it.cadetRating }.toDouble() / totalRated)
+    } else "—"
+    val pieBg = buildInstructorRatingPieBackground(counts)
+    val ratingLegend = (5 downTo 1).joinToString("") { r ->
+        val i = r - 1
+        val cnt = counts[i]
+        val pct = if (totalRated > 0) ((100f * cnt / totalRated).toInt()) else 0
+        val colors = listOf("#E53935", "#FF9800", "#FFEB3B", "#8BC34A", "#4CAF50")
+        """<div class="sd-instr-rating-legend-row"><span class="sd-instr-rating-sq" style="background:${colors[i]}"></span><span>$r ★: $pct%</span></div>"""
+    }
+    val starSvgLarge = """<svg class="sd-instr-rating-star-bg" viewBox="0 0 24 24" width="110" height="110" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <linearGradient id="sdInstrStarBody" x1="15%" y1="5%" x2="85%" y2="95%">
+    <stop offset="0%" stop-color="#FFF9C4"/>
+    <stop offset="35%" stop-color="#FFEB3B"/>
+    <stop offset="65%" stop-color="#F9A825"/>
+    <stop offset="100%" stop-color="#E65100"/>
+  </linearGradient>
+  <linearGradient id="sdInstrStarShine" x1="10%" y1="0%" x2="55%" y2="55%">
+    <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.95"/>
+    <stop offset="40%" stop-color="#FFFFFF" stop-opacity="0.35"/>
+    <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+  </linearGradient>
+  <radialGradient id="sdInstrStarGloss" cx="35%" cy="35%" r="55%">
+    <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.75"/>
+    <stop offset="45%" stop-color="#FFFDE7" stop-opacity="0.25"/>
+    <stop offset="100%" stop-color="#F9A825" stop-opacity="0"/>
+  </radialGradient>
+  <filter id="sdInstrStarDepth" x="-25%" y="-25%" width="150%" height="150%">
+    <feGaussianBlur in="SourceAlpha" stdDeviation="0.6" result="blur"/>
+    <feOffset dx="0" dy="1.2" in="blur" result="off"/>
+    <feComponentTransfer in="off" result="shadow"><feFuncA type="linear" slope="0.4"/></feComponentTransfer>
+    <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+</defs>
+<path filter="url(#sdInstrStarDepth)" fill="url(#sdInstrStarBody)" stroke="#B8860B" stroke-width="0.35" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+<path fill="url(#sdInstrStarShine)" d="M12 3.5l2.05 5.1L19.2 9.1l-3.7 3.6 0.9 4.2L12 15.2l-4.4 2.3-0.9-4.2-3.7-3.6 5.4-0.8L12 3.5z"/>
+<ellipse cx="10.5" cy="9.5" rx="4.2" ry="3" fill="url(#sdInstrStarGloss)" transform="rotate(-18 10.5 9.5)"/>
+</svg>"""
+    val pieInner = if (totalRated > 0) {
+        """<div class="sd-instr-rating-pie" style="background:$pieBg"></div><div class="sd-instr-rating-pie-center">$starSvgLarge<span class="sd-instr-rating-avg-overlay">$averageStr</span></div>"""
+    } else """<p class="sd-muted sd-instr-no-ratings">Нет оценок</p>"""
+    val completedForWeek = sessions.filter { it.status == "completed" }
+    val dayCountsCompleted = IntArray(7)
+    completedForWeek.forEach { s ->
+        val t = s.completedAtMillis ?: s.startTimeMillis ?: return@forEach
+        dayCountsCompleted[weekdayIndexMon0Local(t)]++
+    }
+    val weekBarsHtml = (0 until 7).joinToString("") { i ->
+        val cnt = dayCountsCompleted[i]
+        val h = if (cnt == 0) 4 else ((cnt.toFloat() / 8f * 90f).toInt().coerceIn(4, 90))
+        val barCls = if (cnt == 0) "sd-instr-bar sd-instr-bar-zero" else "sd-instr-bar"
+        val short = listOf("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")[i]
+        """<div class="sd-instr-bar-col"><div class="$barCls" style="height:${h}px"></div><span class="sd-instr-bar-day">$short</span><span class="sd-instr-bar-num">$cnt</span></div>"""
+    }
+    val avgWeek = if (completedForWeek.isNotEmpty()) completedForWeek.size / 7f else 0f
+    val cancelled = sessions.filter { it.status == "cancelledByCadet" }
+    val dayCountsCancel = IntArray(7)
+    cancelled.forEach { s ->
+        val t = s.cancelledAtMillis ?: s.startTimeMillis ?: return@forEach
+        dayCountsCancel[weekdayIndexMon0Local(t)]++
+    }
+    val maxCancel = dayCountsCancel.maxOrNull()?.coerceAtLeast(1) ?: 1
+    val cancelBarsHtml = if (cancelled.isEmpty()) {
+        """<p class="sd-muted">Нет отменённых вождений</p>"""
+    } else {
+        (0 until 7).joinToString("") { i ->
+            val cnt = dayCountsCancel[i]
+            val h = if (cnt == 0) 0 else ((cnt.toFloat() / maxCancel * 80f).toInt().coerceAtLeast(4))
+            val short = listOf("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")[i]
+            """<div class="sd-instr-bar-col"><div class="sd-instr-bar sd-instr-bar-cancel" style="height:${h}px"></div><span class="sd-instr-bar-day">$short</span><span class="sd-instr-bar-num sd-instr-bar-num-cancel">$cnt</span></div>"""
+        }
+    }
+    val profileCard = instructorHomeProfileCardHtml(user, showProfileShortcut = false)
+    val svgBank = """<svg viewBox="0 0 24 24" fill="currentColor" width="40" height="40" class="sd-instr-stat-icon"><path d="M4 10v7h3v-7H4zm6 0v7h3v-7h-3zM2 22h19v-3H2v3zm2-12h15V7l-7.5-4L2 10zm15 0h3v7h-3v-7z"/></svg>"""
+    val svgCar = """<svg viewBox="0 0 24 24" fill="currentColor" width="40" height="40" class="sd-instr-stat-icon"><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/></svg>"""
+    return """<div class="sd-instructor-profile-page">
+        <p class="sd-instructor-profile-toolbar">
+            <button type="button" class="sd-btn sd-btn-secondary sd-instructor-profile-back" id="sd-instructor-profile-back">← Назад</button>
+        </p>
+        <h2 class="sd-instructor-profile-title">Профиль</h2>
+        $profileCard
+        <div class="sd-instr-stat-card sd-instr-stat-card-earned" id="sd-instructor-earned-stat-card">
+            <div class="sd-instr-stat-card-head">
+                <span class="sd-instr-stat-icon-wrap">$svgBank</span>
+                <div>
+                    <p class="sd-instr-stat-label">Всего заработано талонов</p>
+                    <p class="sd-instr-stat-value">$totalEarned</p>
+                </div>
+                $earned30Html
+            </div>
+            <div id="sd-instr-earned-calc-placeholder" class="sd-instr-earned-calc-placeholder"></div>
+        </div>
+        <div class="sd-instr-stat-card sd-instr-stat-card-simple">
+            <span class="sd-instr-stat-icon-wrap">$svgCar</span>
+            <div>
+                <p class="sd-instr-stat-label">Всего завершённых вождений</p>
+                <p class="sd-instr-stat-value">$completedCount</p>
+            </div>
+        </div>
+        <div class="sd-instr-stat-card">
+            <h3 class="sd-instr-stat-heading">Ваш рейтинг:</h3>
+            <div class="sd-instr-rating-row">
+                <div class="sd-instr-rating-pie-wrap">$pieInner</div>
+                <div class="sd-instr-rating-legend">$ratingLegend</div>
+            </div>
+        </div>
+        <div class="sd-instr-stat-card">
+            <h3 class="sd-instr-stat-heading">График завершённых вождений:</h3>
+            <p class="sd-muted sd-instr-chart-hint">Всего: ${completedForWeek.size} вождений (макс. 8 в день)</p>
+            <div class="sd-instr-bars">$weekBarsHtml</div>
+            <p class="sd-muted sd-instr-chart-avg">Среднее: ${formatFixed1(avgWeek.toDouble())} вождений в день</p>
+        </div>
+        <div class="sd-instr-stat-card">
+            <h3 class="sd-instr-stat-heading">График отменённых вождений:</h3>
+            <p class="sd-muted sd-instr-chart-hint">Всего отменено: ${cancelled.size}</p>
+            <div class="sd-instr-bars sd-instr-bars-cancel">$cancelBarsHtml</div>
+        </div>
+        <p class="sd-version">Версия: $version</p>
+    </div>"""
 }
 
 private fun renderInstructorHomeContent(user: User, version: String): String {
@@ -1867,20 +4204,21 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
     val sessions = appState.recordingSessions.filter { it.status == "scheduled" || it.status == "inProgress" || (it.status == "completed" && it.instructorRating == 0) }.take(20)
     val allSessions = appState.recordingSessions
     val loadingLine = if (loading) """<p class="sd-loading-text">Загрузка…</p>""" else ""
-    val cadetsListHtml = if (cadets.isEmpty()) """<p class="sd-muted">Нет назначенных курсантов</p>""" else cadets.joinToString("") { c ->
+    fun instructorCadetCardHtml(c: User): String {
         val completedCount = allSessions.count { it.cadetId == c.id && it.status == "completed" }
-        val initials = c.fullName.split(" ").take(2).mapNotNull { it.firstOrNull()?.uppercase() }.joinToString("")
         val phoneDisplay = (c.phone.ifBlank { "—" }).escapeHtml()
         val phoneHref = if (c.phone.isNotBlank()) "tel:${c.phone.escapeHtml()}" else "#"
-        val phoneClass = if (c.phone.isNotBlank()) "sd-btn sd-btn-circle sd-btn-phone" else "sd-btn sd-btn-circle sd-btn-phone sd-btn-disabled"
         val svgChat = """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>"""
         val svgPhone = """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.6 1.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.77a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.02z"/></svg>"""
         val svgPhoneRow = """<svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" style="opacity:0.6;flex-shrink:0"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.6 1.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.77a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.02z"/></svg>"""
         val svgCar = """<svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" style="opacity:0.6;flex-shrink:0"><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/></svg>"""
         val svgTicket = """<svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" style="opacity:0.6;flex-shrink:0"><path d="M22 10V6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v4c1.1 0 2 .9 2 2s-.9 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2s.9-2 2-2zm-2-1.46c-1.19.69-2 1.99-2 3.46s.81 2.77 2 3.46V18H4v-2.54c1.19-.69 2-1.99 2-3.46 0-1.48-.8-2.77-2-3.46L4 6h16v2.54z"/></svg>"""
+        val svgGroup = """<svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" style="opacity:0.6;flex-shrink:0"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>"""
+        val cg = c.cadetGroupId?.let { gid -> appState.cadetGroups.find { it.id == gid } }
+        val groupRowText = cadetGroupDisplayTextEscaped(cg)
         val phoneDisabled = if (c.phone.isBlank()) " sd-cadet-icon-btn-disabled" else ""
         val cadetAvatarHtml = avatarBlockHtml("sd-cadet-avatar", c, user.id)
-        """<div class="sd-cadet-card">
+        return """<div class="sd-cadet-card">
             <div class="sd-cadet-accent-bar"></div>
             <div class="sd-cadet-top">
                 $cadetAvatarHtml
@@ -1897,8 +4235,48 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
                 <div class="sd-cadet-row">$svgPhoneRow $phoneDisplay</div>
                 <div class="sd-cadet-row">$svgCar $completedCount вождений</div>
                 <div class="sd-cadet-row">$svgTicket ${c.balance} талонов</div>
+                <div class="sd-cadet-row">$svgGroup Группа: $groupRowText</div>
+            </div>
+            <div class="sd-cadet-card-footer sd-instructor-cadet-card-footer">
+                <button type="button" class="sd-btn sd-btn-primary sd-btn-small sd-instructor-cadet-book-btn" data-instructor-book-cadet="${c.id.escapeHtml()}">Записать</button>
             </div>
         </div>"""
+    }
+    val cadetsListHtml = if (cadets.isEmpty()) {
+        """<p class="sd-muted">Нет назначенных курсантов</p>"""
+    } else {
+        val groupIds = appState.cadetGroups.map { it.id }.toSet()
+        val instructorGroupSectionsHtml = appState.cadetGroups.joinToString("") { g ->
+            val inGroup = cadets.filter { it.cadetGroupId == g.id }.sortedBy { it.fullName }
+            val title = cadetGroupDisplayTextEscaped(g)
+            val cardsInner = if (inGroup.isEmpty()) {
+                """<p class="sd-muted sd-admin-cadets-empty">В этой группе пока нет курсантов</p>"""
+            } else {
+                inGroup.joinToString("") { instructorCadetCardHtml(it) }
+            }
+            """<div class="sd-admin-cadets-subsection" data-instructor-cadet-group-section="${g.id.escapeHtml()}">
+                <div class="sd-admin-cadets-subsection-head sd-admin-cadets-subsection-head-single">
+                    <h4 class="sd-admin-cadets-subtitle">$title <span class="sd-admin-cadets-subcount">(${inGroup.size})</span></h4>
+                </div>
+                <div class="sd-cadet-cards sd-admin-cards-cadet-group">$cardsInner</div>
+            </div>"""
+        }
+        val unassignedInstructorCadets = cadets.filter { u ->
+            val gid = u.cadetGroupId
+            gid.isNullOrBlank() || !groupIds.contains(gid)
+        }.sortedBy { it.fullName }
+        val unassignedCardsInner = if (unassignedInstructorCadets.isEmpty()) {
+            """<p class="sd-muted sd-admin-cadets-empty">Нет курсантов без группы</p>"""
+        } else {
+            unassignedInstructorCadets.joinToString("") { instructorCadetCardHtml(it) }
+        }
+        val unassignedSectionHtml = """<div class="sd-admin-cadets-subsection sd-admin-cadets-subsection-unassigned" data-instructor-cadet-group-section="">
+            <div class="sd-admin-cadets-subsection-head sd-admin-cadets-subsection-head-single">
+                <h4 class="sd-admin-cadets-subtitle">Не в группе <span class="sd-admin-cadets-subcount">(${unassignedInstructorCadets.size})</span></h4>
+            </div>
+            <div class="sd-cadet-cards sd-admin-cards-cadet-group">$unassignedCardsInner</div>
+        </div>"""
+        """<div class="sd-admin-cadets-grouped sd-instructor-cadets-grouped">$instructorGroupSectionsHtml$unassignedSectionHtml</div>"""
     }
     val sessionsByWeekday = sessions.groupBy { getWeekdayIndex(it.startTimeMillis) }
     val nowMs = js("Date.now()").unsafeCast<Double>().toLong()
@@ -1943,7 +4321,9 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
                 val confirmBtn = if (showConfirm) """<button type="button" class="sd-sch-btn sd-sch-confirm-btn sd-home-schedule-confirm" data-session-id="${s.id.escapeHtml()}">$iconSelectSvg Подтвердить</button>""" else ""
                 val startBtn = if (showStart) """<button type="button" class="sd-sch-btn sd-sch-start-btn sd-home-schedule-start${if (startBtnDisabled) " sd-sch-start-disabled" else ""}" data-session-id="${s.id.escapeHtml()}" data-start-ms="$startMs">$iconPlaySvg Начать</button>""" else ""
                 val lateBtn = if (s.status == "scheduled") """<button type="button" class="sd-sch-btn sd-sch-late-btn sd-home-schedule-late" data-session-id="${s.id.escapeHtml()}"${if (lateDisabled) " disabled title=\"Задержка активна\"" else ""}>$iconLateSvg Опаздываю</button>""" else ""
-                val cancelBtn = if (s.status != "completed") """<button type="button" class="sd-sch-btn sd-sch-cancel-btn sd-home-schedule-cancel" data-session-id="${s.id.escapeHtml()}">$iconTrashSvg Отменить</button>""" else ""
+                val cadetNotConfirmedYet = !bookedByCadet && !s.instructorConfirmed
+                val cancelCadetUnconfirmedAttr = if (cadetNotConfirmedYet) """ data-home-cancel-needs-cadet-confirm="1"""" else ""
+                val cancelBtn = if (s.status != "completed") """<button type="button" class="sd-sch-btn sd-sch-cancel-btn sd-home-schedule-cancel" data-session-id="${s.id.escapeHtml()}"$cancelCadetUnconfirmedAttr>$iconTrashSvg Отменить</button>""" else ""
                 val rateCadetBtn = if (s.status == "completed" && s.instructorRating == 0) """<button type="button" class="sd-sch-btn sd-sch-rate-btn sd-instructor-rate-cadet-btn" data-session-id="${s.id.escapeHtml()}" data-cadet-name="${(cadets.find { it.id == s.cadetId }?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "Курсант").escapeHtml()}">Поставить оценку</button>""" else ""
                 val timerBlock = if (s.status == "inProgress") {
                     val endMs = (s.actualStartMs ?: s.startTimeMillis ?: 0L) + LESSON_DURATION_MS
@@ -1984,54 +4364,27 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
             """<details class="sd-schedule-day" ${if (count > 0) "open" else ""}><summary class="sd-schedule-day-title">$dayName ($count)</summary><div class="sd-schedule-list">$cardsHtml</div></details>"""
         }.joinToString("")
     }
-    val runningLateModalHtml = """<div class="sd-modal-overlay sd-hidden" id="sd-running-late-modal"><div class="sd-modal"><h3 class="sd-modal-title">Опаздываю</h3><p>Выберите задержку:</p><div class="sd-running-late-options"><label class="sd-radio"><input type="radio" name="sd-late-mins" value="5" /> 5 мин.</label><label class="sd-radio"><input type="radio" name="sd-late-mins" value="10" /> 10 мин.</label><label class="sd-radio"><input type="radio" name="sd-late-mins" value="15" /> 15 мин.</label></div><p class="sd-modal-actions"><button type="button" id="sd-running-late-confirm" class="sd-btn sd-btn-primary">Подтвердить</button><button type="button" id="sd-running-late-cancel" class="sd-btn sd-btn-secondary">Отмена</button></p></div></div>"""
     val startEarlyModalHtml = """<div class="sd-modal-overlay sd-hidden" id="sd-start-early-modal"><div class="sd-modal"><h3 class="sd-modal-title">Начать вождение раньше?</h3><p id="sd-start-early-text" class="sd-start-early-text">Вы уверены начать вождение раньше? До вождения еще: <span id="sd-start-early-mins">0</span> минут.</p><p class="sd-modal-actions"><button type="button" id="sd-start-early-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-start-early-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>"""
     val completeEarlyModalHtml = """<div class="sd-modal-overlay sd-hidden" id="sd-complete-early-modal"><div class="sd-modal"><h3 class="sd-modal-title">Завершить вождение досрочно?</h3><p id="sd-complete-early-text"></p><p class="sd-modal-actions"><button type="button" id="sd-complete-early-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-complete-early-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>"""
     val instructorRateCadetModalHtml = """<div class="sd-modal-overlay sd-hidden" id="sd-instructor-rate-cadet-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вождение завершено, поставьте оценку курсанту:</h3><p id="sd-instructor-rate-cadet-name" class="sd-rate-cadet-name"></p><div class="sd-rate-options-instructor"><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="3" /> 3</label><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="4" /> 4</label><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="5" /> 5</label></div><p class="sd-modal-actions"><button type="button" id="sd-instructor-rate-cadet-confirm" class="sd-btn sd-btn-primary">Подтвердить</button></p></div></div>"""
-    val instructorCancelReasonModalHtml = """<div class="sd-modal-overlay sd-hidden" id="sd-instructor-cancel-reason-modal"><div class="sd-modal"><h3 class="sd-modal-title">Выберите причину отмены:</h3><div class="sd-rate-options-instructor sd-cancel-reason-options"><label class="sd-radio"><input type="radio" name="sd-cancel-reason" value="Курсант не явился" checked /> Курсант не явился</label><label class="sd-radio"><input type="radio" name="sd-cancel-reason" value="ТС на ремонте" /> ТС на ремонте</label></div><p class="sd-modal-actions"><button type="button" id="sd-instructor-cancel-reason-confirm" class="sd-btn sd-btn-primary">Подтвердить</button><button type="button" id="sd-instructor-cancel-reason-cancel" class="sd-btn sd-btn-secondary">Отмена</button></p></div></div>"""
-    val instrInitials = user.fullName.split(" ").filter { it.isNotBlank() }.take(2).joinToString("") { it.first().uppercase() }.ifBlank { "?" }
-    val instrAvatarHue = (user.fullName.hashCode() and 0x7FFFFFFF) % 360
-    val instrAvatarBg = "hsl($instrAvatarHue,50%,32%)"
-    val svgEmail = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>"""
-    val svgPhoneP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>"""
-    val svgTicketP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M22 10V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2s.9-2 2-2zm-2-1.46c-1.19.69-2 1.99-2 3.46s.81 2.77 2 3.46V18H4v-2.54c1.19-.69 2-1.99 2-3.46 0-1.48-.8-2.77-1.99-3.46L4 6h16v2.54z"/></svg>"""
-    val instrProfileAvatarHtml = avatarBlockHtml("sd-profile-avatar", user, user.id)
-    val profileCard = """
-        <div class="sd-profile-card">
-            <div class="sd-profile-accent-bar"></div>
-            <div class="sd-profile-card-shimmer" aria-hidden="true"></div>
-            <div class="sd-profile-hero">
-                $instrProfileAvatarHtml
-                <div class="sd-profile-hero-info">
-                    <p class="sd-profile-fullname">${(user.fullName.ifBlank { "—" }).escapeHtml()}</p>
-                    <span class="sd-profile-role-badge">Инструктор</span>
-                </div>
-            </div>
-            <div class="sd-profile-info-rows">
-                <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgEmail</span><span class="sd-profile-info-label">Email</span><span class="sd-profile-info-value">${(user.email.ifBlank { "—" }).escapeHtml()}</span></div>
-                <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgPhoneP</span><span class="sd-profile-info-label">Телефон</span><span class="sd-profile-info-value">${(user.phone.ifBlank { "—" }).escapeHtml()}</span></div>
-                <div class="sd-profile-info-row sd-profile-info-row-balance"><span class="sd-profile-info-icon">$svgTicketP</span><span class="sd-profile-info-label">Талоны</span><span class="sd-balance-badge">${user.balance}</span></div>
-            </div>
-        </div>"""
+    val profileCard = instructorHomeProfileCardHtml(user, showProfileShortcut = true)
     val myCadetsOpen = if (appState.instructorMyCadetsSectionOpen) " open" else ""
     return """<h2>Главная</h2>
         $profileCard
         <details class="sd-block sd-details-block" data-instructor-my-cadets$myCadetsOpen><summary class="sd-block-title">Мои курсанты (${cadets.size})</summary><div class="sd-cadet-cards">$cadetsListHtml</div></details>
         $loadingLine
-        <div class="sd-block sd-block-schedule"><h3 class="sd-block-title">Мой график</h3><div class="sd-schedule-days">$scheduleSectionsHtml</div>$runningLateModalHtml$startEarlyModalHtml$completeEarlyModalHtml$instructorRateCadetModalHtml$instructorCancelReasonModalHtml</div>
+        <div class="sd-block sd-block-schedule"><h3 class="sd-block-title">Мой график</h3><div class="sd-schedule-days">$scheduleSectionsHtml</div>$startEarlyModalHtml$completeEarlyModalHtml$instructorRateCadetModalHtml</div>
         <p class="sd-version">Версия: $version</p>"""
 }
 
-private fun renderCadetHomeContent(user: User, version: String): String {
+/** Карточка курсанта на главной (с кнопкой «Профиль») и на экране статистики. */
+private fun cadetHomeProfileCardHtml(user: User, showProfileShortcut: Boolean): String {
     val inst = appState.cadetInstructor
     val instText = when {
         inst != null -> inst.fullName.escapeHtml()
         user.assignedInstructorId != null -> "загрузка…"
         else -> "не назначен"
     }
-    val cadetInitials = user.fullName.split(" ").filter { it.isNotBlank() }.take(2).joinToString("") { it.first().uppercase() }.ifBlank { "?" }
-    val cadetAvatarHue = (user.fullName.hashCode() and 0x7FFFFFFF) % 360
-    val cadetAvatarBg = "hsl($cadetAvatarHue,50%,32%)"
     val svgEmail = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>"""
     val svgPhoneP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>"""
     val svgTicketP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M22 10V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2s.9-2 2-2zm-2-1.46c-1.19.69-2 1.99-2 3.46s.81 2.77 2 3.46V18H4v-2.54c1.19-.69 2-1.99 2-3.46 0-1.48-.8-2.77-1.99-3.46L4 6h16v2.54z"/></svg>"""
@@ -2039,7 +4392,13 @@ private fun renderCadetHomeContent(user: User, version: String): String {
     val svgDriving = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/></svg>"""
     val completedDrivingsCount = (appState.recordingSessions + appState.historySessions).distinctBy { it.id }.count { it.status == "completed" }
     val cadetProfileAvatarHtml = avatarBlockHtml("sd-profile-avatar", user, user.id)
-    val profileCard = """
+    val iconPerson = """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>"""
+    val profileBtn = if (showProfileShortcut) {
+        """<button type="button" class="sd-instructor-profile-card-btn" id="sd-cadet-profile-open" title="Профиль" aria-label="Профиль">$iconPerson</button>"""
+    } else ""
+    val wrapOpen = if (showProfileShortcut) """<div class="sd-instructor-profile-card-wrap">""" else ""
+    val wrapClose = if (showProfileShortcut) """</div>""" else ""
+    val card = """
         <div class="sd-profile-card">
             <div class="sd-profile-accent-bar"></div>
             <div class="sd-profile-card-shimmer" aria-hidden="true"></div>
@@ -2058,6 +4417,122 @@ private fun renderCadetHomeContent(user: User, version: String): String {
                 <div class="sd-profile-info-row sd-profile-info-row-balance"><span class="sd-profile-info-icon">$svgTicketP</span><span class="sd-profile-info-label">Талоны</span><span class="sd-balance-badge">${user.balance}</span></div>
             </div>
         </div>"""
+    return wrapOpen + profileBtn + card + wrapClose
+}
+
+private fun cadetDrivingSessionsMerged(user: User): List<DrivingSession> {
+    val uid = user.id
+    return (appState.recordingSessions + appState.historySessions).distinctBy { it.id }.filter { it.cadetId == uid }
+}
+
+private fun weekKeyMondayFromMillis(millis: Long): String =
+    js("(function(ms){ var d=new Date(ms); d.setHours(0,0,0,0); var day=d.getDay(); var diff=(day===0?-6:1-day); d.setDate(d.getDate()+diff); var m=d.getMonth()+1; var dayn=d.getDate(); return d.getFullYear()+'-'+('0'+m).slice(-2)+'-'+('0'+dayn).slice(-2); })")(millis).unsafeCast<String>()
+
+/** Статистика курсанта — как CadetProfileStatsView / CadetHomeTab в Android. */
+private fun renderCadetProfileStatsContent(user: User, version: String): String {
+    val sessions = cadetDrivingSessionsMerged(user)
+    val completed = sessions.count { it.status == "completed" }
+    val capped = completed.coerceAtMost(30)
+    /* Угол от 12 часов по часовой: ровно (завершено/30)*360°, 24 занятия → 288° — внутри синего сектора 180–300° */
+    val filledDeg = capped / 30.0 * 360.0
+    val filledDegStr = "${filledDeg}deg"
+    val profileCard = cadetHomeProfileCardHtml(user, showProfileShortcut = false)
+    /** Кольцо 30 занятий: 0–5 жёлтый, 5–15 зелёный, 15–25 синий, 25–30 красный (доли круга 60°+120°+120°+60°). */
+    val segLegend = """
+        <div class="sd-cadet-seg-legend">
+            <div class="sd-cadet-seg-row"><span class="sd-cadet-role-sq" style="background:#FFC107"></span><span>0–5 занятий</span></div>
+            <div class="sd-cadet-seg-row"><span class="sd-cadet-role-sq" style="background:#2E7D32"></span><span>5–15 занятий</span></div>
+            <div class="sd-cadet-seg-row"><span class="sd-cadet-role-sq" style="background:#1565C0"></span><span>15–25 занятий</span></div>
+            <div class="sd-cadet-seg-row"><span class="sd-cadet-role-sq" style="background:#C62828"></span><span>25–30 занятий</span></div>
+        </div>"""
+    val instRated = sessions.filter { it.status == "completed" && it.instructorRating in 3..5 }
+    val ratingCounts = (3..5).map { r -> instRated.count { it.instructorRating == r } }
+    val maxRating = ratingCounts.maxOrNull()?.coerceAtLeast(1) ?: 1
+    val ratingBarsHtml = (3..5).mapIndexed { idx, r ->
+        val cnt = ratingCounts[idx]
+        val h = if (maxRating > 0) ((cnt.toFloat() / maxRating * 100f).toInt().coerceIn(4, 100)) else 4
+        """<div class="sd-cadet-inst-rating-col"><div class="sd-cadet-inst-rating-bar" style="height:${h}px"></div><span class="sd-cadet-inst-rating-num">$r</span><span class="sd-cadet-inst-rating-cnt">$cnt</span></div>"""
+    }.joinToString("")
+    val completedSessions = sessions.filter { it.status == "completed" }
+    val dayCountsByWeekday = IntArray(7)
+    completedSessions.forEach { s ->
+        val t = s.completedAtMillis ?: s.startTimeMillis ?: return@forEach
+        dayCountsByWeekday[weekdayIndexMon0Local(t)]++
+    }
+    val dowShort = listOf("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+    val maxDow = dayCountsByWeekday.maxOrNull()?.coerceAtLeast(1) ?: 1
+    val weekFreqHtml = if (completedSessions.isEmpty()) {
+        """<p class="sd-muted">Нет завершённых вождений</p>"""
+    } else {
+        """<div class="sd-cadet-dow-chart-wrap">
+            <div class="sd-cadet-dow-y-labels" aria-hidden="true"><span>$maxDow</span><span>0</span></div>
+            <div class="sd-cadet-dow-chart">""" +
+            (0 until 7).joinToString("") { i ->
+                val cnt = dayCountsByWeekday[i]
+                val h = if (maxDow > 0) ((cnt.toFloat() / maxDow * 90f).toInt().coerceIn(4, 90)) else 4
+                """<div class="sd-cadet-dow-col"><div class="sd-cadet-dow-bar" style="height:${h}px" title="$cnt занятий"></div><span class="sd-cadet-dow-day">${dowShort[i]}</span><span class="sd-cadet-dow-cnt">$cnt</span></div>"""
+            } + "</div></div>"
+    }
+    val cancelled = sessions.filter { it.status == "cancelledByCadet" }
+    val weekCountsCancel = mutableMapOf<String, Int>()
+    cancelled.forEach { s ->
+        val t = s.cancelledAtMillis ?: s.startTimeMillis ?: return@forEach
+        val k = weekKeyMondayFromMillis(t)
+        weekCountsCancel[k] = (weekCountsCancel[k] ?: 0) + 1
+    }
+    val sortedWeeksCancel = weekCountsCancel.keys.sorted().takeLast(2)
+    val countsCancel = sortedWeeksCancel.map { weekCountsCancel[it] ?: 0 }
+    val maxWeekCancel = countsCancel.maxOrNull()?.coerceAtLeast(1) ?: 1
+    val weekCancelHtml = if (sortedWeeksCancel.isEmpty()) {
+        """<p class="sd-muted">Нет отменённых вождений</p>"""
+    } else {
+        sortedWeeksCancel.indices.joinToString("") { i ->
+            val cnt = countsCancel[i]
+            val h = if (maxWeekCancel > 0) ((cnt.toFloat() / maxWeekCancel * 80f).toInt().coerceAtLeast(4)) else 4
+            val lbl = sortedWeeksCancel[i].takeLast(5)
+            """<div class="sd-cadet-week-col"><div class="sd-cadet-week-bar sd-cadet-week-bar-cancel" style="height:${h}px"></div><span class="sd-cadet-week-lbl">$lbl</span><span class="sd-cadet-week-cnt">$cnt</span></div>"""
+        }
+    }
+    return """<div class="sd-instructor-profile-page sd-cadet-profile-page">
+        <p class="sd-instructor-profile-toolbar">
+            <button type="button" class="sd-btn sd-btn-secondary sd-instructor-profile-back" id="sd-cadet-profile-back">← Назад</button>
+        </p>
+        <h2 class="sd-instructor-profile-title">Профиль</h2>
+        $profileCard
+        <div class="sd-instr-stat-card">
+            <h3 class="sd-instr-stat-heading">Прогресс вождений:</h3>
+            <p class="sd-muted sd-instr-chart-hint">Максимум 30 занятий. Завершено: $completed из 30.</p>
+            <div class="sd-cadet-progress-row">
+                <div class="sd-cadet-progress-ring-wrap">
+                    <div class="sd-cadet-progress-ring"></div>
+                    <div class="sd-cadet-progress-pointer" style="transform: rotate($filledDegStr)" aria-hidden="true"></div>
+                    <span class="sd-cadet-progress-center-num">$completed</span>
+                </div>
+                $segLegend
+            </div>
+        </div>
+        <div class="sd-instr-stat-card">
+            <h3 class="sd-instr-stat-heading">Ваши оценки: распределение</h3>
+            <p class="sd-muted sd-instr-chart-hint">Оценки по завершённым вождениям (3–5).</p>
+            <div class="sd-cadet-inst-rating-chart sd-cadet-inst-rating-chart-3">$ratingBarsHtml</div>
+        </div>
+        <div class="sd-instr-stat-card">
+            <h3 class="sd-instr-stat-heading">Частота вождений в неделю:</h3>
+            <p class="sd-muted sd-instr-chart-hint">Вертикаль — число занятий, по горизонтали — день недели (все завершённые вождения).</p>
+            <div class="sd-cadet-week-chart sd-cadet-week-chart-dow">$weekFreqHtml</div>
+        </div>
+        <div class="sd-instr-stat-card">
+            <h3 class="sd-instr-stat-heading">Отменённые курсантом вождения:</h3>
+            <p class="sd-muted sd-instr-chart-hint">Всего отменено: ${cancelled.size}</p>
+            <div class="sd-cadet-week-chart">$weekCancelHtml</div>
+        </div>
+        <p class="sd-version">Версия: $version</p>
+    </div>"""
+}
+
+private fun renderCadetHomeContent(user: User, version: String): String {
+    val inst = appState.cadetInstructor
+    val profileCard = cadetHomeProfileCardHtml(user, showProfileShortcut = true)
     val instructorBlockHtml = when {
         inst != null -> {
             val instAvatarHtml = avatarBlockHtml("sd-cadet-avatar", inst, user.id)
@@ -2087,139 +4562,235 @@ private fun renderCadetHomeContent(user: User, version: String): String {
     }
     val loading = appState.recordingLoading
     val sessions = appState.recordingSessions.filter { it.status == "scheduled" || it.status == "inProgress" }.take(20)
+    val sessionsByWeekday = sessions.groupBy { getWeekdayIndex(it.startTimeMillis) }
     val loadingLine = if (loading) """<p class="sd-loading-text">Загрузка…</p>""" else ""
-    val sessList = if (sessions.isEmpty()) {
-        """<div class="sd-record-empty">Нет запланированных занятий</div>"""
+    val cadetDrivingSectionsHtml = if (sessions.isEmpty()) {
+        """<p class="sd-muted">Нет запланированных занятий</p>"""
     } else {
-        sessions.joinToString("") { s ->
-            val dateStr = formatDateOnly(s.startTimeMillis)
-            val timeStr = formatTimeOnly(s.startTimeMillis)
-            val needCadetConfirm = s.status == "scheduled" && s.startRequestedByInstructor
-            val statusText = when {
-                s.status == "inProgress" -> "В процессе"
-                needCadetConfirm -> "Инструктор начал вождение — подтвердите"
-                else -> "Запланировано"
+        WEEKDAY_NAMES.mapIndexed { index, dayName ->
+            val daySessions = (sessionsByWeekday[index] ?: emptyList()).sortedBy { it.startTimeMillis ?: 0L }
+            val count = daySessions.size
+            val cardsHtml = daySessions.joinToString("") { s ->
+                val dateStr = formatDateOnly(s.startTimeMillis)
+                val timeStr = formatTimeOnly(s.startTimeMillis)
+                val needCadetConfirm = s.status == "scheduled" && s.startRequestedByInstructor
+                val statusText = when {
+                    s.status == "inProgress" -> "В процессе"
+                    needCadetConfirm -> "Инструктор начал вождение — подтвердите"
+                    else -> "Запланировано"
+                }
+                val statusCls = when {
+                    s.status == "inProgress" -> "sd-record-status-active"
+                    needCadetConfirm -> "sd-record-status-waiting"
+                    else -> "sd-record-status-sched"
+                }
+                val confirmStartBtn = if (needCadetConfirm) """<button type="button" class="sd-sch-btn sd-sch-confirm-btn sd-sch-start-btn sd-cadet-confirm-start" data-session-id="${s.id.escapeHtml()}">$iconPlaySvg Начать</button>""" else ""
+                """<div class="sd-record-card">
+                    <div class="sd-record-card-dt">
+                        <span class="sd-sch-pill">$iconCalendarSvg $dateStr</span>
+                        <span class="sd-sch-pill">$iconClockSvg $timeStr</span>
+                    </div>
+                    <span class="sd-record-card-status $statusCls">Статус: $statusText</span>
+                    <div class="sd-record-card-actions">$confirmStartBtn</div>
+                </div>"""
             }
-            val statusCls = when {
-                s.status == "inProgress" -> "sd-record-status-active"
-                needCadetConfirm -> "sd-record-status-waiting"
-                else -> "sd-record-status-sched"
-            }
-            val confirmStartBtn = if (needCadetConfirm) """<button type="button" class="sd-sch-btn sd-sch-confirm-btn sd-cadet-confirm-start" data-session-id="${s.id.escapeHtml()}">$iconSelectSvg Подтвердить</button>""" else ""
-            """<div class="sd-record-card">
-                <div class="sd-record-card-dt">
-                    <span class="sd-sch-pill">$iconCalendarSvg $dateStr</span>
-                    <span class="sd-sch-pill">$iconClockSvg $timeStr</span>
-                </div>
-                <span class="sd-record-card-status $statusCls">Статус: $statusText</span>
-                <div class="sd-record-card-actions">$confirmStartBtn</div>
-            </div>"""
-        }
+            """<details class="sd-schedule-day" ${if (count > 0) "open" else ""}><summary class="sd-schedule-day-title">$dayName ($count)</summary><div class="sd-schedule-list">$cardsHtml</div></details>"""
+        }.joinToString("")
     }
     val cadetRateInstructorModalHtml = """<div class="sd-modal-overlay sd-hidden" id="sd-cadet-rate-instructor-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вождение завершено, поставьте оценку инструктору</h3><div class="sd-rate-stars" id="sd-cadet-rate-stars" data-selected="0"><span class="sd-star" data-value="1" aria-label="1">★</span><span class="sd-star" data-value="2" aria-label="2">★</span><span class="sd-star" data-value="3" aria-label="3">★</span><span class="sd-star" data-value="4" aria-label="4">★</span><span class="sd-star" data-value="5" aria-label="5">★</span></div><p class="sd-modal-actions"><button type="button" id="sd-cadet-rate-instructor-confirm" class="sd-btn sd-btn-primary">Подтвердить</button></p></div></div>"""
     return """<h2>Главная</h2>
         $profileCard
         $instructorBlockHtml
         $loadingLine
-        <div class="sd-block sd-block-schedule"><h3 class="sd-block-title">Моё вождение</h3><div class="sd-record-list">$sessList</div></div>
+        <div class="sd-block sd-block-schedule"><h3 class="sd-block-title">Моё вождение</h3><div class="sd-schedule-days">$cadetDrivingSectionsHtml</div></div>
         $cadetRateInstructorModalHtml
         <p class="sd-version">Версия: $version</p>"""
 }
 
-private fun renderRecordingTabContent(user: User): String {
+private fun patchInstructorRecordingDatetimeInputsMin(sdCard: org.w3c.dom.Element) {
+    val min = getDatetimeLocalMin()
+    (sdCard.querySelector("#sd-recording-book-dt") as? HTMLInputElement)?.min = min
+    (sdCard.querySelector("#sd-recording-add-dt") as? HTMLInputElement)?.min = min
+}
+
+private val closestButtonEl = js("(function(el){ return el && el.closest ? el.closest('button') : null; })").unsafeCast<(Any?) -> Any?>()
+
+private fun handleInstructorRecordingAddWindowClick() {
+    val usr = appState.user ?: return
+    if (usr.role != "instructor") return
+    val input = document.getElementById("sd-recording-add-dt") as? HTMLInputElement
+    val v = input?.value ?: ""
+    if (v.isBlank()) { updateState { networkError = "Укажите дату и время" }; return }
+    val dateFn = js("function(s){ return new Date(s).getTime(); }").unsafeCast<(String) -> Number>()
+    val ms = dateFn(v).toLong()
+    if (ms <= 0) return
+    val nowMs = js("Date.now()").unsafeCast<Double>().toLong()
+    if (ms < nowMs) { showToast("Нельзя выбрать прошедшую дату и время"); return }
+    val occupied = findOccupiedMessage(ms, appState.recordingSessions, appState.recordingOpenWindows, appState.instructorCadets)
+    if (occupied != null) { showToast(occupied); return }
+    addOpenWindow(usr.id, ms) { _, err ->
+        if (err != null) updateState { networkError = err }
+        else {
+            showNotification("Добавлено свободное окно для записи" + formatDayTimeShort(ms))
+            getOpenWindowsForInstructor(usr.id) { wins ->
+                getSessionsForInstructor(usr.id) { sess ->
+                    updateState {
+                        recordingOpenWindows = wins
+                        recordingSessions = sess
+                        networkError = null
+                        instructorRecordingAddDatetimeLocal = ""
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun handleInstructorRecordingBookClick() {
+    val usr = appState.user ?: return
+    if (usr.role != "instructor") return
+    val cadetSelect = document.getElementById("sd-recording-book-cadet") as? HTMLSelectElement
+    val cadetId = cadetSelect?.value?.takeIf { it.isNotBlank() } ?: run { updateState { networkError = "Выберите курсанта" }; return }
+    val input = document.getElementById("sd-recording-book-dt") as? HTMLInputElement
+    val v = input?.value ?: ""
+    if (v.isBlank()) { updateState { networkError = "Укажите дату и время" }; return }
+    val dateFn = js("function(s){ return new Date(s).getTime(); }").unsafeCast<(String) -> Number>()
+    val ms = dateFn(v).toLong()
+    if (ms <= 0) return
+    val nowMs = js("Date.now()").unsafeCast<Double>().toLong()
+    if (ms < nowMs) { showToast("Нельзя выбрать прошедшую дату и время"); return }
+    val occupied = findOccupiedMessage(ms, appState.recordingSessions, appState.recordingOpenWindows, appState.instructorCadets)
+    if (occupied != null) { showToast(occupied); return }
+    val cadet = appState.instructorCadets.find { it.id == cadetId }
+    if (cadet == null) { updateState { networkError = "Курсант не найден" }; return }
+    if (cadet.balance <= 0) {
+        val cadetShortName = formatShortName(cadet.fullName)
+        val msg = "У курсанта $cadetShortName 0 талонов, запись невозможна"
+        updateState { networkError = msg }
+        showNotification(msg)
+        return
+    }
+    val scheduledCount = appState.recordingSessions.count { it.cadetId == cadetId && (it.status == "scheduled" || it.status == "inProgress") }
+    if (scheduledCount >= cadet.balance) {
+        val cadetShortName = formatShortName(cadet.fullName)
+        val msg = "По балансу курсанта $cadetShortName уже запланировано максимальное число вождений"
+        updateState { networkError = msg }
+        showNotification(msg)
+        return
+    }
+    createSession(usr.id, cadetId, ms, null) { _, err ->
+        if (err != null) updateState { networkError = err }
+        else {
+            val cadetShortName = formatShortName(cadet.fullName)
+            showNotification("Вождение назначено" + formatDayTimeShort(ms) + ". Курсант: $cadetShortName")
+            getSessionsForInstructor(usr.id) { sess ->
+                updateState {
+                    recordingSessions = sess
+                    networkError = null
+                    instructorRecordingBookCadetId = null
+                    instructorRecordingBookDatetimeLocal = ""
+                }
+            }
+        }
+    }
+}
+
+private fun setupInstructorRecordingSubmitButtonsDelegationOnce() {
+    if (window.asDynamic().__sdInstructorRecordingSubmitDelegation == true) return
+    window.asDynamic().__sdInstructorRecordingSubmitDelegation = true
+    document.body?.addEventListener("click", { e: dynamic ->
+        val raw = e?.target ?: return@addEventListener
+        val el = raw as? org.w3c.dom.Element ?: return@addEventListener
+        val btn = closestButtonEl(el) as? org.w3c.dom.Element ?: return@addEventListener
+        when (btn.id) {
+            "sd-recording-book-btn" -> handleInstructorRecordingBookClick()
+            "sd-recording-add-btn" -> handleInstructorRecordingAddWindowClick()
+            else -> {}
+        }
+    })
+}
+
+/** Только списки/статистика/модалки — без форм записи; при частичном обновлении вкладки не трогаем select/datetime. */
+private fun renderInstructorRecordingDynamicPanelHtml(user: User): String {
     val loading = appState.recordingLoading
     val windows = appState.recordingOpenWindows
     val sessions = appState.recordingSessions
     val cadets = appState.instructorCadets
     val loadingLine = if (loading) """<div class="sd-rec-loading">Загрузка… <button type="button" id="sd-stop-loading" class="sd-btn sd-btn-small sd-btn-secondary">Показать пусто</button></div>""" else ""
-
     val recCalendarIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>"""
     val recClockIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>"""
-    val recUserPlusIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>"""
-    val recPlusIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>"""
     val recCheckIco = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>"""
-    val recCarIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v5a2 2 0 0 1-2 2h-2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg>"""
-
-    return when (user.role) {
-        "instructor" -> {
-            val scheduledSessions = sessions.filter { it.status == "scheduled" || it.status == "inProgress" }.take(50)
-            val freeWindows = windows.filter { it.status == "free" }
-
-            val assignedList = if (scheduledSessions.isEmpty()) {
-                """<div class="sd-rec-empty"><div class="sd-rec-empty-ico">📋</div><div>Нет запланированных занятий</div></div>"""
-            } else {
-                scheduledSessions.joinToString("") { s ->
-                    val cadetName = cadets.find { it.id == s.cadetId }?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "Курсант"
-                    val cadetNameEsc = cadetName.escapeHtml()
-                    val avatarLetter = cadetName.firstOrNull()?.uppercaseChar()?.toString() ?: "К"
-                    val recCadet = cadets.find { it.id == s.cadetId }
-                    val recAvatarHtml = avatarBlockHtml("sd-rec-scard-avatar", recCadet, user.id, avatarLetter)
-                    val dateStr = formatDateOnly(s.startTimeMillis)
-                    val timeStr = formatTimeOnly(s.startTimeMillis)
-                    val bookedByCadet = s.openWindowId.isNotBlank()
-                    val statusText = when {
-                        bookedByCadet && !s.instructorConfirmed -> "Ожидает вашего подтверждения ($cadetNameEsc)"
-                        !s.instructorConfirmed -> "Ожидает подтверждения курсантом ($cadetNameEsc)"
-                        else -> "Запись подтверждена ($cadetNameEsc)"
-                    }
-                    val statusClass = when {
-                        bookedByCadet && !s.instructorConfirmed -> "sd-rec-status-waiting"
-                        !s.instructorConfirmed -> "sd-rec-status-pending"
-                        else -> "sd-rec-status-confirmed"
-                    }
-                    val showConfirm = bookedByCadet && !s.instructorConfirmed
-                    val confirmBtn = if (showConfirm) """<button type="button" class="sd-rec-confirm-btn sd-recording-confirm-session" data-session-id="${s.id.escapeHtml()}">$recCheckIco Подтвердить</button>""" else ""
-                    """<div class="sd-rec-session-card">
-                        $recAvatarHtml
-                        <div class="sd-rec-scard-body">
-                            <div class="sd-rec-scard-name">${cadetName.escapeHtml()}</div>
-                            <div class="sd-rec-scard-dt">
-                                <span class="sd-rec-dt-pill">$recCalendarIco $dateStr</span>
-                                <span class="sd-rec-dt-pill">$recClockIco $timeStr</span>
-                            </div>
-                            <span class="sd-rec-scard-status $statusClass">$statusText</span>
-                        </div>
-                        <div class="sd-rec-scard-actions">
-                            $confirmBtn
-                            <button type="button" class="sd-rec-cancel-btn sd-recording-cancel-session" data-session-id="${s.id.escapeHtml()}">Отменить</button>
-                        </div>
-                    </div>"""
-                }
+    val scheduledSessions = sessions.filter { it.status == "scheduled" || it.status == "inProgress" }.take(50)
+    val freeWindows = windows.filter { it.status == "free" }
+    val assignedList = if (scheduledSessions.isEmpty()) {
+        """<div class="sd-rec-empty"><div class="sd-rec-empty-ico">📋</div><div>Нет запланированных занятий</div></div>"""
+    } else {
+        scheduledSessions.joinToString("") { s ->
+            val cadetName = cadets.find { it.id == s.cadetId }?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "Курсант"
+            val cadetNameEsc = cadetName.escapeHtml()
+            val avatarLetter = cadetName.firstOrNull()?.uppercaseChar()?.toString() ?: "К"
+            val recCadet = cadets.find { it.id == s.cadetId }
+            val recAvatarHtml = avatarBlockHtml("sd-rec-scard-avatar", recCadet, user.id, avatarLetter)
+            val dateStr = formatDateOnly(s.startTimeMillis)
+            val timeStr = formatTimeOnly(s.startTimeMillis)
+            val bookedByCadet = s.openWindowId.isNotBlank()
+            val statusText = when {
+                bookedByCadet && !s.instructorConfirmed -> "Ожидает вашего подтверждения ($cadetNameEsc)"
+                !s.instructorConfirmed -> "Ожидает подтверждения курсантом ($cadetNameEsc)"
+                else -> "Запись подтверждена ($cadetNameEsc)"
             }
-
-            val freeWindowsList = if (freeWindows.isEmpty()) {
-                """<div class="sd-rec-empty"><div class="sd-rec-empty-ico">🕐</div><div>Нет свободных окон</div></div>"""
-            } else {
-                freeWindows.joinToString("") { w ->
-                    val dateStr = formatDateOnly(w.dateTimeMillis)
-                    val timeStr = formatTimeOnly(w.dateTimeMillis)
-                    """<div class="sd-rec-window-card">
-                        <div class="sd-rec-window-avatar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
-                        <div class="sd-rec-scard-body">
-                            <span class="sd-rec-window-status">Свободно</span>
-                            <div class="sd-rec-scard-dt">
-                                <span class="sd-rec-dt-pill sd-rec-dt-pill-purple">$recCalendarIco $dateStr</span>
-                                <span class="sd-rec-dt-pill sd-rec-dt-pill-purple">$recClockIco $timeStr</span>
-                            </div>
-                        </div>
-                        <div class="sd-rec-scard-actions">
-                            <button type="button" class="sd-rec-chip-del" data-window-id="${w.id.escapeHtml()}"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg> Удалить</button>
-                        </div>
-                    </div>"""
-                }
+            val statusClass = when {
+                bookedByCadet && !s.instructorConfirmed -> "sd-rec-status-waiting"
+                !s.instructorConfirmed -> "sd-rec-status-pending"
+                else -> "sd-rec-status-confirmed"
             }
-
-            val cadetOptions = cadets.sortedBy { it.fullName }.joinToString("") { c ->
-                """<option value="${c.id.escapeHtml()}">${formatShortName(c.fullName).escapeHtml()}</option>"""
-            }
-
-            """$loadingLine<div class="sd-rec-wrap">
+            val showConfirm = bookedByCadet && !s.instructorConfirmed
+            val confirmBtn = if (showConfirm) """<button type="button" class="sd-rec-confirm-btn sd-recording-confirm-session" data-session-id="${s.id.escapeHtml()}">$recCheckIco Подтвердить</button>""" else ""
+            """<div class="sd-rec-session-card">
+                $recAvatarHtml
+                <div class="sd-rec-scard-body">
+                    <div class="sd-rec-scard-name">${cadetName.escapeHtml()}</div>
+                    <div class="sd-rec-scard-dt">
+                        <span class="sd-rec-dt-pill">$recCalendarIco $dateStr</span>
+                        <span class="sd-rec-dt-pill">$recClockIco $timeStr</span>
+                    </div>
+                    <span class="sd-rec-scard-status $statusClass">$statusText</span>
+                </div>
+                <div class="sd-rec-scard-actions">
+                    $confirmBtn
+                    <button type="button" class="sd-rec-cancel-btn sd-recording-cancel-session" data-session-id="${s.id.escapeHtml()}">Отменить</button>
+                </div>
+            </div>"""
+        }
+    }
+    val freeWindowsList = if (freeWindows.isEmpty()) {
+        """<div class="sd-rec-empty"><div class="sd-rec-empty-ico">🕐</div><div>Нет свободных окон</div></div>"""
+    } else {
+        freeWindows.joinToString("") { w ->
+            val dateStr = formatDateOnly(w.dateTimeMillis)
+            val timeStr = formatTimeOnly(w.dateTimeMillis)
+            """<div class="sd-rec-window-card">
+                <div class="sd-rec-window-avatar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+                <div class="sd-rec-scard-body">
+                    <span class="sd-rec-window-status">Свободно</span>
+                    <div class="sd-rec-scard-dt">
+                        <span class="sd-rec-dt-pill sd-rec-dt-pill-purple">$recCalendarIco $dateStr</span>
+                        <span class="sd-rec-dt-pill sd-rec-dt-pill-purple">$recClockIco $timeStr</span>
+                    </div>
+                </div>
+                <div class="sd-rec-scard-actions">
+                    <button type="button" class="sd-rec-chip-del" data-window-id="${w.id.escapeHtml()}"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg> Удалить</button>
+                </div>
+            </div>"""
+        }
+    }
+    return """$loadingLine
                 <div class="sd-rec-stats-bar">
                     <div class="sd-rec-stat-card sd-rec-stat-blue">
                         <span class="sd-rec-stat-val">${scheduledSessions.size}</span>
                         <span class="sd-rec-stat-label">Занятий запланировано</span>
                     </div>
-                    <div class="sd-rec-stat-card sd-rec-stat-green">
+                    <div class="sd-rec-stat-card sd-rec-stat-purple">
                         <span class="sd-rec-stat-val">${freeWindows.size}</span>
                         <span class="sd-rec-stat-label">Свободных окон</span>
                     </div>
@@ -2238,7 +4809,28 @@ private fun renderRecordingTabContent(user: User): String {
                     </div>
                     <div class="sd-rec-windows">$freeWindowsList</div>
                 </div>
-                <div class="sd-rec-forms-row">
+            <div class="sd-modal-overlay sd-hidden" id="sd-instructor-rate-cadet-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вождение завершено, поставьте оценку курсанту:</h3><p id="sd-instructor-rate-cadet-name" class="sd-rate-cadet-name"></p><div class="sd-rate-options-instructor"><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="3" /> 3</label><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="4" /> 4</label><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="5" /> 5</label></div><p class="sd-modal-actions"><button type="button" id="sd-instructor-rate-cadet-confirm" class="sd-btn sd-btn-primary">Подтвердить</button></p></div></div><div class="sd-modal-overlay sd-hidden" id="sd-rec-delete-window-confirm-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вы уверены?</h3><p class="sd-modal-actions"><button type="button" id="sd-rec-delete-window-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-rec-delete-window-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>"""
+}
+
+/** Формы «Записать курсанта» / «Добавить окно» — стабильный DOM, не пересоздаётся при опросе сессий. */
+private fun renderInstructorRecordingFormsPanelHtml(): String {
+    val cadets = appState.instructorCadets
+    val bookCadetId = appState.instructorRecordingBookCadetId
+    val bookDtLocal = appState.instructorRecordingBookDatetimeLocal
+    val addDtLocal = appState.instructorRecordingAddDatetimeLocal
+    val dtMinEsc = getDatetimeLocalMin().escapeHtml()
+    val recCalendarIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>"""
+    val recClockIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>"""
+    val recUserPlusIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>"""
+    val recPlusIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>"""
+    val cadetOptions = cadets.sortedBy { it.fullName }.joinToString("") { c ->
+        val optSel = if (bookCadetId == c.id) " selected" else ""
+        """<option value="${c.id.escapeHtml()}"$optSel>${formatShortName(c.fullName).escapeHtml()}</option>"""
+    }
+    val bookCadetSelectClass = if (!bookCadetId.isNullOrBlank()) " sd-has-cadet" else ""
+    val bookDtAttr = if (bookDtLocal.isNotBlank()) """ value="${bookDtLocal.escapeHtml()}"""" else ""
+    val addDtAttr = if (addDtLocal.isNotBlank()) """ value="${addDtLocal.escapeHtml()}"""" else ""
+    return """<div class="sd-rec-forms-row">
                     <div class="sd-rec-form-card">
                         <div class="sd-rec-form-hdr">
                             <span class="sd-rec-section-ico sd-rec-ico-blue">$recUserPlusIco</span>
@@ -2246,12 +4838,12 @@ private fun renderRecordingTabContent(user: User): String {
                         </div>
                         <div class="sd-rec-picker-wrap">
                             <span class="sd-rec-picker-ico sd-rec-picker-ico-user">$recUserPlusIco</span>
-                            <select id="sd-recording-book-cadet" class="sd-rec-picker-select"><option value="">Выберите курсанта…</option>$cadetOptions</select>
+                            <select id="sd-recording-book-cadet" class="sd-rec-picker-select$bookCadetSelectClass"><option value="">Выберите курсанта…</option>$cadetOptions</select>
                             <span class="sd-rec-picker-chevron"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
                         </div>
                         <div class="sd-rec-picker-wrap" lang="ru">
                             <span class="sd-rec-picker-ico sd-rec-picker-ico-cal">$recCalendarIco</span>
-                            <input type="datetime-local" id="sd-recording-book-dt" class="sd-rec-picker-input" min="" step="900" />
+                            <input type="datetime-local" id="sd-recording-book-dt" class="sd-rec-picker-input" min="$dtMinEsc" step="900"$bookDtAttr />
                         </div>
                         <button type="button" id="sd-recording-book-btn" class="sd-rec-submit sd-rec-submit-blue">
                             <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
@@ -2265,17 +4857,33 @@ private fun renderRecordingTabContent(user: User): String {
                         </div>
                         <div class="sd-rec-picker-wrap" lang="ru">
                             <span class="sd-rec-picker-ico sd-rec-picker-ico-cal sd-rec-picker-ico-purple">$recClockIco</span>
-                            <input type="datetime-local" id="sd-recording-add-dt" class="sd-rec-picker-input sd-rec-picker-input-purple" min="" step="900" />
+                            <input type="datetime-local" id="sd-recording-add-dt" class="sd-rec-picker-input sd-rec-picker-input-purple" min="$dtMinEsc" step="900"$addDtAttr />
                         </div>
                         <button type="button" id="sd-recording-add-btn" class="sd-rec-submit sd-rec-submit-purple">
                             <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
                             Добавить
                         </button>
                     </div>
-                </div>
-            </div><div class="sd-modal-overlay sd-hidden" id="sd-instructor-cancel-reason-modal"><div class="sd-modal"><h3 class="sd-modal-title">Выберите причину отмены:</h3><div class="sd-rate-options-instructor sd-cancel-reason-options"><label class="sd-radio"><input type="radio" name="sd-cancel-reason" value="Курсант не явился" checked /> Курсант не явился</label><label class="sd-radio"><input type="radio" name="sd-cancel-reason" value="ТС на ремонте" /> ТС на ремонте</label></div><p class="sd-modal-actions"><button type="button" id="sd-instructor-cancel-reason-confirm" class="sd-btn sd-btn-primary">Подтвердить</button><button type="button" id="sd-instructor-cancel-reason-cancel" class="sd-btn sd-btn-secondary">Отмена</button></p></div></div>
-            <div class="sd-modal-overlay sd-hidden" id="sd-instructor-rate-cadet-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вождение завершено, поставьте оценку курсанту:</h3><p id="sd-instructor-rate-cadet-name" class="sd-rate-cadet-name"></p><div class="sd-rate-options-instructor"><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="3" /> 3</label><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="4" /> 4</label><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="5" /> 5</label></div><p class="sd-modal-actions"><button type="button" id="sd-instructor-rate-cadet-confirm" class="sd-btn sd-btn-primary">Подтвердить</button></p></div></div><div class="sd-modal-overlay sd-hidden" id="sd-rec-delete-window-confirm-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вы уверены?</h3><p class="sd-modal-actions"><button type="button" id="sd-rec-delete-window-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-rec-delete-window-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>
-            <div class="sd-modal-overlay sd-hidden" id="sd-rec-cancel-session-confirm-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вы уверены?</h3><p class="sd-modal-actions"><button type="button" id="sd-rec-cancel-session-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-rec-cancel-session-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>"""
+                </div>"""
+}
+
+private fun renderRecordingTabContent(user: User): String {
+    val loading = appState.recordingLoading
+    val windows = appState.recordingOpenWindows
+    val sessions = appState.recordingSessions
+    val loadingLine = if (loading) """<div class="sd-rec-loading">Загрузка… <button type="button" id="sd-stop-loading" class="sd-btn sd-btn-small sd-btn-secondary">Показать пусто</button></div>""" else ""
+
+    val recCalendarIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>"""
+    val recClockIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>"""
+    val recCheckIco = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>"""
+    val recCarIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v5a2 2 0 0 1-2 2h-2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg>"""
+
+    return when (user.role) {
+        "instructor" -> {
+            """<div class="sd-rec-wrap">
+                <div id="sd-instructor-rec-dynamic">${renderInstructorRecordingDynamicPanelHtml(user)}</div>
+                <div id="sd-instructor-rec-forms-stable">${renderInstructorRecordingFormsPanelHtml()}</div>
+            </div>"""
         }
         "cadet" -> {
             val myScheduled = sessions.filter { it.status == "scheduled" }.take(10)
@@ -2334,7 +4942,6 @@ private fun renderRecordingTabContent(user: User): String {
                 }
             }
 
-            val cadetCancelModal = """<div class="sd-modal-overlay sd-hidden" id="sd-rec-cancel-session-confirm-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вы уверены?</h3><p class="sd-modal-actions"><button type="button" id="sd-rec-cancel-session-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-rec-cancel-session-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>"""
             """$loadingLine<div class="sd-rec-wrap">
                 <div class="sd-rec-stats-bar">
                     <div class="sd-rec-stat-card sd-rec-stat-blue">
@@ -2360,7 +4967,7 @@ private fun renderRecordingTabContent(user: User): String {
                     </div>
                     <div class="sd-rec-my-list">$myRecords</div>
                 </div>
-            </div>$cadetCancelModal"""
+            </div>"""
         }
         else -> """<div class="sd-rec-wrap"><div class="sd-rec-section"><p>Доступно инструктору и курсанту.</p></div></div>"""
     }
@@ -2421,7 +5028,6 @@ private fun renderHistoryTabContent(user: User): String {
     if (user.role == "instructor") {
         val credits = balance.filter { it.type == "credit" }
         val debits = balance.filter { it.type == "debit" }
-        val others = balance.filter { it.type !in listOf("credit", "debit") }
         val completedSessions = sessions.filter { it.status == "completed" }.sortedByDescending { it.completedAtMillis ?: it.startTimeMillis ?: 0L }
         val cancelledSessions = sessions.filter { it.status in listOf("cancelledByInstructor", "cancelledByCadet") }.sortedByDescending { it.cancelledAtMillis ?: it.startTimeMillis ?: 0L }
         val historyUsers = appState.historyUsers
@@ -2447,18 +5053,6 @@ private fun renderHistoryTabContent(user: User): String {
                 <div class="sd-history-card-icon sd-history-icon-debit">$SD_ICON_DEBIT_SVG</div>
                 <div class="sd-history-card-body">
                     <div class="sd-history-balance-head"><span class="sd-history-balance-type">Списание</span><span class="sd-history-balance-badge sd-history-debit-badge">−${b.amount} талонов</span></div>
-                    <div class="sd-history-balance-row">Кем: ${performedByName(b.performedBy).escapeHtml()}</div>
-                    <div class="sd-history-balance-row">Дата и время: $dt</div>
-                </div>
-            </div>"""
-        }
-        val othersHtml = if (others.isEmpty()) "" else others.joinToString("") { b ->
-            val typeLabel = when (b.type) { "set" -> "Установка"; else -> b.type }
-            val dt = (b.timestampMillis?.takeIf { it > 0 }?.let { formatMessageDateTime(it) }) ?: "—"
-            """<div class="sd-history-balance-card sd-history-other-card">
-                <div class="sd-history-card-icon sd-history-icon-other">$SD_ICON_OTHER_SVG</div>
-                <div class="sd-history-card-body">
-                    <div class="sd-history-balance-head"><span class="sd-history-balance-type">$typeLabel</span><span class="sd-history-balance-badge">${b.amount} талонов</span></div>
                     <div class="sd-history-balance-row">Кем: ${performedByName(b.performedBy).escapeHtml()}</div>
                     <div class="sd-history-balance-row">Дата и время: $dt</div>
                 </div>
@@ -2508,13 +5102,12 @@ private fun renderHistoryTabContent(user: User): String {
             </div>"""
         }
 
-        val balanceTotal = balance.size
+        val balanceTotal = credits.size + debits.size
         val drivingTotal = completedSessions.size + cancelledSessions.size
         return """<h2>История</h2>$loadingLine
         <details class="sd-block sd-details-block sd-history-card" open><summary class="sd-block-title sd-history-summary"><span class="sd-history-section-icon">$SD_ICON_BALANCE_SVG</span>Баланс ($balanceTotal)</summary>
             <details class="sd-history-sub" open><summary class="sd-history-sub-title"><span class="sd-history-section-icon sd-history-icon-credit">$SD_ICON_CREDIT_SVG</span>Зачисления (${credits.size})</summary><div class="sd-history-sub-list">$creditsHtml</div></details>
             <details class="sd-history-sub"><summary class="sd-history-sub-title"><span class="sd-history-section-icon sd-history-icon-debit">$SD_ICON_DEBIT_SVG</span>Списания (${debits.size})</summary><div class="sd-history-sub-list">$debitsHtml</div></details>
-            ${if (others.isNotEmpty()) """<div class="sd-history-others"><div class="sd-history-sub-title"><span class="sd-history-section-icon sd-history-icon-other">$SD_ICON_OTHER_SVG</span>Прочее (${others.size})</div><div class="sd-history-sub-list">$othersHtml</div></div>""" else ""}
         </details>
         <details class="sd-block sd-details-block sd-history-card" open><summary class="sd-block-title sd-history-summary"><span class="sd-history-section-icon">$SD_ICON_DRIVING_SVG</span>Вождение ($drivingTotal)</summary>
             <details class="sd-history-sub" open><summary class="sd-history-sub-title"><span class="sd-history-section-icon sd-history-icon-check">$SD_ICON_CHECK_SVG</span>Завершенное вождение (${completedSessions.size})</summary><div class="sd-history-session-list">$completedCardsHtml</div></details>
@@ -2526,12 +5119,18 @@ private fun renderHistoryTabContent(user: User): String {
     if (user.role == "cadet") {
         val credits = balance.filter { it.type == "credit" }
         val debits = balance.filter { it.type == "debit" }
-        val others = balance.filter { it.type !in listOf("credit", "debit") }
         val completedSessions = sessions.filter { it.status == "completed" }.sortedByDescending { it.completedAtMillis ?: it.startTimeMillis ?: 0L }
         val cancelledSessions = sessions.filter { it.status in listOf("cancelledByInstructor", "cancelledByCadet") }.sortedByDescending { it.cancelledAtMillis ?: it.startTimeMillis ?: 0L }
         val historyUsers = appState.historyUsers
-        fun performedByName(performedBy: String) = if (performedBy.isBlank()) "—" else (historyUsers.find { it.id == performedBy }?.fullName)?.let { formatShortName(it) } ?: "—"
-        fun instructorName(instructorId: String) = (historyUsers.find { it.id == instructorId }?.fullName)?.let { formatShortName(it) } ?: "—"
+        val instFallback = appState.cadetInstructor
+        fun nameFromKnownUsers(id: String): String? {
+            if (id.isBlank()) return null
+            historyUsers.find { it.id == id }?.fullName?.takeIf { it.isNotBlank() }?.let { return formatShortName(it) }
+            instFallback?.takeIf { it.id == id }?.fullName?.takeIf { it.isNotBlank() }?.let { return formatShortName(it) }
+            return null
+        }
+        fun performedByName(performedBy: String) = if (performedBy.isBlank()) "—" else (nameFromKnownUsers(performedBy) ?: "—")
+        fun instructorName(instructorId: String) = nameFromKnownUsers(instructorId) ?: "—"
         val cadetShortNameSelf = formatShortName(user.fullName.ifBlank { "—" })
 
         val creditsHtml = if (credits.isEmpty()) """<p class="sd-history-empty">Нет зачислений</p>""" else credits.joinToString("") { b ->
@@ -2551,18 +5150,6 @@ private fun renderHistoryTabContent(user: User): String {
                 <div class="sd-history-card-icon sd-history-icon-debit">$SD_ICON_DEBIT_SVG</div>
                 <div class="sd-history-card-body">
                     <div class="sd-history-balance-head"><span class="sd-history-balance-type">Списание</span><span class="sd-history-balance-badge sd-history-debit-badge">−${b.amount} талонов</span></div>
-                    <div class="sd-history-balance-row">Кем: ${performedByName(b.performedBy).escapeHtml()}</div>
-                    <div class="sd-history-balance-row">Дата и время: $dt</div>
-                </div>
-            </div>"""
-        }
-        val othersHtml = if (others.isEmpty()) "" else others.joinToString("") { b ->
-            val typeLabel = when (b.type) { "set" -> "Установка"; else -> b.type }
-            val dt = (b.timestampMillis?.takeIf { it > 0 }?.let { formatMessageDateTime(it) }) ?: "—"
-            """<div class="sd-history-balance-card sd-history-other-card">
-                <div class="sd-history-card-icon sd-history-icon-other">$SD_ICON_OTHER_SVG</div>
-                <div class="sd-history-card-body">
-                    <div class="sd-history-balance-head"><span class="sd-history-balance-type">$typeLabel</span><span class="sd-history-balance-badge">${b.amount} талонов</span></div>
                     <div class="sd-history-balance-row">Кем: ${performedByName(b.performedBy).escapeHtml()}</div>
                     <div class="sd-history-balance-row">Дата и время: $dt</div>
                 </div>
@@ -2608,13 +5195,12 @@ private fun renderHistoryTabContent(user: User): String {
                 </div>
             </div>"""
         }
-        val balanceTotal = balance.size
+        val balanceTotal = credits.size + debits.size
         val drivingTotal = completedSessions.size + cancelledSessions.size
         return """<h2>История</h2>$loadingLine
         <details class="sd-block sd-details-block sd-history-card" open><summary class="sd-block-title sd-history-summary"><span class="sd-history-section-icon">$SD_ICON_BALANCE_SVG</span>Баланс ($balanceTotal)</summary>
             <details class="sd-history-sub" open><summary class="sd-history-sub-title"><span class="sd-history-section-icon sd-history-icon-credit">$SD_ICON_CREDIT_SVG</span>Зачисления (${credits.size})</summary><div class="sd-history-sub-list">$creditsHtml</div></details>
             <details class="sd-history-sub"><summary class="sd-history-sub-title"><span class="sd-history-section-icon sd-history-icon-debit">$SD_ICON_DEBIT_SVG</span>Списания (${debits.size})</summary><div class="sd-history-sub-list">$debitsHtml</div></details>
-            ${if (others.isNotEmpty()) """<div class="sd-history-others"><div class="sd-history-sub-title"><span class="sd-history-section-icon sd-history-icon-other">$SD_ICON_OTHER_SVG</span>Прочее (${others.size})</div><div class="sd-history-sub-list">$othersHtml</div></div>""" else ""}
         </details>
         <details class="sd-block sd-details-block sd-history-card" open><summary class="sd-block-title sd-history-summary"><span class="sd-history-section-icon">$SD_ICON_DRIVING_SVG</span>Занятия ($drivingTotal)</summary>
             <details class="sd-history-sub" open><summary class="sd-history-sub-title"><span class="sd-history-section-icon sd-history-icon-check">$SD_ICON_CHECK_SVG</span>Завершенное вождение (${completedSessions.size})</summary><div class="sd-history-session-list">$completedCardsHtml</div></details>
@@ -3104,6 +5690,644 @@ private fun avatarBlockHtml(wrapperClass: String, u: User?, currentUserId: Strin
         """<div class="$wrapperClass" style="background:$bg">$initialsEsc</div>"""
 }
 
+/** Человекочитаемый размер для статистики Storage. */
+private fun formatStorageBytes(bytes: Long): String = when {
+    bytes <= 0L -> "0 Б"
+    bytes < 1024L -> "$bytes Б"
+    bytes < 1048576L -> "${bytes / 1024L} КБ"
+    else -> {
+        val mb = bytes.toDouble() / 1048576.0
+        val r = ((mb * 100.0).toInt().toDouble() / 100.0)
+        "$r МБ"
+    }
+}
+
+/** Мегабайты для шкалы заполненности бакета (два знака после запятой). */
+private fun formatStorageMegabytesOnly(bytes: Long): String {
+    val mb = bytes.toDouble() / 1048576.0
+    val rounded = kotlin.math.round(mb * 100.0) / 100.0
+    return if (rounded == rounded.toLong().toDouble()) "${rounded.toLong()}" else "$rounded"
+}
+
+/** Килобайты (целое число, 1 КБ = 1024 Б) для подписи в скобках. */
+private fun formatStorageKilobytesOnly(bytes: Long): String =
+    if (bytes <= 0L) "0" else "${bytes / 1024L}"
+
+/** Максимум шкалы «заполненности» в настройках админа (5 ГБ). */
+private val sdStorageBucketScaleMaxBytes: Long = 5L * 1024L * 1024L * 1024L
+
+/** Доля заполнения шкалы 5 ГБ для заданного объёма (байты). */
+private fun storageBucketFillPercentOf5Gb(bytes: Long): Double {
+    val used = bytes.toDouble()
+    val max = sdStorageBucketScaleMaxBytes.toDouble()
+    val p = (used / max) * 100.0
+    return if (p > 100.0) 100.0 else p
+}
+
+/** Подраздел «Инструктор» / «Курсант»: МБ (КБ) и шкала до 5 ГБ. */
+private fun storageBucketSubSectionHtml(title: String, bytes: Long, variantClass: String): String {
+    val p = storageBucketFillPercentOf5Gb(bytes)
+    val pctStr = kotlin.math.round(p * 10.0) / 10.0
+    val titleEsc = title.escapeHtml()
+    val mbLine = "${formatStorageMegabytesOnly(bytes)} МБ (${formatStorageKilobytesOnly(bytes)} КБ)"
+    return """<div class="sd-admin-storage-bucket-sub $variantClass">
+          <div class="sd-admin-storage-bucket-sub-head">$titleEsc</div>
+          <p class="sd-admin-storage-bucket-sub-mb">$mbLine</p>
+          <div class="sd-admin-storage-bucket-bar-wrap" role="presentation">
+            <div class="sd-admin-storage-bucket-bar sd-admin-storage-bucket-bar-sub">
+              <div class="sd-admin-storage-bucket-bar-fill sd-admin-storage-bucket-bar-fill-sub" style="width:${pctStr}%"></div>
+            </div>
+          </div>
+        </div>"""
+}
+
+/** Одна карточка контакта в блоке очистки Storage (настройки чата админа). */
+private fun adminStorageContactRowHtml(
+    c: User,
+    statsMap: Map<String, ChatContactStorageStats>,
+    loading: Boolean,
+): String {
+    val st = statsMap[c.id]
+    val voiceLine = when {
+        loading -> "…"
+        st != null -> "${st.voiceFileCount} шт. · ${formatStorageMegabytesOnly(st.voiceTotalBytes)} МБ (${formatStorageKilobytesOnly(st.voiceTotalBytes)} КБ)"
+        else -> "—"
+    }
+    val fileLine = when {
+        loading -> "…"
+        st != null ->
+            if (st.chatFileCount <= 0 && st.chatFileTotalBytes <= 0L) {
+                "нет файлов"
+            } else {
+                "${st.chatFileCount} шт. · ${formatStorageMegabytesOnly(st.chatFileTotalBytes)} МБ (${formatStorageKilobytesOnly(st.chatFileTotalBytes)} КБ)"
+            }
+        else -> "—"
+    }
+    val avatarLine = when {
+        loading -> "…"
+        st != null -> if (st.avatarBytes > 0L) "1 файл · ${formatStorageBytes(st.avatarBytes)}" else "нет файла"
+        else -> "—"
+    }
+    val nameShort = formatShortName(c.fullName).escapeHtml()
+    val voiceDisabled = loading || st == null || st.voiceFileCount <= 0
+    val filesDisabled = loading || st == null || (st.chatFileCount <= 0 && st.chatFileTotalBytes <= 0L)
+    val avatarDisabled = loading || st == null || st.avatarBytes <= 0L
+    val voiceDis = if (voiceDisabled) " disabled" else ""
+    val filesDis = if (filesDisabled) " disabled" else ""
+    val avatarDis = if (avatarDisabled) " disabled" else ""
+    return """<div class="sd-admin-storage-row" data-storage-user-id="${c.id.escapeHtml()}">
+            <div class="sd-admin-storage-contact-name">${formatShortName(c.fullName).escapeHtml()}</div>
+            <ul class="sd-admin-storage-lines">
+              <li class="sd-admin-storage-line">
+                <span class="sd-admin-storage-line-main"><span class="sd-admin-storage-label">Голосовое сообщение:</span> $voiceLine</span>
+                <button type="button" class="sd-chat-create-group-btn sd-accent-pill-light sd-admin-storage-clear-btn"$voiceDis data-clear-kind="voice" data-contact-id="${c.id.escapeHtml()}" data-contact-name="$nameShort">Очистить</button>
+              </li>
+              <li class="sd-admin-storage-line">
+                <span class="sd-admin-storage-line-main"><span class="sd-admin-storage-label">Файлы:</span> $fileLine</span>
+                <button type="button" class="sd-chat-create-group-btn sd-accent-pill-light sd-admin-storage-clear-btn"$filesDis data-clear-kind="files" data-contact-id="${c.id.escapeHtml()}" data-contact-name="$nameShort">Очистить</button>
+              </li>
+              <li class="sd-admin-storage-line">
+                <span class="sd-admin-storage-line-main"><span class="sd-admin-storage-label">Аватар:</span> $avatarLine</span>
+                <button type="button" class="sd-chat-create-group-btn sd-accent-pill-light sd-admin-storage-clear-btn"$avatarDis data-clear-kind="avatar" data-contact-id="${c.id.escapeHtml()}" data-contact-name="$nameShort">Очистить</button>
+              </li>
+            </ul>
+          </div>"""
+}
+
+/** Карточка группового чата в блоке очистки Storage (кнопки «Очистить» как у контактов). */
+private fun adminStorageGroupRowHtml(
+    g: ChatGroup,
+    st: ChatGroupStorageStats?,
+    loading: Boolean,
+): String {
+    val voiceLine = when {
+        loading -> "…"
+        st != null -> "${st.voiceFileCount} шт. · ${formatStorageMegabytesOnly(st.voiceTotalBytes)} МБ (${formatStorageKilobytesOnly(st.voiceTotalBytes)} КБ)"
+        else -> "—"
+    }
+    val fileLine = when {
+        loading -> "…"
+        st != null ->
+            if (st.chatFileCount <= 0 && st.chatFileTotalBytes <= 0L) {
+                "нет файлов"
+            } else {
+                "${st.chatFileCount} шт. · ${formatStorageMegabytesOnly(st.chatFileTotalBytes)} МБ (${formatStorageKilobytesOnly(st.chatFileTotalBytes)} КБ)"
+            }
+        else -> "—"
+    }
+    val avatarLine = when {
+        loading -> "…"
+        st != null -> if (st.avatarBytes > 0L) "1 файл · ${formatStorageBytes(st.avatarBytes)}" else "нет файла"
+        else -> "—"
+    }
+    val nameEsc = g.name.trim().ifBlank { "Группа" }.escapeHtml()
+    val nameShort = g.name.trim().ifBlank { "Группа" }.escapeHtml()
+    val voiceDisabled = loading || st == null || st.voiceFileCount <= 0
+    val filesDisabled = loading || st == null || (st.chatFileCount <= 0 && st.chatFileTotalBytes <= 0L)
+    val avatarDisabled = loading || st == null || st.avatarBytes <= 0L
+    val voiceDis = if (voiceDisabled) " disabled" else ""
+    val filesDis = if (filesDisabled) " disabled" else ""
+    val avatarDis = if (avatarDisabled) " disabled" else ""
+    return """<div class="sd-admin-storage-row sd-admin-storage-row-group" data-storage-group-id="${g.id.escapeHtml()}">
+            <div class="sd-admin-storage-contact-name">$nameEsc</div>
+            <ul class="sd-admin-storage-lines">
+              <li class="sd-admin-storage-line">
+                <span class="sd-admin-storage-line-main"><span class="sd-admin-storage-label">Голосовое сообщение:</span> $voiceLine</span>
+                <button type="button" class="sd-chat-create-group-btn sd-accent-pill-light sd-admin-storage-clear-btn"$voiceDis data-clear-kind="group-voice" data-group-id="${g.id.escapeHtml()}" data-group-name="$nameShort">Очистить</button>
+              </li>
+              <li class="sd-admin-storage-line">
+                <span class="sd-admin-storage-line-main"><span class="sd-admin-storage-label">Файлы:</span> $fileLine</span>
+                <button type="button" class="sd-chat-create-group-btn sd-accent-pill-light sd-admin-storage-clear-btn"$filesDis data-clear-kind="group-files" data-group-id="${g.id.escapeHtml()}" data-group-name="$nameShort">Очистить</button>
+              </li>
+              <li class="sd-admin-storage-line">
+                <span class="sd-admin-storage-line-main"><span class="sd-admin-storage-label">Аватар группы:</span> $avatarLine</span>
+                <button type="button" class="sd-chat-create-group-btn sd-accent-pill-light sd-admin-storage-clear-btn"$avatarDis data-clear-kind="group-avatar" data-group-id="${g.id.escapeHtml()}" data-group-name="$nameShort">Очистить</button>
+              </li>
+            </ul>
+          </div>"""
+}
+
+private fun adminStorageGroupSectionHtml(
+    groups: List<ChatGroup>,
+    groupStatsMap: Map<String, ChatGroupStorageStats>,
+    loading: Boolean,
+): String {
+    val sec = groups.joinToString("") { g ->
+        adminStorageGroupRowHtml(g, groupStatsMap[g.id], loading)
+    }
+    return """<div class="sd-admin-storage-role-section sd-admin-storage-role-section-groups">
+    <h4 class="sd-admin-storage-role-section-title">Группа в чате</h4>
+    ${if (sec.isBlank()) """<p class="sd-admin-storage-role-empty sd-settings-hint">Нет групповых чатов — создайте группу на вкладке «Чат».</p>""" else """<div class="sd-admin-storage-role-cards">$sec</div>"""}
+  </div>"""
+}
+
+private fun adminStorageContactsByRoleSectionsHtml(
+    contacts: List<User>,
+    statsMap: Map<String, ChatContactStorageStats>,
+    groups: List<ChatGroup>,
+    groupStatsMap: Map<String, ChatGroupStorageStats>,
+    loading: Boolean,
+): String {
+    fun sortKey(u: User) = formatShortName(u.fullName).lowercase()
+    val instructors = contacts.filter { it.role == "instructor" }.sortedBy(::sortKey)
+    val cadets = contacts.filter { it.role == "cadet" }.sortedBy(::sortKey)
+    val other = contacts.filter { it.role != "instructor" && it.role != "cadet" }.sortedBy(::sortKey)
+    fun rowsHtml(list: List<User>) = list.joinToString("") { adminStorageContactRowHtml(it, statsMap, loading) }
+    val secInstructor = rowsHtml(instructors)
+    val secCadet = rowsHtml(cadets)
+    val secOther = rowsHtml(other)
+    val blockInstructor = """<div class="sd-admin-storage-role-section sd-admin-storage-role-section-instructors">
+    <h4 class="sd-admin-storage-role-section-title">Инструкторы</h4>
+    ${if (secInstructor.isBlank()) """<p class="sd-admin-storage-role-empty sd-settings-hint">Нет контактов</p>""" else """<div class="sd-admin-storage-role-cards">$secInstructor</div>"""}
+  </div>"""
+    val blockCadet = """<div class="sd-admin-storage-role-section sd-admin-storage-role-section-cadets">
+    <h4 class="sd-admin-storage-role-section-title">Курсанты</h4>
+    ${if (secCadet.isBlank()) """<p class="sd-admin-storage-role-empty sd-settings-hint">Нет контактов</p>""" else """<div class="sd-admin-storage-role-cards">$secCadet</div>"""}
+  </div>"""
+    val blockGroup = adminStorageGroupSectionHtml(groups, groupStatsMap, loading)
+    val blockOther = if (secOther.isBlank()) {
+        ""
+    } else {
+        """<div class="sd-admin-storage-role-section sd-admin-storage-role-section-other">
+    <h4 class="sd-admin-storage-role-section-title">Другие роли</h4>
+    <div class="sd-admin-storage-role-cards">$secOther</div>
+  </div>"""
+    }
+    return blockInstructor + blockCadet + blockGroup + blockOther
+}
+
+/** Блок «Очистить Firebase storage» в настройках чата (только админ). */
+private fun renderAdminChatStorageBlock(): String {
+    val bucketLoading = appState.chatStorageBucketLoading
+    val bucketErr = appState.chatStorageBucketError
+    val br = appState.chatStorageBucketBreakdown
+    val bucketBytes = br?.totalBytes
+    val loading = appState.chatStorageStatsLoading
+    val bucketPct = when {
+        bucketBytes == null || bucketLoading || loading -> 0.0
+        else -> storageBucketFillPercentOf5Gb(bucketBytes)
+    }
+    val bucketPctStr = kotlin.math.round(bucketPct * 10.0) / 10.0
+    val bucketMbBlock = when {
+        bucketLoading -> """<p class="sd-admin-storage-bucket-mb-wrap"><span class="sd-admin-storage-bucket-mb sd-admin-storage-loading">Обновление: объём бакета и карточки контактов…</span></p>"""
+        bucketErr != null -> """<p class="sd-admin-storage-bucket-mb-wrap sd-error">${bucketErr.escapeHtml()}</p>"""
+        loading -> """<p class="sd-admin-storage-bucket-mb-wrap"><span class="sd-admin-storage-bucket-mb sd-admin-storage-loading">Обновление: объём бакета и карточки контактов и групп…</span></p>"""
+        bucketBytes == null -> """<p class="sd-admin-storage-bucket-mb-wrap sd-settings-hint">Нажмите «Обновить», чтобы загрузить объём бакета (МБ и КБ) и обновить все карточки ниже.</p>"""
+        else -> """<p class="sd-admin-storage-bucket-mb-wrap"><span class="sd-admin-storage-bucket-mb">${formatStorageMegabytesOnly(bucketBytes)} МБ (${formatStorageKilobytesOnly(bucketBytes)} КБ)</span></p>"""
+    }
+    val storageRoleSubsHtml = when {
+        bucketErr != null -> ""
+        bucketLoading -> """<div class="sd-admin-storage-role-subs-below-refresh"><p class="sd-settings-hint sd-admin-storage-role-placeholder">Обновление данных по инструкторам, курсантам, администраторам и группам…</p></div>"""
+        loading -> """<div class="sd-admin-storage-role-subs-below-refresh"><p class="sd-settings-hint sd-admin-storage-role-placeholder">Загрузка заполненности Firebase Storage по инструкторам, курсантам, администраторам и группам…</p></div>"""
+        br == null -> """<div class="sd-admin-storage-role-subs-below-refresh"><p class="sd-settings-hint sd-admin-storage-role-placeholder">Нажмите «Обновить данные» или «Обновить» выше — появятся подразделы <strong>Инструктор</strong>, <strong>Курсант</strong>, <strong>Администратор</strong> и <strong>Группа в чате</strong> (МБ и КБ, шкала до 5 ГБ).</p></div>"""
+        else -> {
+            val subInstructor = storageBucketSubSectionHtml("Инструктор", br.instructorBytes, "sd-admin-storage-bucket-sub-instructor")
+            val subCadet = storageBucketSubSectionHtml("Курсант", br.cadetBytes, "sd-admin-storage-bucket-sub-cadet")
+            val subAdmin = storageBucketSubSectionHtml("Администратор", br.adminBytes, "sd-admin-storage-bucket-sub-admin")
+            val subGroup = storageBucketSubSectionHtml("Группа в чате", br.groupBytes, "sd-admin-storage-bucket-sub-group")
+            val otherLine = if (br.otherBytes > 0L) {
+                """<p class="sd-admin-storage-bucket-other">Прочее (нераспознанное): ${formatStorageMegabytesOnly(br.otherBytes)} МБ (${formatStorageKilobytesOnly(br.otherBytes)} КБ)</p>"""
+            } else {
+                ""
+            }
+            """<div class="sd-admin-storage-bucket-subs sd-admin-storage-role-subs-below-refresh">
+            <p class="sd-admin-storage-bucket-subs-lead">По ролям и группам</p>
+            $subInstructor
+            $subCadet
+            $subAdmin
+            $subGroup
+            $otherLine
+            <p class="sd-admin-storage-bucket-role-hint">Личные чаты: голосовые и файлы — пополам между участниками; групповые чаты (комнаты group_…) и аватары групп в Storage — в подразделе «Группа в чате»; папка пользователя в Storage (users/…) — по роли в базе, отдельно показано «Администратор».</p>
+          </div>"""
+        }
+    }
+    val bucketUsageHtml = """<div class="sd-admin-storage-bucket-usage">
+        <div class="sd-admin-storage-bucket-usage-header">
+          <span class="sd-admin-storage-bucket-title">Заполненность Firebase Storage</span>
+          <button type="button" id="sd-admin-storage-bucket-refresh" class="sd-chat-create-group-btn sd-accent-pill-light"${if (bucketLoading || loading) " disabled" else ""}>Обновить</button>
+        </div>
+        $bucketMbBlock
+        <div class="sd-admin-storage-bucket-bar-wrap" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${bucketPctStr.toInt().coerceIn(0, 100)}" aria-label="Заполненность относительно 5 ГБ">
+          <div class="sd-admin-storage-bucket-bar">
+            <div class="sd-admin-storage-bucket-bar-fill" style="width:${bucketPctStr}%"></div>
+          </div>
+        </div>
+        <p class="sd-admin-storage-bucket-scale">Шкала: 0 — 5120 МБ (5 ГБ)</p>
+      </div>"""
+    val err = appState.chatStorageStatsError
+    val statsMap = appState.chatStorageStatsByUserId
+    val groupStatsMap = appState.chatGroupStorageStatsByGroupId
+    val contacts = appState.chatContacts.sortedBy { formatShortName(it.fullName).lowercase() }
+    val groups = appState.chatGroups.sortedBy { it.name.lowercase() }
+    val statusLine = when {
+        loading -> """<p class="sd-admin-storage-status sd-admin-storage-loading">Загрузка…</p>"""
+        err != null -> """<p class="sd-admin-storage-status sd-error">${err.escapeHtml()}</p>"""
+        statsMap.isEmpty() && groupStatsMap.isEmpty() && (contacts.isNotEmpty() || groups.isNotEmpty()) ->
+            """<p class="sd-admin-storage-status sd-settings-hint">Нажмите «Обновить данные», чтобы загрузить сведения из Storage.</p>"""
+        contacts.isEmpty() && groups.isEmpty() -> """<p class="sd-admin-storage-status sd-settings-hint">Нет контактов и групп — откройте вкладку «Чат» и обновите список.</p>"""
+        else -> ""
+    }
+    val contactsListHtml = adminStorageContactsByRoleSectionsHtml(
+        contacts,
+        statsMap,
+        groups,
+        groupStatsMap,
+        loading,
+    )
+    val confirmModal = """<div class="sd-modal-overlay sd-hidden" id="sd-admin-storage-confirm-modal" aria-hidden="true">
+        <div class="sd-modal sd-admin-storage-confirm-modal">
+          <h3 class="sd-modal-title">Вы уверены?</h3>
+          <p class="sd-admin-storage-confirm-text" id="sd-admin-storage-confirm-text"></p>
+          <p class="sd-modal-actions">
+            <button type="button" id="sd-admin-storage-confirm-yes" class="sd-btn sd-btn-primary">Да</button>
+            <button type="button" id="sd-admin-storage-confirm-no" class="sd-btn sd-btn-secondary">Нет</button>
+          </p>
+        </div>
+      </div>"""
+    return """<div class="sd-settings-block sd-admin-storage-block">
+       <h3 class="sd-settings-block-title">Очистить Firebase storage</h3>
+       <p class="sd-settings-hint sd-admin-storage-hint">Объёмы в личных чатах с каждым контактом: голосовые (папка Storage и сообщения в чате), вложения файлов в чате и файл аватара пользователя. Ниже — групповые чаты: голосовые, файлы и аватар группы. «Обновить данные» — только пересчёт объёма. «Очистить» у контакта по голосовым удаляет все личные переписки этого пользователя со всеми учётными записями из базы; по аватару — только профиль. «Очистить» у группы — только эту группу.</p>
+       $bucketUsageHtml
+       <p class="sd-admin-storage-actions"><button type="button" id="sd-admin-storage-stats-refresh" class="sd-chat-create-group-btn sd-accent-pill-light"${if (loading || bucketLoading) " disabled" else ""}>Обновить данные</button></p>
+       $storageRoleSubsHtml
+       $statusLine
+       <div class="sd-admin-storage-list" id="sd-admin-storage-list">$contactsListHtml</div>
+       $confirmModal
+       </div>"""
+}
+
+private fun showAdminStorageClearConfirm(
+    kind: String,
+    contactId: String?,
+    contactDisplayName: String,
+    groupId: String? = null,
+    groupDisplayName: String? = null,
+) {
+    adminStoragePendingClearKind = kind
+    adminStoragePendingContactId = contactId
+    adminStoragePendingGroupId = groupId
+    val modal = document.getElementById("sd-admin-storage-confirm-modal") ?: return
+    val p = document.getElementById("sd-admin-storage-confirm-text")
+    val text = when (kind) {
+        "voice" -> "Будут удалены все голосовые сообщения пользователя $contactDisplayName во всех личных чатах (со всеми собеседниками), из базы и из Storage."
+        "files" -> "Будут удалены все файлы вложений в вашем личном чате с $contactDisplayName (из базы и из Storage)."
+        "avatar" -> "Будет удалён файл аватара пользователя $contactDisplayName из Storage; в профиле аватар сбросится."
+        "group-voice" -> "Будут удалены все голосовые сообщения в групповом чате «${groupDisplayName ?: "?"}» из базы и из Storage."
+        "group-files" -> "Будут удалены все файлы вложений в групповом чате «${groupDisplayName ?: "?"}» из базы и из Storage."
+        "group-avatar" -> "Будет удалён аватар группы «${groupDisplayName ?: "?"}» из Storage; в карточке группы аватар сбросится."
+        else -> ""
+    }
+    p?.textContent = text
+    modal.classList.remove("sd-hidden")
+    modal.setAttribute("aria-hidden", "false")
+}
+
+private fun hideAdminStorageClearConfirm() {
+    adminStoragePendingClearKind = null
+    adminStoragePendingContactId = null
+    adminStoragePendingGroupId = null
+    val modal = document.getElementById("sd-admin-storage-confirm-modal") ?: return
+    modal.classList.add("sd-hidden")
+    modal.setAttribute("aria-hidden", "true")
+}
+
+private fun runAdminStorageClearAfterConfirm() {
+    val kind = adminStoragePendingClearKind ?: return
+    val contactId = adminStoragePendingContactId
+    val groupId = adminStoragePendingGroupId
+    hideAdminStorageClearConfirm()
+    when (kind) {
+        "voice" -> {
+            val cid = contactId ?: return
+            adminClearContactVoice(cid) { err ->
+                if (err != null) updateState { networkError = err }
+                else {
+                    showToast("Голосовые сообщения удалены")
+                    refreshAdminChatStorageStats()
+                    val uid = appState.user?.id
+                    if (uid != null) {
+                        getUsersForChat(appState.user!!) { list ->
+                            updateState { chatContacts = list }
+                        }
+                    }
+                }
+            }
+        }
+        "files" -> {
+            val cid = contactId ?: return
+            adminClearContactFiles(cid) { err ->
+                if (err != null) updateState { networkError = err }
+                else {
+                    showToast("Файлы в чате удалены")
+                    refreshAdminChatStorageStats()
+                    val uid = appState.user?.id
+                    if (uid != null) {
+                        getUsersForChat(appState.user!!) { list ->
+                            updateState { chatContacts = list }
+                        }
+                    }
+                }
+            }
+        }
+        "avatar" -> {
+            val cid = contactId ?: return
+            adminClearContactAvatar(cid) { err ->
+                if (err != null) updateState { networkError = err }
+                else {
+                    showToast("Аватар удалён")
+                    refreshAdminChatStorageStats()
+                    val uid = appState.user?.id
+                    if (uid != null) {
+                        getUsersForChat(appState.user!!) { list ->
+                            updateState { chatContacts = list }
+                        }
+                    }
+                }
+            }
+        }
+        "group-voice" -> {
+            val gid = groupId ?: return
+            adminClearGroupVoice(gid) { err ->
+                if (err != null) updateState { networkError = err }
+                else {
+                    showToast("Голосовые в группе удалены")
+                    refreshAdminChatStorageStats()
+                    val uid = appState.user?.id
+                    val u = appState.user
+                    if (uid != null && u != null) {
+                        getChatGroupsForUser(uid) { list -> updateState { chatGroups = list } }
+                    }
+                }
+            }
+        }
+        "group-files" -> {
+            val gid = groupId ?: return
+            adminClearGroupFiles(gid) { err ->
+                if (err != null) updateState { networkError = err }
+                else {
+                    showToast("Файлы в группе удалены")
+                    refreshAdminChatStorageStats()
+                    val uid = appState.user?.id
+                    if (uid != null) {
+                        getChatGroupsForUser(uid) { list -> updateState { chatGroups = list } }
+                    }
+                }
+            }
+        }
+        "group-avatar" -> {
+            val gid = groupId ?: return
+            adminClearGroupAvatar(gid) { err ->
+                if (err != null) updateState { networkError = err }
+                else {
+                    showToast("Аватар группы удалён")
+                    refreshAdminChatStorageStats()
+                    val uid = appState.user?.id
+                    if (uid != null) {
+                        getChatGroupsForUser(uid) { list -> updateState { chatGroups = list } }
+                    }
+                }
+            }
+        }
+        else -> Unit
+    }
+}
+
+/**
+ * Перед пересчётом Storage подтягиваем контакты и группы из Firestore.
+ * Иначе [AppState.chatGroups] может быть пустым (настройки чата без захода на вкладку «Чат»)
+ * — тогда статистика по группам и голосовым в них не запрашивалась.
+ */
+private fun loadChatListsForAdminStorageThen(
+    user: User,
+    then: (contactIds: List<String>, groupIds: List<String>) -> Unit,
+) {
+    val uid = user.id
+    getChatGroupsForUser(uid) { groups ->
+        getUsersForChat(user) { contacts ->
+            updateState { chatGroups = groups; chatContacts = contacts }
+            val contactIds = contacts.map { it.id }
+            val groupIds = groups.map { it.id }.filter { it.isNotBlank() }
+            then(contactIds, groupIds)
+        }
+    }
+}
+
+/** Кнопка «Обновить» в блоке заполненности бакета: объём бакета (МБ и КБ) + пересчёт карточек контактов и групп. */
+private fun refreshAdminStorageFull() {
+    if (appState.user?.id == null) return
+    if (appState.user?.role != "admin") return
+    if (appState.chatStorageBucketLoading || appState.chatStorageStatsLoading) return
+    val user = appState.user ?: return
+    loadChatListsForAdminStorageThen(user) { ids, groupIds ->
+        refreshAdminStorageFullWithLists(ids, groupIds)
+    }
+}
+
+private fun refreshAdminStorageFullWithLists(ids: List<String>, groupIds: List<String>) {
+    updateState {
+        chatStorageBucketLoading = true
+        chatStorageBucketError = null
+        if (ids.isNotEmpty() || groupIds.isNotEmpty()) {
+            chatStorageStatsLoading = true
+            chatStorageStatsError = null
+        }
+    }
+    var pending = 1
+    if (ids.isNotEmpty()) pending++
+    if (groupIds.isNotEmpty()) pending++
+    fun finishChunk() {
+        pending--
+        if (pending <= 0) {
+            updateState {
+                chatStorageBucketLoading = false
+                chatStorageStatsLoading = false
+            }
+        }
+    }
+    getFirebaseStorageBucketUsage { err, breakdown ->
+        updateState {
+            if (err != null) {
+                chatStorageBucketError = err
+                chatStorageBucketBreakdown = null
+            } else {
+                chatStorageBucketError = null
+                chatStorageBucketBreakdown = breakdown
+            }
+        }
+        finishChunk()
+    }
+    if (ids.isEmpty() && groupIds.isEmpty()) {
+        updateState {
+            chatStorageStatsError = "Нет контактов и групп в чате."
+            chatStorageStatsByUserId = emptyMap()
+            chatGroupStorageStatsByGroupId = emptyMap()
+        }
+    } else {
+        if (ids.isEmpty()) {
+            updateState {
+                chatStorageStatsByUserId = emptyMap()
+                chatStorageStatsError = null
+            }
+        } else {
+            getAdminChatStorageStats(ids) { err, list ->
+                if (err != null) {
+                    updateState {
+                        chatStorageStatsError = err
+                        chatStorageStatsByUserId = emptyMap()
+                    }
+                } else {
+                    val map = list?.associateBy { it.userId } ?: emptyMap()
+                    updateState {
+                        chatStorageStatsError = null
+                        chatStorageStatsByUserId = map
+                    }
+                }
+                finishChunk()
+            }
+        }
+        if (groupIds.isEmpty()) {
+            updateState { chatGroupStorageStatsByGroupId = emptyMap() }
+        } else {
+            getAdminGroupChatStorageStats(groupIds) { err, list ->
+                if (err != null) {
+                    updateState { chatGroupStorageStatsByGroupId = emptyMap() }
+                } else {
+                    val map = list?.associateBy { it.groupId } ?: emptyMap()
+                    updateState { chatGroupStorageStatsByGroupId = map }
+                }
+                finishChunk()
+            }
+        }
+    }
+}
+
+private fun refreshAdminChatStorageStats() {
+    if (appState.user?.id == null) return
+    if (appState.user?.role != "admin") return
+    if (appState.chatStorageStatsLoading || appState.chatStorageBucketLoading) return
+    val user = appState.user ?: return
+    loadChatListsForAdminStorageThen(user) { ids, groupIds ->
+        refreshAdminChatStorageStatsWithLists(ids, groupIds)
+    }
+}
+
+private fun refreshAdminChatStorageStatsWithLists(ids: List<String>, groupIds: List<String>) {
+    if (ids.isEmpty() && groupIds.isEmpty()) {
+        updateState {
+            chatStorageStatsError = "Нет контактов и групп в чате."
+            chatStorageStatsByUserId = emptyMap()
+            chatGroupStorageStatsByGroupId = emptyMap()
+        }
+        getFirebaseStorageBucketUsage { err, breakdown ->
+            updateState {
+                if (err != null) {
+                    chatStorageBucketError = err
+                    chatStorageBucketBreakdown = null
+                } else {
+                    chatStorageBucketError = null
+                    chatStorageBucketBreakdown = breakdown
+                }
+            }
+        }
+        return
+    }
+    updateState { chatStorageStatsLoading = true; chatStorageStatsError = null }
+    var pending = 1
+    if (ids.isNotEmpty()) pending++
+    if (groupIds.isNotEmpty()) pending++
+    fun finishChunk() {
+        pending--
+        if (pending <= 0) updateState { chatStorageStatsLoading = false }
+    }
+    getFirebaseStorageBucketUsage { err, breakdown ->
+        updateState {
+            if (err != null) {
+                chatStorageBucketError = err
+                chatStorageBucketBreakdown = null
+            } else {
+                chatStorageBucketError = null
+                chatStorageBucketBreakdown = breakdown
+            }
+        }
+        finishChunk()
+    }
+    if (ids.isEmpty()) {
+        updateState {
+            chatStorageStatsByUserId = emptyMap()
+            chatStorageStatsError = null
+        }
+    } else {
+        getAdminChatStorageStats(ids) { err, list ->
+            if (err != null) {
+                updateState {
+                    chatStorageStatsError = err
+                    chatStorageStatsByUserId = emptyMap()
+                }
+            } else {
+                val map = list?.associateBy { it.userId } ?: emptyMap()
+                updateState {
+                    chatStorageStatsError = null
+                    chatStorageStatsByUserId = map
+                }
+            }
+            finishChunk()
+        }
+    }
+    if (groupIds.isEmpty()) {
+        updateState { chatGroupStorageStatsByGroupId = emptyMap() }
+    } else {
+        getAdminGroupChatStorageStats(groupIds) { err, list ->
+            if (err != null) {
+                updateState { chatGroupStorageStatsByGroupId = emptyMap() }
+            } else {
+                val map = list?.associateBy { it.groupId } ?: emptyMap()
+                updateState { chatGroupStorageStatsByGroupId = map }
+            }
+            finishChunk()
+        }
+    }
+}
+
 private fun renderSettingsTabContent(user: User): String {
     val avatarDataUrl = user.chatAvatarUrl?.takeIf { it.isNotBlank() } ?: getChatAvatarDataUrl(user.id)
     val avatarSection = """<div class="sd-settings-block">
@@ -3150,13 +6374,20 @@ private fun renderSettingsTabContent(user: User): String {
            <label class="sd-settings-checkbox"><input type="checkbox" id="sd-settings-sound-notifications" ${if (checked) "checked" else ""} /> Включить звук уведомлений</label>
            <p style="margin-top:12px">Звук уведомлений:</p>
            <select id="sd-settings-notification-sound" class="sd-input sd-settings-sound-select">$soundOptionsHtml</select>
-           <button type="button" id="sd-settings-sound-preview" class="sd-btn sd-btn-icon sd-settings-sound-preview-btn" title="Прослушать" aria-label="Прослушать" style="margin-top:8px">$iconPlaySvg</button>
+           <button type="button" id="sd-settings-sound-preview" class="sd-btn sd-btn-icon sd-btn-primary sd-settings-sound-preview-btn" title="Прослушать" aria-label="Прослушать" style="margin-top:8px">$iconPlaySvgWhite</button>
            $allowBtnHtml
            </div>"""
     } else ""
-    return """<h2>Настройки</h2>
+    val adminStorageBlock = if (user.role == "admin") renderAdminChatStorageBlock() else ""
+    return """<div class="sd-settings-screen">
+       <div class="sd-settings-topbar">
+         <h2 class="sd-settings-title">Настройки</h2>
+         <button type="button" id="sd-settings-back-to-chat" class="sd-chat-create-group-btn sd-accent-pill-light sd-settings-back-chat-btn" title="К чату" aria-label="Назад к чату">$SD_ICON_BACK_CHEVRON_SVG</button>
+       </div>
        $avatarSection
-       $soundBlock"""
+       $soundBlock
+       $adminStorageBlock
+       </div>"""
 }
 
 private fun renderBalanceTabContent(user: User): String {
@@ -3280,7 +6511,14 @@ private fun getTabBadgeCount(tabName: String, user: User): Int {
             (raw - appState.recordingTabBadgeBaseline).coerceAtLeast(0)
         }
         "Чат" -> appState.chatUnreadCounts.values.sum()
-        "История", "Баланс", "Билеты", "Настройки" -> 0
+        "Расписание" -> {
+            if (user.role != "admin") return 0
+            val cur = computeAdminScheduleSignature(appState.adminScheduleSessionsByInstructorId)
+            if (cur.isEmpty()) return 0
+            if (cur != appState.adminScheduleSeenSignature) return 1
+            0
+        }
+        "История", "Баланс", "Билеты" -> 0
         else -> 0
     }
 }
@@ -3288,39 +6526,60 @@ private fun getTabBadgeCount(tabName: String, user: User): Int {
 /** Возвращает (кнопки вкладок, контент вкладки) для текущего выбора. */
 private fun getPanelTabButtonsAndContent(user: User, tabs: List<String>): Pair<String, String> {
     val appInfo = SharedFactory.getAppInfoRepository().getAppInfo()
-    val selected = appState.selectedTabIndex.coerceIn(0, tabs.size - 1)
+    val canOpenChatSettingsFromChat = user.role == "instructor" || user.role == "cadet" || user.role == "admin"
+    /** Подсветка нижней панели: при открытых настройках из чата активна вкладка «Чат». */
+    val selectedForHighlight = when {
+        appState.chatSettingsOpen && canOpenChatSettingsFromChat -> {
+            val chatIdx = tabs.indexOf("Чат")
+            if (chatIdx >= 0) chatIdx else appState.selectedTabIndex.coerceIn(0, tabs.size - 1)
+        }
+        else -> appState.selectedTabIndex.coerceIn(0, tabs.size - 1)
+    }
     val tabIconMap = mapOf(
         "Главная"  to """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>""",
         "Баланс"   to """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>""",
         "Чат"      to """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>""",
         "История"  to """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>""",
         "Запись"   to """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>""",
-        "Билеты"   to """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2"/><path d="M13 17v2"/><path d="M13 11v2"/></svg>""",
-        "Настройки" to """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>"""
+        "Расписание" to """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/><path d="M16 18h.01"/></svg>""",
+        "Билеты"   to """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2"/><path d="M13 17v2"/><path d="M13 11v2"/></svg>"""
     )
     val tabButtons = tabs.mapIndexed { i, name ->
-        val cls = if (i == selected) "sd-tab sd-active" else "sd-tab"
+        val cls = if (i == selectedForHighlight) "sd-tab sd-active" else "sd-tab"
         val icon = tabIconMap[name] ?: """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>"""
-        val badgeCount = if (i == selected) 0 else getTabBadgeCount(name, user)
+        val badgeCount = if (i == selectedForHighlight) 0 else getTabBadgeCount(name, user)
         val badgeHtml = if (badgeCount > 0) """<span class="sd-tab-badge">${if (badgeCount > 99) "99+" else badgeCount.toString()}</span>""" else ""
         """<button type="button" class="$cls" data-tab="$i"><span class="sd-tab-icon">$icon</span><span class="sd-tab-label">$name</span>$badgeHtml</button>"""
     }.joinToString("")
-    val tabName = tabs[selected]
-    val tabContent = when (tabName) {
-        "Главная" -> when (user.role) {
-            "admin" -> renderAdminHomeContent()
-            "instructor" -> renderInstructorHomeContent(user, appInfo.version)
-            "cadet" -> renderCadetHomeContent(user, appInfo.version)
-            else -> """<h2>$tabName</h2><p>Баланс: ${user.balance} талонов.</p><p>Версия: ${appInfo.version}</p>"""
+    val tabContent = when {
+        appState.chatSettingsOpen && canOpenChatSettingsFromChat -> renderSettingsTabContent(user)
+        else -> {
+            val tabName = tabs[appState.selectedTabIndex.coerceIn(0, tabs.size - 1)]
+            when (tabName) {
+                "Главная" -> when (user.role) {
+                    "admin" -> renderAdminHomeContent()
+                    "instructor" -> if (appState.instructorHomeSubView == "profile") {
+                        renderInstructorProfileStatsContent(user, appInfo.version)
+                    } else {
+                        renderInstructorHomeContent(user, appInfo.version)
+                    }
+                    "cadet" -> if (appState.cadetHomeSubView == "profile") {
+                        renderCadetProfileStatsContent(user, appInfo.version)
+                    } else {
+                        renderCadetHomeContent(user, appInfo.version)
+                    }
+                    else -> """<h2>$tabName</h2><p>Баланс: ${user.balance} талонов.</p><p>Версия: ${appInfo.version}</p>"""
+                }
+                "Чат" -> renderChatTabContent(user)
+                "Баланс" -> renderBalanceTabContent(user)
+                "Расписание" -> if (user.role == "admin") renderAdminScheduleTabContent() else """<h2>Расписание</h2><p>Раздел только для администратора.</p>"""
+                "Запись", "Запись на вождение" -> renderRecordingTabContent(user)
+                "История" -> renderHistoryTabContent(user)
+                "Билеты" -> renderTicketsTabContent()
+                "ПДД" -> """<h2>$tabName</h2><p>Правила дорожного движения — полный функционал в приложении.</p><p><a href="https://play.google.com/store/apps/details?id=com.example.startdrive" target="_blank" rel="noopener">Приложение StartDrive</a> · <a href="https://pdd.ru/" target="_blank" rel="noopener">ПДД РФ (pdd.ru)</a></p>"""
+                else -> """<h2>$tabName</h2><p>Раздел в разработке.</p>"""
+            }
         }
-        "Чат" -> renderChatTabContent(user)
-        "Баланс" -> renderBalanceTabContent(user)
-        "Запись", "Запись на вождение" -> renderRecordingTabContent(user)
-        "История" -> renderHistoryTabContent(user)
-        "Билеты" -> renderTicketsTabContent()
-        "ПДД" -> """<h2>$tabName</h2><p>Правила дорожного движения — полный функционал в приложении.</p><p><a href="https://play.google.com/store/apps/details?id=com.example.startdrive" target="_blank" rel="noopener">Приложение StartDrive</a> · <a href="https://pdd.ru/" target="_blank" rel="noopener">ПДД РФ (pdd.ru)</a></p>"""
-        "Настройки" -> renderSettingsTabContent(user)
-        else -> """<h2>$tabName</h2><p>Раздел в разработке.</p>"""
     }
     return Pair(tabButtons, tabContent)
 }
@@ -3332,9 +6591,24 @@ private fun getNotificationButtonWrapHtml(): String {
     return """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>$badgeHtml"""
 }
 
+/** Модалка подтверждения очистки истории вождений (вкладка «Расписание» админа). */
+private fun adminClearHistoryModalHtml(): String = """
+        <div class="sd-modal-overlay sd-hidden" id="sd-admin-clear-history-modal" aria-hidden="true">
+            <div class="sd-modal sd-admin-clear-history-dialog" role="dialog" aria-modal="true" aria-labelledby="sd-admin-clear-history-title">
+                <h3 class="sd-modal-title" id="sd-admin-clear-history-title">Вы уверены?</h3>
+                <p class="sd-muted">Все записи истории вождений этого инструктора будут удалены из базы. Это действие нельзя отменить.</p>
+                <p class="sd-modal-actions">
+                    <button type="button" class="sd-btn sd-btn-small sd-btn-primary" id="sd-admin-clear-history-yes">Да</button>
+                    <button type="button" class="sd-btn sd-btn-small sd-btn-secondary" id="sd-admin-clear-history-no">Нет</button>
+                </p>
+            </div>
+        </div>
+    """
+
 private fun renderPanel(user: User, roleTitle: String, tabs: List<String>): String {
     val (tabButtons, tabContent) = getPanelTabButtonsAndContent(user, tabs)
     val notifWrapHtml = getNotificationButtonWrapHtml()
+    val adminClearHistoryModal = if (user.role == "admin") adminClearHistoryModalHtml() else ""
     return """
         <header class="sd-header sd-panel-header">
             <div class="sd-header-text">
@@ -3358,6 +6632,7 @@ private fun renderPanel(user: User, roleTitle: String, tabs: List<String>): Stri
                 $tabContent
             </div>
         </main>
+        $adminClearHistoryModal
         <nav class="sd-tabs">$tabButtons</nav>
     """.trimIndent()
 }
@@ -3366,20 +6641,30 @@ private fun renderPanel(user: User, roleTitle: String, tabs: List<String>): Stri
 private fun refreshPanelCardContent(root: org.w3c.dom.Element) {
     val user = appState.user ?: return
     val tabs = when (appState.screen) {
-        AppScreen.Admin -> listOf("Главная", "Баланс", "Чат", "История")
-        AppScreen.Instructor -> listOf("Главная", "Запись", "Чат", "Билеты", "История", "Настройки")
-        else -> listOf("Главная", "Запись", "Чат", "Билеты", "История", "Настройки")
+        AppScreen.Admin -> listOf("Главная", "Баланс", "Расписание", "Чат", "История")
+        AppScreen.Instructor -> listOf("Главная", "Запись", "Чат", "Билеты", "История")
+        else -> listOf("Главная", "Запись", "Чат", "Билеты", "История")
     }
     val (_, tabContent) = getPanelTabButtonsAndContent(user, tabs)
+    detachInstructorProfileEarnedCalcMount()
     (root.querySelector("#sd-card") as? org.w3c.dom.Element)?.innerHTML = tabContent
+    reattachInstructorProfileEarnedCalcMount(root)
     attachListeners(root)
+    appendInstructorCancelReasonModalIfNeeded(root)
+    appendInstructorRunningLateModalIfNeeded(root)
+    appendRecCancelSessionConfirmModalIfNeeded(root)
 }
 
 /** Обновляет только контент вкладки «Билеты» в #sd-card (экзамен/билеты). */
 private fun refreshTicketsCardContent(root: org.w3c.dom.Element) {
     val content = renderTicketsTabContent()
+    detachInstructorProfileEarnedCalcMount()
     (root.querySelector("#sd-card") as? org.w3c.dom.Element)?.innerHTML = content
+    reattachInstructorProfileEarnedCalcMount(root)
     attachListeners(root)
+    appendInstructorCancelReasonModalIfNeeded(root)
+    appendInstructorRunningLateModalIfNeeded(root)
+    appendRecCancelSessionConfirmModalIfNeeded(root)
 }
 
 /** Запускает экзамен ПДД по категории (A_B или C_D). Вызывается из клика по [data-pdd-exam-category] или по «Категория AB/CD» с главного экрана. */
@@ -3392,12 +6677,13 @@ private fun runPddExam(examCat: String, root: org.w3c.dom.Element) {
             log("PDD: exam ticket generated questions=${examQuestions.size}")
             val now = js("Date.now").unsafeCast<() -> Double>().invoke()
             val tabsList = when (appState.screen) {
-                AppScreen.Instructor -> listOf("Главная", "Запись", "Чат", "Билеты", "История", "Настройки")
-                else -> listOf("Главная", "Запись", "Чат", "Билеты", "История", "Настройки")
+                AppScreen.Instructor -> listOf("Главная", "Запись", "Чат", "Билеты", "История")
+                else -> listOf("Главная", "Запись", "Чат", "Билеты", "История")
             }
             val ticketsTabIndex = tabsList.indexOf("Билеты").coerceAtLeast(0)
             updateState {
                 selectedTabIndex = ticketsTabIndex
+                chatSettingsOpen = false
                 pddCategoryId = "exam"
                 pddTicketsBundle = b
                 pddExamMode = true; pddExamCategoryForBundle = examCat
@@ -3446,13 +6732,14 @@ private fun forceFullPanelRender(root: org.w3c.dom.Element, useExamContent: Bool
         else -> ""
     }
     val tabs = when (appState.screen) {
-        AppScreen.Admin -> listOf("Главная", "Баланс", "Чат", "История")
-        AppScreen.Instructor -> listOf("Главная", "Запись", "Чат", "Билеты", "История", "Настройки")
-        else -> listOf("Главная", "Запись", "Чат", "Билеты", "История", "Настройки")
+        AppScreen.Admin -> listOf("Главная", "Баланс", "Расписание", "Чат", "История")
+        AppScreen.Instructor -> listOf("Главная", "Запись", "Чат", "Билеты", "История")
+        else -> listOf("Главная", "Запись", "Чат", "Билеты", "История")
     }
     val (tabButtons, tabContentFromTabs) = getPanelTabButtonsAndContent(user, tabs)
     val tabContent = if (useExamContent) renderTicketsTabContent() else tabContentFromTabs
     val notifWrapHtml = getNotificationButtonWrapHtml()
+    val adminClearHistoryModal = if (appState.screen == AppScreen.Admin) adminClearHistoryModalHtml() else ""
     val panelHtml = """
         <header class="sd-header sd-panel-header">
             <div class="sd-header-text">
@@ -3476,16 +6763,24 @@ private fun forceFullPanelRender(root: org.w3c.dom.Element, useExamContent: Bool
                 $tabContent
             </div>
         </main>
+        $adminClearHistoryModal
         <nav class="sd-tabs">$tabButtons</nav>
     """.trimIndent()
+    detachInstructorProfileEarnedCalcMount()
     root.innerHTML = networkBanner + loadingOverlay + panelHtml
     if (useExamContent) {
         val card = root.querySelector("#sd-card") as? org.w3c.dom.Element
         if (card != null) {
+            detachInstructorProfileEarnedCalcMount()
             card.innerHTML = renderTicketsTabContent()
+            reattachInstructorProfileEarnedCalcMount(root)
         }
     }
     attachListeners(root)
+    reattachInstructorProfileEarnedCalcMount(root)
+    appendInstructorCancelReasonModalIfNeeded(root)
+    appendInstructorRunningLateModalIfNeeded(root)
+    appendRecCancelSessionConfirmModalIfNeeded(root)
     root.querySelector("#sd-card")?.unsafeCast<dynamic>()?.scrollIntoView(js("({ block: 'start', behavior: 'auto' })"))
 }
 
@@ -3493,6 +6788,74 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
     root.addEventListener("click", { e: dynamic ->
         if (appState.screen != AppScreen.Admin && appState.screen != AppScreen.Instructor && appState.screen != AppScreen.Cadet) return@addEventListener
         val target = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+        try {
+            if (js("(function(el){ return el && el.closest && el.closest('#sd-instr-earned-calc-mount'); })")(target) != null) {
+                (e as? org.w3c.dom.events.Event)?.stopPropagation()
+                return@addEventListener
+            }
+        } catch (_: Throwable) {
+        }
+        if (target.id == "sd-admin-schedule-refresh") {
+            (e as? org.w3c.dom.events.Event)?.preventDefault()
+            refreshAdminScheduleData()
+            return@addEventListener
+        }
+        if (target.id == "sd-admin-clear-history-no") {
+            (e as? org.w3c.dom.events.Event)?.preventDefault()
+            document.getElementById("sd-admin-clear-history-modal")?.let { el ->
+                el.classList.add("sd-hidden")
+            }
+            return@addEventListener
+        }
+        if (target.id == "sd-admin-clear-history-yes") {
+            (e as? org.w3c.dom.events.Event)?.preventDefault()
+            val modal = document.getElementById("sd-admin-clear-history-modal") ?: return@addEventListener
+            val iid = modal.getAttribute("data-instructor-id") ?: return@addEventListener
+            modal.classList.add("sd-hidden")
+            modal.removeAttribute("data-instructor-id")
+            val sessions = appState.adminScheduleSessionsByInstructorId[iid] ?: emptyList()
+            val ids = sessions.filter {
+                it.status == "completed" || it.status == "cancelledByInstructor" || it.status == "cancelledByCadet"
+            }.map { it.id }
+            if (ids.isEmpty()) {
+                showToast("Нет записей для удаления")
+                return@addEventListener
+            }
+            updateState { adminScheduleLoading = true; networkError = null }
+            deleteInstructorHistorySessionsSequential(ids) { err ->
+                updateState { adminScheduleLoading = false }
+                if (err != null) {
+                    updateState { networkError = err }
+                    showToast(err)
+                } else {
+                    showToast("История вождений очищена")
+                    refreshAdminScheduleData()
+                }
+            }
+            return@addEventListener
+        }
+        val closestHelperEarly = js("(function(el, sel) { return el && el.closest ? el.closest(sel) : null; })").unsafeCast<(Any?, String) -> Any?>()
+        val clearHistBtn = try {
+            closestHelperEarly(target, "[data-admin-history-clear]") as? org.w3c.dom.Element
+        } catch (_: Throwable) {
+            null
+        }
+        if (clearHistBtn != null && appState.user?.role == "admin") {
+            (e as? org.w3c.dom.events.Event)?.preventDefault()
+            (e as? org.w3c.dom.events.Event)?.stopPropagation()
+            val iid = clearHistBtn.getAttribute("data-admin-history-clear") ?: return@addEventListener
+            document.getElementById("sd-admin-clear-history-modal")?.let { modal ->
+                modal.setAttribute("data-instructor-id", iid)
+                modal.classList.remove("sd-hidden")
+            }
+            return@addEventListener
+        }
+        if (target.id == "sd-admin-clear-history-modal") {
+            (e as? org.w3c.dom.events.Event)?.preventDefault()
+            target.classList.add("sd-hidden")
+            target.removeAttribute("data-instructor-id")
+            return@addEventListener
+        }
         if (target.id == "sd-allow-sound-settings-btn" || target.id == "sd-allow-sound-btn") {
             (e as? org.w3c.dom.events.Event)?.preventDefault()
             (e as? org.w3c.dom.events.Event)?.stopPropagation()
@@ -3516,7 +6879,9 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             } catch (_: Throwable) { null }
         }
         if (appState.user?.role == "instructor" || appState.user?.role == "cadet") {
-            unlockCadetNotificationAudio()
+            if (!shouldSkipAudioUnlockForRecordingFormClick(target, closest)) {
+                unlockCadetNotificationAudio()
+            }
             val pddExamBack = closest(".sd-pdd-exam-back")
             if (pddExamBack != null) {
                 val examStartMs = appState.pddExamStartTimeMs ?: 0.0
@@ -3927,6 +7292,50 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             (e as? org.w3c.dom.events.Event)?.stopPropagation()
             return@addEventListener
         }
+        val instructorBookCadetBtn = closest("[data-instructor-book-cadet]")
+        if (instructorBookCadetBtn != null) {
+            val cadetId = instructorBookCadetBtn.getAttribute("data-instructor-book-cadet") ?: return@addEventListener
+            if (appState.user?.role != "instructor") return@addEventListener
+            val recordingBaseline = appState.recordingSessions.count { it.status == "scheduled" || it.status == "inProgress" }
+            saveChatScrollForCurrentContact()
+            var instructorMyCadetsOpen = appState.instructorMyCadetsSectionOpen
+            val cardEl = document.getElementById("sd-card") as? org.w3c.dom.Element
+            if (cardEl != null) {
+                val myCadetsDetails = cardEl.querySelector("details[data-instructor-my-cadets]")
+                instructorMyCadetsOpen = (myCadetsDetails?.unsafeCast<dynamic>()?.open == true)
+            }
+            updateState {
+                selectedChatContactId = null
+                selectedChatGroupId = null
+                chatMessages = emptyList()
+                chatReplyToMessageId = null
+                chatReplyToText = null
+                selectedTabIndex = 1
+                instructorRecordingBookCadetId = cadetId
+                instructorRecordingScrollToBookForm = true
+                recordingTabBadgeBaseline = recordingBaseline
+                chatSettingsOpen = false
+                notificationsViewOpen = false
+                instructorMyCadetsSectionOpen = instructorMyCadetsOpen
+            }
+            unsubscribeChat()
+            val usrBook = appState.user ?: return@addEventListener
+            getUsers { list -> updateState { instructorCadets = list.filter { usrBook.assignedCadets.contains(it.id) } } }
+            if (!appState.recordingLoading) {
+                updateState { recordingLoading = true }
+                val tid = window.setTimeout({ updateState { recordingLoading = false } }, 8000)
+                getOpenWindowsForInstructor(usrBook.id) { wins ->
+                    getSessionsForInstructor(usrBook.id) { sess ->
+                        window.clearTimeout(tid)
+                        updateState { recordingOpenWindows = wins; recordingSessions = sess; recordingLoading = false }
+                        getUsers { list -> updateState { instructorCadets = list.filter { usrBook.assignedCadets.contains(it.id) } } }
+                    }
+                }
+            }
+            e.preventDefault()
+            (e as? org.w3c.dom.events.Event)?.stopPropagation()
+            return@addEventListener
+        }
         val modalCloseBtn = closest("#sd-admin-cadets-modal-close")
         if (modalCloseBtn != null) {
             updateState { adminInstructorCadetsModalId = null }
@@ -3937,6 +7346,140 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
         val modalOverlay = if (target.id == "sd-admin-cadets-modal-overlay") target else null
         if (modalOverlay != null) {
             updateState { adminInstructorCadetsModalId = null }
+            e.preventDefault()
+            (e as? org.w3c.dom.events.Event)?.stopPropagation()
+            return@addEventListener
+        }
+        val addGroupOverlay = if (target.id == "sd-admin-add-group-overlay") target else null
+        if (addGroupOverlay != null) {
+            updateState { adminAddGroupModalOpen = false; adminEditingGroupId = null }
+            e.preventDefault()
+            (e as? org.w3c.dom.events.Event)?.stopPropagation()
+            return@addEventListener
+        }
+        val addGroupBtn = closest("#sd-admin-add-group-btn")
+        if (addGroupBtn != null) {
+            updateState { adminAddGroupModalOpen = true; adminEditingGroupId = null }
+            e.preventDefault()
+            (e as? org.w3c.dom.events.Event)?.stopPropagation()
+            return@addEventListener
+        }
+        val addGroupCancel = closest("#sd-admin-add-group-cancel")
+        if (addGroupCancel != null) {
+            updateState { adminAddGroupModalOpen = false; adminEditingGroupId = null }
+            e.preventDefault()
+            (e as? org.w3c.dom.events.Event)?.stopPropagation()
+            return@addEventListener
+        }
+        val groupEditBtn = closest(".sd-admin-group-edit")
+        if (groupEditBtn != null) {
+            val gid = groupEditBtn.getAttribute("data-admin-group-edit") ?: return@addEventListener
+            updateState { adminEditingGroupId = gid; adminAddGroupModalOpen = true }
+            e.preventDefault()
+            (e as? org.w3c.dom.events.Event)?.stopPropagation()
+            return@addEventListener
+        }
+        val groupDelBtn = closest(".sd-admin-group-delete")
+        if (groupDelBtn != null) {
+            val gid = groupDelBtn.getAttribute("data-admin-group-delete") ?: return@addEventListener
+            if (!window.confirm("Удалить эту группу? Курсанты с этой группой будут от неё отвязаны.")) return@addEventListener
+            deleteCadetGroup(gid) { err ->
+                if (err != null) updateState { networkError = err }
+                else {
+                    updateState { networkError = null }
+                    refreshCadetGroups()
+                    getUsers { list ->
+                        updateState { adminHomeUsers = list }
+                        refreshAdminHomeAuxiliaryData()
+                    }
+                }
+            }
+            e.preventDefault()
+            (e as? org.w3c.dom.events.Event)?.stopPropagation()
+            return@addEventListener
+        }
+        val addGroupSave = closest("#sd-admin-add-group-save")
+        if (addGroupSave != null) {
+            val numEl = document.getElementById("sd-admin-group-number") as? HTMLInputElement
+            val fromEl = document.getElementById("sd-admin-group-from") as? HTMLInputElement
+            val toEl = document.getElementById("sd-admin-group-to") as? HTMLInputElement
+            val noDateEl = document.getElementById("sd-admin-group-no-date") as? HTMLInputElement
+            val num = numEl?.value?.trim() ?: ""
+            val fromS = fromEl?.value?.trim() ?: ""
+            val toS = toEl?.value?.trim() ?: ""
+            val noDate = noDateEl?.checked == true
+            val editId = appState.adminEditingGroupId
+            if (num.isBlank()) {
+                updateState { networkError = "Укажите № группы" }
+            } else if (!noDate) {
+                val fromMs = parseIsoDateToMillis(fromS)
+                val toMs = parseIsoDateToMillis(toS)
+                when {
+                    fromMs == null -> updateState { networkError = "Укажите дату «с» в календаре" }
+                    toMs == null -> updateState { networkError = "Укажите дату «по» в календаре" }
+                    toMs < fromMs -> updateState { networkError = "Дата «по» не может быть раньше даты «с»" }
+                    else -> {
+                        val done: (String?) -> Unit = { err ->
+                            if (err != null) updateState { networkError = err }
+                            else {
+                                updateState { adminAddGroupModalOpen = false; adminEditingGroupId = null; networkError = null }
+                                refreshCadetGroups()
+                            }
+                        }
+                        if (editId != null) updateCadetGroup(editId, num, fromMs, toMs, done) else addCadetGroup(num, fromMs, toMs, done)
+                    }
+                }
+            } else {
+                val done: (String?) -> Unit = { err ->
+                    if (err != null) updateState { networkError = err }
+                    else {
+                        updateState { adminAddGroupModalOpen = false; adminEditingGroupId = null; networkError = null }
+                        refreshCadetGroups()
+                    }
+                }
+                if (editId != null) updateCadetGroup(editId, num, null, null, done) else addCadetGroup(num, null, null, done)
+            }
+            e.preventDefault()
+            (e as? org.w3c.dom.events.Event)?.stopPropagation()
+            return@addEventListener
+        }
+        val cadetGroupPickBtn = closest(".sd-admin-cadet-group-btn")
+        if (cadetGroupPickBtn != null) {
+            val cid = cadetGroupPickBtn.getAttribute("data-admin-cadet-group-pick") ?: return@addEventListener
+            updateState { adminCadetGroupPickerCadetId = cid }
+            e.preventDefault()
+            (e as? org.w3c.dom.events.Event)?.stopPropagation()
+            return@addEventListener
+        }
+        val pickGroupOverlay = if (target.id == "sd-admin-cadet-group-picker-overlay") target else null
+        if (pickGroupOverlay != null) {
+            updateState { adminCadetGroupPickerCadetId = null }
+            e.preventDefault()
+            (e as? org.w3c.dom.events.Event)?.stopPropagation()
+            return@addEventListener
+        }
+        val pickGroupCancel = closest("#sd-admin-cadet-group-picker-cancel")
+        if (pickGroupCancel != null) {
+            updateState { adminCadetGroupPickerCadetId = null }
+            e.preventDefault()
+            (e as? org.w3c.dom.events.Event)?.stopPropagation()
+            return@addEventListener
+        }
+        val pickGroupItem = closest(".sd-admin-pick-group-item")
+        if (pickGroupItem != null) {
+            val cadetId = appState.adminCadetGroupPickerCadetId ?: return@addEventListener
+            val gidRaw = pickGroupItem.getAttribute("data-admin-pick-group")
+            val groupId = gidRaw?.takeIf { it.isNotBlank() }
+            setUserCadetGroup(cadetId, groupId) { err ->
+                if (err != null) updateState { networkError = err }
+                else {
+                    updateState { adminCadetGroupPickerCadetId = null; networkError = null }
+                    getUsers { list ->
+                        updateState { adminHomeUsers = list }
+                        refreshAdminHomeAuxiliaryData()
+                    }
+                }
+            }
             e.preventDefault()
             (e as? org.w3c.dom.events.Event)?.stopPropagation()
             return@addEventListener
@@ -3967,9 +7510,10 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                     instructorMyCadetsOpen = (myCadetsDetails?.unsafeCast<dynamic>()?.open == true)
                 }
             }
-            if (idx != 2) {
+            val chatTabIdx = getTabsForUserRole(appState.user?.role ?: "").indexOf("Чат").takeIf { it >= 0 } ?: 2
+            if (idx != chatTabIdx) {
                 saveChatScrollForCurrentContact()
-                updateState { selectedChatContactId = null; chatMessages = emptyList() }
+                updateState { selectedChatContactId = null; selectedChatGroupId = null; chatMessages = emptyList(); chatReplyToMessageId = null; chatReplyToText = null }
                 unsubscribeChat()
             } else {
                 unlockChatNotificationAudio()
@@ -3985,27 +7529,52 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                     else -> 0
                 }
             } else null
+            if (appState.user?.role == "instructor" && idx != 0) {
+                resetInstructorProfileCalculatorCache()
+            }
             updateState {
                 selectedTabIndex = idx
+                chatSettingsOpen = false
                 notificationsViewOpen = false
                 recordingLoading = false
                 historyLoading = false
                 balanceAdminLoading = false
                 chatContactsLoading = false
                 adminHomeLoading = false
+                adminScheduleLoading = false
+                if (appState.user?.role == "instructor" && idx != 1) {
+                    instructorRecordingBookCadetId = null
+                    instructorRecordingBookDatetimeLocal = ""
+                    instructorRecordingAddDatetimeLocal = ""
+                    instructorRecordingScrollToBookForm = false
+                }
                 if (recordingBaseline != null) recordingTabBadgeBaseline = recordingBaseline
                 if (appState.user?.role == "admin" && idx != 0) {
+                    adminAddGroupModalOpen = false
+                    adminEditingGroupId = null
+                    adminCadetGroupPickerCadetId = null
                     adminNewbiesSectionOpen = nOpen
                     adminInstructorsSectionOpen = iOpen
                     adminCadetsSectionOpen = cOpen
                 }
                 if (appState.user?.role == "instructor" && idx != 0) {
                     instructorMyCadetsSectionOpen = myCadetsOpenVal
+                    instructorHomeSubView = "main"
+                }
+                if (appState.user?.role == "cadet" && idx != 0) {
+                    cadetHomeSubView = "main"
+                }
+                if (appState.user?.role == "admin" && idx != chatTabIdx) {
+                    clearGroupChatAvatarPending()
+                    adminChatGroupModalOpen = false
+                    adminChatGroupEditId = null
+                    adminChatGroupDeleteConfirmId = null
                 }
             }
             val user = appState.user ?: return@addEventListener
-            when (idx) {
-                0 -> if (user.role == "admin" && !appState.adminHomeLoading) {
+            val tabName = getTabsForUserRole(user.role).getOrNull(idx) ?: ""
+            when (tabName) {
+                "Главная" -> if (user.role == "admin" && !appState.adminHomeLoading) {
                     updateState { adminHomeLoading = true; networkError = null }
                     val tid = window.setTimeout({ updateState { adminHomeLoading = false } }, 8000)
                     getUsersWithError { list, err ->
@@ -4014,9 +7583,10 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                             adminHomeUsers = list; balanceAdminUsers = list; adminHomeLoading = false
                             if (err != null) networkError = err
                         }
+                        refreshAdminHomeAuxiliaryData()
                     }
                 }
-                1 -> if (user.role == "admin" && !appState.balanceAdminLoading) {
+                "Баланс" -> if (user.role == "admin" && !appState.balanceAdminLoading) {
                     updateState { balanceAdminLoading = true }
                     val tid = window.setTimeout({ updateState { balanceAdminLoading = false } }, 8000)
                     getUsers { list ->
@@ -4026,7 +7596,13 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                         }
                     }
                 }
-                2 -> {
+                "Расписание" -> if (user.role == "admin") {
+                    updateState { adminScheduleSeenSignature = computeAdminScheduleSignature(appState.adminScheduleSessionsByInstructorId) }
+                    if (!appState.adminScheduleLoading) {
+                        refreshAdminScheduleData()
+                    }
+                }
+                "Чат" -> {
                     getAppConfigChatShowOtherAvatars { showOther ->
                         updateState { chatShowOtherAvatars = showOther }
                     }
@@ -4037,7 +7613,10 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                         window.clearTimeout(chatTid)
                         updateState { chatContacts = list; chatContactsLoading = false }
                         subscribeChatPresence(list.map { it.id })
-                        subscribeChatNotifications(user.id, list)
+                        getChatGroupsForUser(user.id) { groups ->
+                            updateState { chatGroups = groups }
+                            subscribeChatNotifications(user.id, list)
+                        }
                     }
                 }
                 else -> { }
@@ -4085,7 +7664,10 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             val currentlyActive = btnActivate.getAttribute("data-admin-active") == "true"
             setActive(userId, !currentlyActive) { err ->
                 if (err != null) updateState { networkError = err }
-                else getUsers { list -> updateState { adminHomeUsers = list } }
+                else getUsers { list ->
+                    updateState { adminHomeUsers = list }
+                    refreshAdminHomeAuxiliaryData()
+                }
             }
             e.preventDefault(); e.stopPropagation()
             return@addEventListener
@@ -4117,7 +7699,10 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             val cadetId = btnAssignCadet.getAttribute("data-admin-assign-cadet") ?: return@addEventListener
             assignCadetToInstructor(instId, cadetId) { err ->
                 if (err != null) updateState { networkError = err }
-                else getUsers { list -> updateState { adminHomeUsers = list; adminAssignCadetId = null } }
+                else getUsers { list ->
+                    updateState { adminHomeUsers = list; adminAssignCadetId = null }
+                    refreshAdminHomeAuxiliaryData()
+                }
             }
             e.preventDefault()
             (e as? org.w3c.dom.events.Event)?.stopPropagation()
@@ -4129,7 +7714,10 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             val cadetId = btnUnlink.getAttribute("data-admin-unlink-cadet") ?: return@addEventListener
             removeCadetFromInstructor(instId, cadetId) { err ->
                 if (err != null) updateState { networkError = err }
-                else getUsers { list -> updateState { adminHomeUsers = list } }
+                else getUsers { list ->
+                    updateState { adminHomeUsers = list }
+                    refreshAdminHomeAuxiliaryData()
+                }
             }
             e.preventDefault(); e.stopPropagation()
             return@addEventListener
@@ -4140,7 +7728,10 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             if (!window.confirm("Удалить пользователя из базы? Это не удалит аккаунт Firebase Auth.")) return@addEventListener
             deleteUser(userId) { err ->
                 if (err != null) updateState { networkError = err }
-                else getUsers { list -> updateState { adminHomeUsers = list } }
+                else getUsers { list ->
+                    updateState { adminHomeUsers = list }
+                    refreshAdminHomeAuxiliaryData()
+                }
             }
             e.preventDefault(); e.stopPropagation()
             return@addEventListener
@@ -4155,12 +7746,35 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             e.preventDefault(); e.stopPropagation()
             return@addEventListener
         }
+        val chatGroupRow = closest(".sd-chat-group-row")
+        if (chatGroupRow != null) {
+            val gid = chatGroupRow.getAttribute("data-chat-group-id") ?: return@addEventListener
+            val uid = appState.user?.id ?: return@addEventListener
+            saveChatScrollForCurrentContact()
+            updateState { selectedChatGroupId = gid; selectedChatContactId = null; chatMessages = emptyList(); chatReplyToMessageId = null; chatReplyToText = null }
+            clearChatUnreadForGroup(uid, gid)
+            unsubscribeChat()
+            val roomId = groupChatRoomId(gid)
+            subscribeMessages(roomId) { list ->
+                val prevSize = appState.chatMessages.size
+                updateState { chatMessages = list }
+                val toMarkRead = list.filter { it.senderId != uid }.map { it.id }
+                if (toMarkRead.isNotEmpty()) markMessagesAsRead(roomId, toMarkRead)
+                if (prevSize > 0 && list.size > prevSize && list.lastOrNull()?.senderId != uid) playChatMessageSound()
+                list.lastOrNull()?.timestamp?.let { ts -> setChatLastSeenMsForGroup(uid, gid, ts) }
+                val gKey = chatUnreadKeyForGroup(gid)
+                updateState { if (chatUnreadCounts.containsKey(gKey)) chatUnreadCounts = chatUnreadCounts - gKey }
+                window.setTimeout({ scrollChatToBottom() }, 50)
+            }
+            e.preventDefault(); e.stopPropagation()
+            return@addEventListener
+        }
         val chatContact = closest(".sd-chat-contact")
         if (chatContact != null) {
             val contactId = chatContact.getAttribute("data-contact-id") ?: return@addEventListener
             val uid = appState.user?.id ?: return@addEventListener
             saveChatScrollForCurrentContact()
-            updateState { selectedChatContactId = contactId; chatMessages = emptyList() }
+            updateState { selectedChatContactId = contactId; selectedChatGroupId = null; chatMessages = emptyList(); chatReplyToMessageId = null; chatReplyToText = null }
             clearChatUnread(uid, contactId)
             unsubscribeChat()
             subscribeMessages(chatRoomId(uid, contactId)) { list ->
@@ -4181,7 +7795,7 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             val contactId = adminOpenChat.getAttribute("data-contact-id") ?: return@addEventListener
             val uid = appState.user?.id ?: return@addEventListener
             saveChatScrollForCurrentContact()
-            updateState { selectedTabIndex = 2; selectedChatContactId = contactId; chatMessages = emptyList() }
+            updateState { selectedTabIndex = 2; chatSettingsOpen = false; selectedChatContactId = contactId; selectedChatGroupId = null; chatMessages = emptyList(); chatReplyToMessageId = null; chatReplyToText = null }
             clearChatUnread(uid, contactId)
             unsubscribeChat()
             subscribeMessages(chatRoomId(uid, contactId)) { list ->
@@ -4202,7 +7816,7 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             val contactId = cadetChatBtn.getAttribute("data-contact-id") ?: return@addEventListener
             val uid = appState.user?.id ?: return@addEventListener
             saveChatScrollForCurrentContact()
-            updateState { selectedTabIndex = 2; selectedChatContactId = contactId; chatMessages = emptyList() }
+            updateState { selectedTabIndex = 2; chatSettingsOpen = false; selectedChatContactId = contactId; selectedChatGroupId = null; chatMessages = emptyList(); chatReplyToMessageId = null; chatReplyToText = null }
             clearChatUnread(uid, contactId)
             unsubscribeChat()
             subscribeMessages(chatRoomId(uid, contactId)) { list ->
@@ -4221,6 +7835,51 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
 }
 
 private fun attachListeners(root: org.w3c.dom.Element) {
+    ensureInstructorProfileEarnedCalcDelegation()
+    setupInstructorRecordingSubmitButtonsDelegationOnce()
+    // Один раз: черновик формы «Запись» у инструктора (курсант + даты) — иначе при каждом attachListeners дублировались change
+    if (window.asDynamic().__sdInstructorRecordingDraftListeners != true) {
+        window.asDynamic().__sdInstructorRecordingDraftListeners = true
+        document.body?.addEventListener("change", { e: dynamic ->
+            val t = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+            when (t.id) {
+                "sd-recording-book-cadet" -> {
+                    val sel = t.unsafeCast<HTMLSelectElement>()
+                    val v = sel.value
+                    val newId = if (v.isBlank()) null else v
+                    if (newId == appState.instructorRecordingBookCadetId) {
+                        if (v.isNotBlank()) sel.classList.add("sd-has-cadet") else sel.classList.remove("sd-has-cadet")
+                        return@addEventListener
+                    }
+                    // Откладываем updateState до следующего тика — иначе перерисовка #sd-card может сбросить открытый список/календарь.
+                    window.setTimeout({
+                        updateState { instructorRecordingBookCadetId = newId }
+                        val el = document.getElementById("sd-recording-book-cadet") as? HTMLSelectElement
+                        if (el != null) {
+                            if (el.value.isNotBlank()) el.classList.add("sd-has-cadet") else el.classList.remove("sd-has-cadet")
+                        }
+                    }, 0)
+                }
+                "sd-recording-book-dt" -> {
+                    val inp = t.unsafeCast<HTMLInputElement>()
+                    val valStr = inp.value
+                    if (valStr == appState.instructorRecordingBookDatetimeLocal) return@addEventListener
+                    window.setTimeout({
+                        updateState { instructorRecordingBookDatetimeLocal = valStr }
+                    }, 0)
+                }
+                "sd-recording-add-dt" -> {
+                    val inp = t.unsafeCast<HTMLInputElement>()
+                    val valStr = inp.value
+                    if (valStr == appState.instructorRecordingAddDatetimeLocal) return@addEventListener
+                    window.setTimeout({
+                        updateState { instructorRecordingAddDatetimeLocal = valStr }
+                    }, 0)
+                }
+                else -> {}
+            }
+        })
+    }
     // Один раз: при ошибке загрузки аватара показываем инициалы (как в Android)
     if (window.asDynamic().__sdAvatarErrorBound != true) {
         window.asDynamic().__sdAvatarErrorBound = true
@@ -4263,8 +7922,239 @@ private fun attachListeners(root: org.w3c.dom.Element) {
             toggleVoicePlay(audioEl, msgId, voiceUrl, durationSec)
         }, true)
     }
+
+    // Один раз: админ — очистка голоса/аватара по контакту (настройки чата → Firebase storage)
+    if (window.asDynamic().__sdAdminStorageClearUi != true) {
+        window.asDynamic().__sdAdminStorageClearUi = true
+        document.body?.addEventListener("click", { e: dynamic ->
+            val t = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+            if (t.closest("#sd-admin-storage-confirm-yes") != null) {
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                (e as? org.w3c.dom.events.Event)?.stopPropagation()
+                runAdminStorageClearAfterConfirm()
+                return@addEventListener
+            }
+            if (t.closest("#sd-admin-storage-confirm-no") != null) {
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                (e as? org.w3c.dom.events.Event)?.stopPropagation()
+                hideAdminStorageClearConfirm()
+                return@addEventListener
+            }
+            val clearBtn = t.closest("button.sd-admin-storage-clear-btn") as? org.w3c.dom.HTMLButtonElement ?: return@addEventListener
+            if (appState.user?.role != "admin") return@addEventListener
+            if (clearBtn.disabled) return@addEventListener
+            if (clearBtn.closest(".sd-admin-storage-block") == null) return@addEventListener
+            val kind = clearBtn.getAttribute("data-clear-kind") ?: return@addEventListener
+            (e as? org.w3c.dom.events.Event)?.preventDefault()
+            (e as? org.w3c.dom.events.Event)?.stopPropagation()
+            if (kind.startsWith("group-")) {
+                val gid = clearBtn.getAttribute("data-group-id") ?: return@addEventListener
+                val gname = clearBtn.getAttribute("data-group-name") ?: "?"
+                showAdminStorageClearConfirm(kind, null, "", gid, gname)
+            } else {
+                val cid = clearBtn.getAttribute("data-contact-id") ?: return@addEventListener
+                val name = clearBtn.getAttribute("data-contact-name") ?: "?"
+                showAdminStorageClearConfirm(kind, cid, name)
+            }
+        }, true)
+    }
+
+    // Один раз: делегирование управления голосовыми сообщениями (WhatsApp-like UX)
+    if (window.asDynamic().__sdChatVoiceControlsDelegation != true) {
+        window.asDynamic().__sdChatVoiceControlsDelegation = true
+
+        // 1) Удержание микрофона: record -> отпускание => отправка
+        // target часто — svg/path внутри кнопки, поэтому ищем кнопку через closest
+        document.body?.addEventListener("pointerdown", { e: dynamic ->
+            val raw = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+            val micBtn = raw.closest("#sd-chat-voice-mic") as? org.w3c.dom.Element ?: return@addEventListener
+            if (appState.chatVoiceRecording || appState.chatVoiceReviewReady) return@addEventListener
+
+            voiceMicHoldTriggered = false
+            if (voiceMicLongPressTimerId != 0) {
+                window.clearTimeout(voiceMicLongPressTimerId)
+                voiceMicLongPressTimerId = 0
+            }
+            val uid = appState.user?.id ?: return@addEventListener
+            val tid = window.setTimeout({
+                voiceMicHoldTriggered = true
+                // Режим "удерживай": после stop/отпускания отправим автоматически
+                startVoiceRecording(uid, autoSendOnStop = true)
+            }, 250).unsafeCast<Int>()
+            voiceMicLongPressTimerId = tid
+            try {
+                val pid = e.asDynamic().pointerId
+                if (pid != null) micBtn.asDynamic().setPointerCapture(pid)
+            } catch (_: Throwable) { }
+            (e as? org.w3c.dom.events.Event)?.preventDefault()
+        }, true)
+
+        document.body?.addEventListener("pointerup", { e: dynamic ->
+            val raw = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+            if (appState.chatVoiceReviewReady) return@addEventListener
+
+            // Долгое удержание: отпускание в любом месте — остановить запись (раньше срывалось, если target не кнопка)
+            if (voiceMicHoldTriggered) {
+                voiceMicHoldTriggered = false
+                if (voiceMicLongPressTimerId != 0) {
+                    window.clearTimeout(voiceMicLongPressTimerId)
+                    voiceMicLongPressTimerId = 0
+                }
+                stopVoiceRecording()
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+                return@addEventListener
+            }
+
+            val onMic = raw.closest("#sd-chat-voice-mic") as? org.w3c.dom.Element != null
+            if (!onMic) {
+                if (voiceMicLongPressTimerId != 0) {
+                    window.clearTimeout(voiceMicLongPressTimerId)
+                    voiceMicLongPressTimerId = 0
+                }
+                return@addEventListener
+            }
+
+            // Короткий клик по микрофону (в т.ч. по иконке): режим превью
+            if (voiceMicLongPressTimerId != 0) {
+                window.clearTimeout(voiceMicLongPressTimerId)
+                voiceMicLongPressTimerId = 0
+            }
+            val uid = appState.user?.id ?: return@addEventListener
+            if (!appState.chatVoiceRecording && !appState.chatVoiceReviewReady) {
+                startVoiceRecording(uid, autoSendOnStop = false)
+            }
+            (e as? org.w3c.dom.events.Event)?.preventDefault()
+        }, true)
+
+        // 2) Кнопки превью/управления записью и отправкой
+        document.body?.addEventListener("click", { e: dynamic ->
+            val target = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+            val ctrl = target.asDynamic().closest(
+                "#sd-chat-voice-review-delete, #sd-chat-voice-review-pause, #sd-chat-voice-review-mic, #sd-chat-voice-review-send, #sd-chat-voice-review-play-btn"
+            ) as? org.w3c.dom.Element ?: return@addEventListener
+            val uid = appState.user?.id ?: return@addEventListener
+
+            when (ctrl.id) {
+                "sd-chat-voice-review-delete" -> {
+                    if (appState.chatVoiceRecording) {
+                        voiceDiscardOnStop = true
+                        stopVoiceRecording()
+                    } else if (appState.chatVoiceReviewReady) {
+                        discardVoiceReview()
+                    }
+                }
+                "sd-chat-voice-review-pause" -> {
+                    // Пауза во время записи превью => остановить, показать плей/отправку
+                    stopVoiceRecording()
+                }
+                "sd-chat-voice-review-mic" -> {
+                    // Перезапись заново (из превью)
+                    discardVoiceReview()
+                    startVoiceRecording(uid, autoSendOnStop = false)
+                }
+                "sd-chat-voice-review-send" -> {
+                    if (appState.chatVoiceRecording) {
+                        // Отправить прямо во время записи: останавливаем и в onstop уйдём в sendVoiceMessage.
+                        voiceAutoSendOnStop = true
+                        updateState { chatVoiceRecordingAutoSend = true }
+                        stopVoiceRecording()
+                    } else {
+                        sendVoiceReviewMessage()
+                    }
+                }
+                "sd-chat-voice-review-play-btn" -> {
+                    toggleVoiceReviewPlay()
+                }
+            }
+            (e as? org.w3c.dom.events.Event)?.preventDefault()
+            (e as? org.w3c.dom.events.Event)?.stopPropagation()
+        }, true)
+
+        // 3) Ползунок превью
+        document.body?.addEventListener("input", { e: dynamic ->
+            val target = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+            if (target.id != "sd-chat-voice-review-range") return@addEventListener
+            setVoiceReviewPlaybackPositionFromRange()
+        }, true)
+    }
+
+    // Один раз: long-press меню на исходящих сообщениях (текст и голосовые)
+    if (window.asDynamic().__sdChatMsgMenuDelegation != true) {
+        window.asDynamic().__sdChatMsgMenuDelegation = true
+
+        document.body?.addEventListener("pointerdown", { e: dynamic ->
+            val target = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+            val bubble = target.closest(".sd-msg-me .sd-msg-bubble-wrap") as? org.w3c.dom.Element ?: return@addEventListener
+            val msgRoot = bubble.closest(".sd-msg-me") as? org.w3c.dom.Element ?: return@addEventListener
+            val msgId = msgRoot.getAttribute("data-msg-id") ?: return@addEventListener
+            val fromList = appState.chatMessages.find { it.id == msgId }?.text
+            val msgText = fromList ?: (msgRoot.getAttribute("data-msg-text") ?: "")
+            val uid = appState.user?.id ?: return@addEventListener
+            val roomId = when {
+                appState.selectedChatGroupId != null -> groupChatRoomId(appState.selectedChatGroupId!!)
+                else -> {
+                    val contactId = appState.selectedChatContactId ?: return@addEventListener
+                    chatRoomId(uid, contactId)
+                }
+            }
+            if (chatMsgLongPressTimerId != 0) {
+                window.clearTimeout(chatMsgLongPressTimerId)
+                chatMsgLongPressTimerId = 0
+            }
+            val getPoint = js("(function(ev){ return { x: (ev && typeof ev.clientX==='number') ? ev.clientX : 0, y: (ev && typeof ev.clientY==='number') ? ev.clientY : 0 }; })")
+                .unsafeCast<(dynamic) -> dynamic>()
+            val point = getPoint(e)
+            val clientX = (point?.x as? Number)?.toDouble() ?: 0.0
+            val clientY = (point?.y as? Number)?.toDouble() ?: 0.0
+            chatMsgLongPressTimerId = window.setTimeout({
+                showChatMessageMenu(msgRoot, clientX + 8.0, clientY + 8.0, uid, roomId, msgId, msgText)
+            }, 450).unsafeCast<Int>()
+        }, true)
+
+        document.body?.addEventListener("pointerup", { _: dynamic ->
+            if (chatMsgLongPressTimerId != 0) {
+                window.clearTimeout(chatMsgLongPressTimerId)
+                chatMsgLongPressTimerId = 0
+            }
+        }, true)
+
+        document.body?.addEventListener("pointercancel", { _: dynamic ->
+            if (chatMsgLongPressTimerId != 0) {
+                window.clearTimeout(chatMsgLongPressTimerId)
+                chatMsgLongPressTimerId = 0
+            }
+        }, true)
+
+        document.body?.addEventListener("click", { e: dynamic ->
+            val target = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+            if (target.closest("#sd-chat-msg-menu") == null) hideChatMessageMenu()
+        }, true)
+    }
+
+    if (window.asDynamic().__sdChatFileInAppClick != true) {
+        window.asDynamic().__sdChatFileInAppClick = true
+        document.body?.addEventListener("click", { e: dynamic ->
+            val target = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+            val a = target.closest("a.sd-chat-file-in-app") as? org.w3c.dom.HTMLAnchorElement ?: return@addEventListener
+            val chatMsgs = document.getElementById("sd-chat-messages") ?: return@addEventListener
+            if (!chatMsgs.contains(a)) return@addEventListener
+            e.preventDefault()
+            e.stopPropagation()
+            val url = a.href
+            val name = a.getAttribute("data-file-name")?.takeIf { it.isNotBlank() }
+                ?: a.getAttribute("download")?.takeIf { it.isNotBlank() }
+                ?: a.title?.takeIf { it.isNotBlank() }
+                ?: "файл"
+            val isImage = a.closest(".sd-msg-file-is-image") != null
+            openChatFileViewer(url, name, isImage)
+        }, true)
+    }
+
     document.getElementById("sd-dismiss-network-error")?.addEventListener("click", {
         updateState { networkError = null }
+    })
+    document.getElementById("sd-chat-reply-cancel")?.addEventListener("click", {
+        updateState { chatReplyToMessageId = null; chatReplyToText = null }
     })
     document.getElementById("sd-network-retry")?.addEventListener("click", {
         updateState { networkError = null }
@@ -4288,13 +8178,58 @@ private fun attachListeners(root: org.w3c.dom.Element) {
     document.getElementById("sd-chat-stop-loading")?.addEventListener("click", {
         updateState { chatContactsLoading = false }
     })
+    document.getElementById("sd-chat-create-group")?.addEventListener("click", {
+        if (appState.user?.role != "admin") return@addEventListener
+        clearGroupChatAvatarPending()
+        updateState {
+            adminChatGroupModalOpen = true
+            adminChatGroupEditId = null
+            adminChatGroupDraftName = ""
+            adminChatGroupDraftMemberIds = emptyList()
+        }
+    })
+    document.getElementById("sd-chat-group-edit")?.addEventListener("click", {
+        val uid = appState.user?.id ?: return@addEventListener
+        if (appState.user?.role != "admin") return@addEventListener
+        val gid = appState.selectedChatGroupId ?: return@addEventListener
+        val grp = appState.chatGroups.find { it.id == gid } ?: return@addEventListener
+        clearGroupChatAvatarPending()
+        updateState {
+            adminChatGroupModalOpen = true
+            adminChatGroupEditId = gid
+            adminChatGroupDraftName = grp.name
+            adminChatGroupDraftMemberIds = grp.memberIds.filter { it != uid }
+        }
+    })
+    document.getElementById("sd-chat-group-delete")?.addEventListener("click", {
+        if (appState.user?.role != "admin") return@addEventListener
+        val gid = appState.selectedChatGroupId ?: return@addEventListener
+        updateState { adminChatGroupDeleteConfirmId = gid }
+    })
     document.getElementById("sd-chat-settings-btn")?.addEventListener("click", {
-        val tabs = when (appState.screen) {
-            AppScreen.Instructor, AppScreen.Cadet -> listOf("Главная", "Запись", "Чат", "Билеты", "История", "Настройки")
+        when (appState.screen) {
+            AppScreen.Instructor, AppScreen.Cadet, AppScreen.Admin -> Unit
             else -> return@addEventListener
         }
-        val settingsIndex = tabs.indexOf("Настройки").coerceAtLeast(0)
-        updateState { selectedTabIndex = settingsIndex }
+        val chatIdx = when (appState.screen) {
+            AppScreen.Admin -> listOf("Главная", "Баланс", "Расписание", "Чат", "История").indexOf("Чат")
+            else -> listOf("Главная", "Запись", "Чат", "Билеты", "История").indexOf("Чат")
+        }
+        updateState {
+            chatSettingsOpen = true
+            if (chatIdx >= 0) selectedTabIndex = chatIdx
+        }
+    })
+    document.getElementById("sd-settings-back-to-chat")?.addEventListener("click", {
+        updateState { chatSettingsOpen = false }
+    })
+    document.getElementById("sd-admin-storage-stats-refresh")?.addEventListener("click", {
+        if (appState.chatStorageStatsLoading || appState.chatStorageBucketLoading) return@addEventListener
+        refreshAdminChatStorageStats()
+    })
+    document.getElementById("sd-admin-storage-bucket-refresh")?.addEventListener("click", {
+        if (appState.chatStorageBucketLoading || appState.chatStorageStatsLoading) return@addEventListener
+        refreshAdminStorageFull()
     })
     document.getElementById("sd-chat-refresh")?.addEventListener("click", {
         val u = appState.user ?: return@addEventListener
@@ -4302,7 +8237,10 @@ private fun attachListeners(root: org.w3c.dom.Element) {
         getUsersForChat(u) { list ->
             updateState { chatContacts = list; chatContactsLoading = false }
             subscribeChatPresence(list.map { it.id })
-            subscribeChatNotifications(u.id, list)
+            getChatGroupsForUser(u.id) { groups ->
+                updateState { chatGroups = groups }
+                subscribeChatNotifications(u.id, list)
+            }
         }
     })
     document.getElementById("sd-admin-home-load")?.addEventListener("click", {
@@ -4314,6 +8252,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 adminHomeUsers = list; balanceAdminUsers = list; adminHomeLoading = false
                 if (err != null) networkError = err
             }
+            refreshAdminHomeAuxiliaryData()
         }
     })
     document.getElementById("sd-balance-load")?.addEventListener("click", {
@@ -4438,6 +8377,10 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 window.clearInterval(instructorSessionsPollIntervalId)
                 instructorSessionsPollIntervalId = 0
             }
+            if (adminSchedulePollIntervalId != 0) {
+                window.clearInterval(adminSchedulePollIntervalId)
+                adminSchedulePollIntervalId = 0
+            }
             root.asDynamic().onclick = null
             root.asDynamic().ontouchstart = null
             if (appState.user?.role == "cadet") {
@@ -4468,13 +8411,17 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                             window.clearTimeout(chatTid)
                             updateState { chatContacts = list; chatContactsLoading = false }
                             subscribeChatPresence(list.map { it.id })
-                            subscribeChatNotifications(uid, list)
+                            getChatGroupsForUser(uid) { groups ->
+                                updateState { chatGroups = groups }
+                                subscribeChatNotifications(uid, list)
+                            }
                         }
                     }
                 }
                 val usr = appState.user ?: return@setTimeout
                 when {
                 (usr.role == "instructor" && (appState.selectedTabIndex == 0 || appState.selectedTabIndex == 1)) -> {
+                    refreshCadetGroups()
                     if (!appState.recordingLoading && appState.recordingSessions.isEmpty() && appState.recordingOpenWindows.isEmpty()) {
                         updateState { recordingLoading = true }
                         val tid = window.setTimeout({ updateState { recordingLoading = false } }, 8000)
@@ -4491,8 +8438,12 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                             val u = appState.user ?: return@setInterval
                             if (u.role != "instructor") return@setInterval
                             if (appState.selectedTabIndex != 0 && appState.selectedTabIndex != 1) return@setInterval
+                            if (appState.instructorHomeSubView == "profile" && appState.selectedTabIndex == 0) return@setInterval
                             getOpenWindowsForInstructor(u.id) { wins ->
                                 getSessionsForInstructor(u.id) { sess ->
+                                    val newSig = recordingPollSignature(wins, sess)
+                                    val oldSig = recordingPollSignature(appState.recordingOpenWindows, appState.recordingSessions)
+                                    if (newSig == oldSig) return@getSessionsForInstructor
                                     updateState { recordingOpenWindows = wins; recordingSessions = sess }
                                 }
                             }
@@ -4515,6 +8466,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                             getSessionsForCadet(usr.id) { sess ->
                                 window.clearTimeout(tid)
                                 updateState { recordingOpenWindows = wins; recordingSessions = sess; recordingLoading = false }
+                                notifyCadetNewInstructorScheduledSessions(usr.id, sess)
                                 if (usr.role == "cadet" && wins.size > prevWindowsCount) {
                                     val windowMs = wins.minByOrNull { (it.dateTimeMillis ?: Long.MAX_VALUE) }?.dateTimeMillis
                                     showCadetNewWindowNotification(windowMs)
@@ -4528,23 +8480,17 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                             val u = appState.user ?: return@setInterval
                             if (u.role != "cadet") return@setInterval
                             if (appState.selectedTabIndex != 0 && appState.selectedTabIndex != 1) return@setInterval
+                            if (appState.cadetHomeSubView == "profile" && appState.selectedTabIndex == 0) return@setInterval
                             val instId = u.assignedInstructorId ?: return@setInterval
                             val prevCount = appState.recordingOpenWindows.size
-                            val prevSessionIds = appState.recordingSessions.map { it.id }.toSet()
                             getOpenWindowsForCadet(instId) { wins ->
                                 getSessionsForCadet(u.id) { sess ->
-                                    updateState { recordingOpenWindows = wins; recordingSessions = sess }
-                                    val newScheduled = sess.filter { it.status == "scheduled" && it.id !in prevSessionIds }
-                                    if (newScheduled.isNotEmpty()) {
-                                        val first = newScheduled.minByOrNull { it.startTimeMillis ?: Long.MAX_VALUE } ?: newScheduled.first()
-                                        val text = "Инструктор записал вас на вождение" + formatDayTimeShort(first.startTimeMillis)
-                                        val now = js("Date.now()").unsafeCast<Double>().toLong()
-                                        val newList = appState.notifications + AppNotification(dateTimeMs = now, text = text)
-                                        updateState { notifications = newList; selectedTabIndex = 1 }
-                                        u.id.let { uid -> saveNotificationsToStorage(uid, newList) }
-                                        showToast(text)
-                                        if (getSoundNotificationsEnabled() == true) playInstruktorDobavilOknoSound()
+                                    val newSig = recordingPollSignature(wins, sess)
+                                    val oldSig = recordingPollSignature(appState.recordingOpenWindows, appState.recordingSessions)
+                                    if (newSig != oldSig) {
+                                        updateState { recordingOpenWindows = wins; recordingSessions = sess }
                                     }
+                                    notifyCadetNewInstructorScheduledSessions(u.id, sess)
                                     if (wins.size > prevCount) {
                                         val windowMs = wins.minByOrNull { (it.dateTimeMillis ?: Long.MAX_VALUE) }?.dateTimeMillis
                                         showCadetNewWindowNotification(windowMs)
@@ -4572,7 +8518,9 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     }
                 }
                 usr.role == "cadet" && appState.selectedTabIndex == 4 -> {
-                    if (!appState.historyLoading && appState.historySessions.isEmpty()) {
+                    // Подгружаем список пользователей и при уже заполненных сессиях/балансе, если имён нет
+                    // (например история обновилась с главной без getUsers — «Кем» и «Инструктор» были «—»).
+                    if (!appState.historyLoading && (appState.historySessions.isEmpty() || appState.historyUsers.isEmpty())) {
                         updateState { historyLoading = true }
                         val tid = window.setTimeout({ updateState { historyLoading = false } }, 8000)
                         getUsers { list ->
@@ -4591,7 +8539,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                         }
                     }
                 }
-                usr.role == "admin" && appState.selectedTabIndex == 3 -> {
+                usr.role == "admin" && appState.selectedTabIndex == 4 -> {
                     if (!appState.historyLoading && appState.historyBalance.isEmpty()) {
                         updateState { historyLoading = true }
                         val tid = window.setTimeout({ updateState { historyLoading = false } }, 8000)
@@ -4613,6 +8561,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                                 adminHomeUsers = list; balanceAdminUsers = list; adminHomeLoading = false
                                 if (err != null) networkError = err
                             }
+                            refreshAdminHomeAuxiliaryData()
                         }
                     }
                 }
@@ -4628,6 +8577,26 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                         }
                     }
                 }
+                }
+                if (usr.role == "admin" && adminSchedulePollIntervalId == 0) {
+                    adminSchedulePollIntervalId = window.setInterval({
+                        val u = appState.user ?: return@setInterval
+                        if (u.role != "admin") return@setInterval
+                        val users = appState.adminHomeUsers.ifEmpty { appState.balanceAdminUsers }
+                        val instructors = users.filter { it.role == "instructor" }
+                        if (instructors.isEmpty()) return@setInterval
+                        getSessionsForInstructorsMap(instructors.map { it.id }) { map ->
+                            val newSig = computeAdminScheduleSignature(map)
+                            val oldSig = computeAdminScheduleSignature(appState.adminScheduleSessionsByInstructorId)
+                            if (newSig == oldSig) return@getSessionsForInstructorsMap
+                            val schedIdx = getTabsForUserRole("admin").indexOf("Расписание")
+                            val onScheduleTab = appState.selectedTabIndex == schedIdx
+                            updateState {
+                                adminScheduleSessionsByInstructorId = map
+                                if (onScheduleTab) adminScheduleSeenSignature = newSig
+                            }
+                        }
+                    }, 45000).unsafeCast<Int>()
                 }
             }, 0)
             val u = appState.user
@@ -4655,7 +8624,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 }
             if (usr.role == "instructor") {
                 val needInstructorRating = appState.recordingSessions.filter { it.status == "completed" && it.instructorRating == 0 }
-                if (needInstructorRating.isNotEmpty()) {
+                if (appState.instructorHomeSubView == "main" && needInstructorRating.isNotEmpty()) {
                     val first = needInstructorRating.first()
                     val cadetName = appState.instructorCadets.find { it.id == first.cadetId }?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "Курсант"
                     window.setTimeout({
@@ -4670,6 +8639,21 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                         }
                     }, 0)
                 }
+                document.getElementById("sd-instructor-profile-open")?.addEventListener("click", {
+                    val uid = usr.id
+                    resetInstructorProfileCalculatorCache()
+                    if (appState.historyBalance.isNotEmpty()) {
+                        updateState { instructorHomeSubView = "profile" }
+                    } else {
+                        getBalanceHistory(uid) { hist ->
+                            updateState { historyBalance = hist; instructorHomeSubView = "profile" }
+                        }
+                    }
+                })
+                document.getElementById("sd-instructor-profile-back")?.addEventListener("click", {
+                    resetInstructorProfileCalculatorCache()
+                    updateState { instructorHomeSubView = "main" }
+                })
                 val homeConfirmNodes = root.querySelectorAll(".sd-home-schedule-confirm")
                 for (k in 0 until homeConfirmNodes.length) {
                     val btn = homeConfirmNodes.item(k) as? org.w3c.dom.Element ?: continue
@@ -4732,50 +8716,22 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     btn.addEventListener("click", {
                         val modal = document.getElementById("sd-running-late-modal") ?: return@addEventListener
                         modal.asDynamic().dataset["sessionId"] = sessionId
-                        (root.querySelector("input[name=\"sd-late-mins\"][value=\"5\"]")?.asDynamic())?.checked = true
+                        (document.querySelector("input[name=\"sd-late-mins\"][value=\"5\"]")?.asDynamic())?.checked = true
                         modal.classList.remove("sd-hidden")
                     })
                 }
-                document.getElementById("sd-running-late-confirm")?.addEventListener("click", {
-                    val modal = document.getElementById("sd-running-late-modal") ?: return@addEventListener
-                    val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
-                    val checkedEl = root.querySelector("input[name=\"sd-late-mins\"]:checked")?.asDynamic()
-                    val delay = (checkedEl?.value as? String)?.toIntOrNull() ?: run { showToast("Выберите задержку"); return@addEventListener }
-                    val originalStart = appState.recordingSessions.find { it.id == sessionId }?.startTimeMillis ?: 0L
-                    val delayMs = delay * 60L * 1000L
-                    val untilMs = js("Date.now()").unsafeCast<Double>().toLong() + delayMs
-                    updateState { instructorRunningLateUntilMs = untilMs }
-                    setInstructorRunningLate(sessionId, delay) { err ->
-                        if (err != null) {
-                            updateState { networkError = err; instructorRunningLateUntilMs = 0L }
-                            return@setInstructorRunningLate
-                        }
-                        getSessionsForInstructor(usr.id) { sess ->
-                            val toShift = sess.filter { it.id != sessionId && it.status == "scheduled" && it.startTimeMillis != null && it.startTimeMillis!! > originalStart && it.startTimeMillis!! <= originalStart + delayMs }
-                            fun shiftNext(remaining: List<DrivingSession>) {
-                                if (remaining.isEmpty()) {
-                                    getSessionsForInstructor(usr.id) { s -> updateState { recordingSessions = s } }
-                                    showNotification("Опаздываю: сдвиг на $delay мин." + formatDayTimeShort(originalStart))
-                                    modal.classList.add("sd-hidden")
-                                    return
-                                }
-                                val sess = remaining.first()
-                                updateSessionStartTime(sess.id, (sess.startTimeMillis ?: 0L) + delayMs) {
-                                    shiftNext(remaining.drop(1))
-                                }
-                            }
-                            shiftNext(toShift)
-                        }
-                    }
-                })
-                document.getElementById("sd-running-late-cancel")?.addEventListener("click", {
-                    document.getElementById("sd-running-late-modal")?.classList?.add("sd-hidden")
-                })
                 val homeCancelNodes = root.querySelectorAll(".sd-home-schedule-cancel")
                 for (k in 0 until homeCancelNodes.length) {
                     val btn = homeCancelNodes.item(k) as? org.w3c.dom.Element ?: continue
                     val sessionId = btn.getAttribute("data-session-id") ?: continue
                     btn.addEventListener("click", {
+                        if (btn.getAttribute("data-home-cancel-needs-cadet-confirm") == "1") {
+                            document.getElementById("sd-home-cancel-unconfirmed-modal")?.let { m ->
+                                m.asDynamic().dataset["sessionId"] = sessionId
+                                m.classList.remove("sd-hidden")
+                            }
+                            return@addEventListener
+                        }
                         document.getElementById("sd-instructor-cancel-reason-modal")?.let { modal ->
                             val session = appState.recordingSessions.find { it.id == sessionId }
                             val cadetConfirmed = session?.instructorConfirmed == true
@@ -4783,7 +8739,9 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                             val timeReached = session?.startTimeMillis == null || now >= (session.startTimeMillis ?: 0L)
                             val allowCadetNoShow = cadetConfirmed && timeReached
                             modal.asDynamic().dataset["sessionId"] = sessionId
-                            root.querySelectorAll("input[name=sd-cancel-reason]").let { radios ->
+                            document.getElementById("sd-cancel-reason-other-wrap")?.classList?.add("sd-hidden")
+                            (document.getElementById("sd-cancel-reason-other-text") as? HTMLTextAreaElement)?.value = ""
+                            document.querySelectorAll("input[name=sd-cancel-reason]").let { radios ->
                                 for (i in 0 until radios.length) {
                                     val radio = radios.item(i) as? HTMLInputElement ?: continue
                                     val isCadetNoShow = (radio.value == "Курсант не явился")
@@ -4795,53 +8753,6 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                         }
                     })
                 }
-                root.querySelector("#sd-instructor-cancel-reason-modal")?.addEventListener("change", { ev ->
-                    val target = ev.target as? HTMLInputElement ?: return@addEventListener
-                    if (target.name != "sd-cancel-reason" || target.value != "Курсант не явился") return@addEventListener
-                    val modal = document.getElementById("sd-instructor-cancel-reason-modal") ?: return@addEventListener
-                    val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
-                    val session = appState.recordingSessions.find { it.id == sessionId } ?: return@addEventListener
-                    val now = js("Date.now()").unsafeCast<Double>().toLong()
-                    val startMs = session.startTimeMillis ?: 0L
-                    val timeNotReached = startMs > 0 && now < startMs
-                    if (timeNotReached) {
-                        showNotification("Выбрать причину не возможно, еще не настало время вождения!")
-                        root.querySelector("input[name=sd-cancel-reason][value=\"ТС на ремонте\"]")?.unsafeCast<HTMLInputElement>()?.let { it.checked = true }
-                        return@addEventListener
-                    }
-                    if (session.instructorConfirmed != true) {
-                        showNotification("Выбрать причину не возможно, курсант не подтвердил вождение!")
-                        root.querySelector("input[name=sd-cancel-reason][value=\"ТС на ремонте\"]")?.unsafeCast<HTMLInputElement>()?.let { it.checked = true }
-                        return@addEventListener
-                    }
-                })
-                document.getElementById("sd-instructor-cancel-reason-confirm")?.addEventListener("click", {
-                    val modal = document.getElementById("sd-instructor-cancel-reason-modal") ?: return@addEventListener
-                    val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
-                    val selected = root.querySelector("input[name=sd-cancel-reason]:checked") as? HTMLInputElement
-                    val reason = selected?.value?.takeIf { it.isNotBlank() } ?: "—"
-                    modal.classList.add("sd-hidden")
-                    val session = appState.recordingSessions.find { it.id == sessionId }
-                    val startMs = session?.startTimeMillis
-                    val cadetShortName = appState.instructorCadets.find { it.id == session?.cadetId }?.fullName?.let { formatShortName(it) } ?: "Курсант"
-                    cancelByInstructor(sessionId, reason) { err ->
-                        if (err != null) updateState { networkError = err }
-                        else {
-                            showNotification("Вождение отменено" + formatDayTimeShort(startMs) + ". Курсант: $cadetShortName")
-                            getOpenWindowsForInstructor(usr.id) { wins ->
-                                getSessionsForInstructor(usr.id) { sess ->
-                                    getBalanceHistory(usr.id) { hist ->
-                                        updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
-                                        notifyNewBalanceOpsForCurrentUser(hist)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                })
-                document.getElementById("sd-instructor-cancel-reason-cancel")?.addEventListener("click", {
-                    document.getElementById("sd-instructor-cancel-reason-modal")?.classList?.add("sd-hidden")
-                })
                 document.getElementById("sd-rec-delete-window-yes")?.addEventListener("click", {
                     val modal = document.getElementById("sd-rec-delete-window-confirm-modal") ?: return@addEventListener
                     val wid = modal.asDynamic().dataset["windowId"] as? String ?: return@addEventListener
@@ -4912,6 +8823,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                                 getSessionsForInstructor(usr.id) { sess ->
                                     getBalanceHistory(usr.id) { hist ->
                                         updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                                        getCurrentUser { newUser, _ -> if (newUser != null) updateState { user = newUser } }
                                         notifyNewBalanceOpsForCurrentUser(hist)
                                     }
                                 }
@@ -4973,24 +8885,53 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 }
                 if (voiceRecordInterval != 0) { window.clearInterval(voiceRecordInterval); voiceRecordInterval = 0 }
                 if (voicePlayInterval != 0) { window.clearInterval(voicePlayInterval); voicePlayInterval = 0 }
+
+                // Сбрасываем превью локального аудио (если оно было)
+                val reviewAudio = document.getElementById("sd-chat-voice-review-audio")?.asDynamic()
+                try { reviewAudio?.pause?.invoke() } catch (_: Throwable) { }
+                voiceReviewBlob = null
+                voiceReviewObjectUrl?.let { old ->
+                    js("(function(u){ try { URL.revokeObjectURL(u); } catch(e) {} })").unsafeCast<(String) -> Unit>()(old)
+                }
+                voiceReviewObjectUrl = null
+                voiceReviewAudioBoundForUrl = null
+                voiceDiscardOnStop = false
+                voiceAutoSendOnStop = false
+
                 saveChatScrollForCurrentContact()
-                updateState { selectedChatContactId = null; chatMessages = emptyList(); chatVoiceRecording = false; chatPlayingVoiceId = null }
+                updateState {
+                    chatSettingsOpen = false
+                    selectedChatContactId = null
+                    selectedChatGroupId = null
+                    chatMessages = emptyList()
+                    chatReplyToMessageId = null
+                    chatReplyToText = null
+                    chatVoiceRecording = false
+                    chatVoiceRecordingAutoSend = false
+                    chatVoiceReviewReady = false
+                    chatVoiceReviewLocalUrl = null
+                    chatVoiceReviewDurationSec = 0
+                    chatPlayingVoiceId = null
+                    chatVoicePlaybackPaused = false
+                    chatPlayingVoiceCurrentMs = 0
+                }
                 unsubscribeChat()
             })
             val chatInput = document.getElementById("sd-chat-input") as? HTMLInputElement
             document.getElementById("sd-chat-send")?.addEventListener("click", {
                 sendChatMessage(chatInput, uid)
             })
+            document.getElementById("sd-chat-file-btn")?.addEventListener("click", {
+                (document.getElementById("sd-chat-file-input") as? HTMLInputElement)?.click()
+            })
+            document.getElementById("sd-chat-file-input")?.addEventListener("change", {
+                val fi = document.getElementById("sd-chat-file-input") as? HTMLInputElement
+                handleChatAdminFileSelected(uid, fi)
+            })
             chatInput?.addEventListener("keypress", { e: dynamic ->
                 if (e?.key == "Enter") sendChatMessage(chatInput, uid)
             })
-            document.getElementById("sd-chat-voice-mic")?.addEventListener("click", {
-                startVoiceRecording(uid)
-            })
-            document.getElementById("sd-chat-voice-stop")?.addEventListener("click", {
-                stopVoiceRecordingAndSend(uid)
-            })
-            if (document.getElementById("sd-chat-voice-recording") != null) {
+            if (document.getElementById("sd-chat-voice-recording") != null || document.getElementById("sd-chat-voice-recording-review") != null) {
                 if (voiceRecordInterval != 0) window.clearInterval(voiceRecordInterval)
                 voiceRecordInterval = window.setInterval({
                     val start = appState.chatVoiceRecordStartMs
@@ -5007,99 +8948,21 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 attachVoiceProgressDrag(wrap, msgId, voiceUrl, durationSec)
             }
             val playingId = appState.chatPlayingVoiceId
-            if (playingId != null && voicePlayInterval == 0) {
+            if (playingId != null && voicePlayInterval == 0 && !appState.chatVoicePlaybackPaused) {
                 val durAttr = root.querySelector(".sd-msg-voice[data-voice-id=\"$playingId\"]")?.getAttribute("data-voice-duration") ?: "0"
                 val durationSec = durAttr.toIntOrNull() ?: 0
-                voicePlayInterval = window.setInterval({
-                    val a = document.getElementById("sd-global-voice-audio")?.asDynamic()
-                    if (a != null && a.paused == false) {
-                        appState.chatPlayingVoiceCurrentMs = ((a.currentTime as Double) * 1000).toInt()
-                        patchVoicePlayerDOM()
-                    } else if (a != null && a.ended == true) {
-                        window.clearInterval(voicePlayInterval)
-                        voicePlayInterval = 0
-                        appState.chatPlayingVoiceId = null
-                        appState.chatPlayingVoiceCurrentMs = durationSec * 1000
-                        patchVoicePlayerDOM()
-                    }
-                }, 200).unsafeCast<Int>()
+                startVoicePlaybackTicker(durationSec)
             }
-            document.getElementById("sd-recording-book-dt")?.setAttribute("min", getDatetimeLocalMin())
-            document.getElementById("sd-recording-add-dt")?.setAttribute("min", getDatetimeLocalMin())
             (document.getElementById("sd-recording-book-cadet") as? HTMLSelectElement)?.let { cadetSelectEl ->
-                fun updateCadetSelectClass() {
-                    if (cadetSelectEl.value.isNotBlank()) cadetSelectEl.classList.add("sd-has-cadet")
-                    else cadetSelectEl.classList.remove("sd-has-cadet")
-                }
-                updateCadetSelectClass()
-                cadetSelectEl.addEventListener("change", { updateCadetSelectClass() })
+                if (cadetSelectEl.value.isNotBlank()) cadetSelectEl.classList.add("sd-has-cadet")
+                else cadetSelectEl.classList.remove("sd-has-cadet")
             }
-            document.getElementById("sd-recording-add-btn")?.addEventListener("click", {
-                val input = document.getElementById("sd-recording-add-dt") as? HTMLInputElement
-                val v = input?.value ?: ""
-                if (v.isBlank()) { updateState { networkError = "Укажите дату и время" }; return@addEventListener }
-                val dateFn = js("function(s){ return new Date(s).getTime(); }").unsafeCast<(String) -> Number>()
-                val ms = dateFn(v).toLong()
-                if (ms <= 0) return@addEventListener
-                val nowMs = js("Date.now()").unsafeCast<Double>().toLong()
-                if (ms < nowMs) { showToast("Нельзя выбрать прошедшую дату и время"); return@addEventListener }
-                val occupied = findOccupiedMessage(ms, appState.recordingSessions, appState.recordingOpenWindows, appState.instructorCadets)
-                if (occupied != null) { showToast(occupied); return@addEventListener }
-                addOpenWindow(usr.id, ms) { _, err ->
-                    if (err != null) updateState { networkError = err }
-                    else {
-                        showNotification("Добавлено свободное окно для записи" + formatDayTimeShort(ms))
-                        getOpenWindowsForInstructor(usr.id) { wins ->
-                            getSessionsForInstructor(usr.id) { sess ->
-                                updateState { recordingOpenWindows = wins; recordingSessions = sess; networkError = null }
-                            }
-                        }
-                        input?.value = ""
-                    }
-                }
-            })
-            document.getElementById("sd-recording-book-btn")?.addEventListener("click", {
-                val cadetSelect = document.getElementById("sd-recording-book-cadet") as? HTMLSelectElement
-                val cadetId = cadetSelect?.value?.takeIf { it.isNotBlank() } ?: run { updateState { networkError = "Выберите курсанта" }; return@addEventListener }
-                val input = document.getElementById("sd-recording-book-dt") as? HTMLInputElement
-                val v = input?.value ?: ""
-                if (v.isBlank()) { updateState { networkError = "Укажите дату и время" }; return@addEventListener }
-                val dateFn = js("function(s){ return new Date(s).getTime(); }").unsafeCast<(String) -> Number>()
-                val ms = dateFn(v).toLong()
-                if (ms <= 0) return@addEventListener
-                val nowMs = js("Date.now()").unsafeCast<Double>().toLong()
-                if (ms < nowMs) { showToast("Нельзя выбрать прошедшую дату и время"); return@addEventListener }
-                val occupied = findOccupiedMessage(ms, appState.recordingSessions, appState.recordingOpenWindows, appState.instructorCadets)
-                if (occupied != null) { showToast(occupied); return@addEventListener }
-                val cadet = appState.instructorCadets.find { it.id == cadetId }
-                if (cadet == null) { updateState { networkError = "Курсант не найден" }; return@addEventListener }
-                if (cadet.balance <= 0) {
-                    val cadetShortName = formatShortName(cadet.fullName)
-                    val msg = "У курсанта $cadetShortName 0 талонов, запись невозможна"
-                    updateState { networkError = msg }
-                    showNotification(msg)
-                    return@addEventListener
-                }
-                val scheduledCount = appState.recordingSessions.count { it.cadetId == cadetId && (it.status == "scheduled" || it.status == "inProgress") }
-                if (scheduledCount >= cadet.balance) {
-                    val cadetShortName = formatShortName(cadet.fullName)
-                    val msg = "По балансу курсанта $cadetShortName уже запланировано максимальное число вождений"
-                    updateState { networkError = msg }
-                    showNotification(msg)
-                    return@addEventListener
-                }
-                createSession(usr.id, cadetId, ms, null) { _, err ->
-                    if (err != null) updateState { networkError = err }
-                    else {
-                        val cadetShortName = formatShortName(cadet.fullName)
-                        showNotification("Вождение назначено" + formatDayTimeShort(ms) + ". Курсант: $cadetShortName")
-                        getSessionsForInstructor(usr.id) { sess ->
-                            updateState { recordingSessions = sess; networkError = null }
-                        }
-                        input?.value = ""
-                    }
-                }
-            })
+            if (appState.instructorRecordingScrollToBookForm && usr.role == "instructor") {
+                window.setTimeout({
+                    document.getElementById("sd-recording-book-cadet")?.closest(".sd-rec-form-card")?.scrollIntoView(js("({behavior:'smooth',block:'center'})"))
+                    updateState { instructorRecordingScrollToBookForm = false }
+                }, 120)
+            }
             val confirmSessionNodes = root.querySelectorAll(".sd-recording-confirm-session")
             for (k in 0 until confirmSessionNodes.length) {
                 val btn = confirmSessionNodes.item(k) as? org.w3c.dom.Element ?: continue
@@ -5125,48 +8988,6 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     }
                 })
             }
-            document.getElementById("sd-rec-cancel-session-yes")?.addEventListener("click", {
-                val modal = document.getElementById("sd-rec-cancel-session-confirm-modal") ?: return@addEventListener
-                val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
-                val session = appState.recordingSessions.find { it.id == sessionId }
-                val startMs = session?.startTimeMillis
-                val cadetShortNameForNotif = if (usr.role == "instructor") appState.instructorCadets.find { it.id == session?.cadetId }?.fullName?.let { formatShortName(it) } ?: "Курсант" else null
-                modal.classList.add("sd-hidden")
-                val onSuccess = {
-                    showNotification("Вождение отменено" + formatDayTimeShort(startMs) + (if (cadetShortNameForNotif != null) ". Курсант: $cadetShortNameForNotif" else ""))
-                    if (usr.role == "cadet") {
-                        val instId = usr.assignedInstructorId ?: ""
-                        getOpenWindowsForCadet(instId) { wins ->
-                            getSessionsForCadet(usr.id) { sess ->
-                                updateState { recordingOpenWindows = wins; recordingSessions = sess }
-                            }
-                        }
-                    } else {
-                        getOpenWindowsForInstructor(usr.id) { wins ->
-                            getSessionsForInstructor(usr.id) { sess ->
-                                getBalanceHistory(usr.id) { hist ->
-                                    updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
-                                    notifyNewBalanceOpsForCurrentUser(hist)
-                                }
-                            }
-                        }
-                    }
-                }
-                if (usr.role == "cadet") {
-                    cancelByCadet(sessionId) { err ->
-                        if (err != null) updateState { networkError = err }
-                        else onSuccess()
-                    }
-                } else {
-                    cancelByInstructor(sessionId, "—") { err ->
-                        if (err != null) updateState { networkError = err }
-                        else onSuccess()
-                    }
-                }
-            })
-            document.getElementById("sd-rec-cancel-session-no")?.addEventListener("click", {
-                document.getElementById("sd-rec-cancel-session-confirm-modal")?.classList?.add("sd-hidden")
-            })
             val bookNodes = root.querySelectorAll(".sd-rec-book-slot-btn[data-window-id]")
             for (k in 0 until bookNodes.length) {
                 val btn = bookNodes.item(k) as? org.w3c.dom.Element ?: continue
@@ -5217,6 +9038,35 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 })
             }
             if (usr.role == "cadet") {
+                document.getElementById("sd-cadet-profile-open")?.addEventListener("click", {
+                    val uid = usr.id
+                    if (appState.historySessions.isNotEmpty()) {
+                        updateState { cadetHomeSubView = "profile" }
+                    } else {
+                        updateState { historyLoading = true }
+                        val tid = window.setTimeout({ updateState { historyLoading = false } }, 8000)
+                        getUsers { list ->
+                            getSessionsForCadet(uid) { sess ->
+                                getBalanceHistory(uid) { hist ->
+                                    window.clearTimeout(tid)
+                                    updateState {
+                                        historyUsers = list
+                                        historySessions = sess
+                                        historyBalance = hist
+                                        historyLoading = false
+                                        cadetHomeSubView = "profile"
+                                    }
+                                    val self = list.find { it.id == uid }
+                                    if (self != null) updateState { user = self }
+                                    notifyNewBalanceOpsForCurrentUser(hist, list)
+                                }
+                            }
+                        }
+                    }
+                })
+                document.getElementById("sd-cadet-profile-back")?.addEventListener("click", {
+                    updateState { cadetHomeSubView = "main" }
+                })
                 val needCadetRating = appState.recordingSessions.filter { it.status == "completed" && it.instructorRating > 0 && it.cadetRating == 0 }
                 if (needCadetRating.isNotEmpty()) {
                     val first = needCadetRating.first()
@@ -5259,9 +9109,11 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                         if (err != null) updateState { networkError = err }
                         else {
                             showNotification("Оценка инструктору поставлена" + formatDayTimeShort(startMs))
-                            getSessionsForCadet(usr.id) { sess ->
-                                getBalanceHistory(usr.id) { hist ->
-                                    updateState { recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                            getUsers { list ->
+                                getSessionsForCadet(usr.id) { sess ->
+                                    getBalanceHistory(usr.id) { hist ->
+                                        updateState { historyUsers = list; recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                                    }
                                 }
                             }
                         }
@@ -5588,28 +9440,190 @@ private fun attachListeners(root: org.w3c.dom.Element) {
     }
 }
 
+private fun hideChatMessageMenu() {
+    document.getElementById("sd-chat-msg-menu")?.remove()
+}
+
+private fun showChatMessageMenu(anchorEl: org.w3c.dom.Element, x: Double, y: Double, uid: String, roomId: String, messageId: String, messageText: String) {
+    hideChatMessageMenu()
+    val menu = document.createElement("div").unsafeCast<org.w3c.dom.HTMLElement>()
+    menu.id = "sd-chat-msg-menu"
+    menu.className = "sd-chat-msg-menu"
+    menu.innerHTML = """
+        <button type="button" class="sd-chat-msg-menu-item" data-action="reply">Ответить</button>
+        <button type="button" class="sd-chat-msg-menu-item" data-action="copy">Копировать</button>
+        <button type="button" class="sd-chat-msg-menu-item sd-chat-msg-menu-item-danger" data-action="delete">Удалить</button>
+    """.trimIndent()
+    document.body?.appendChild(menu)
+
+    val viewportW = window.innerWidth.toDouble()
+    val viewportH = window.innerHeight.toDouble()
+    val rect = menu.getBoundingClientRect()
+    val left = x.coerceIn(8.0, (viewportW - rect.width - 8.0).coerceAtLeast(8.0))
+    val top = y.coerceIn(8.0, (viewportH - rect.height - 8.0).coerceAtLeast(8.0))
+    menu.style.left = "${left}px"
+    menu.style.top = "${top}px"
+
+    menu.addEventListener("click", { ev: dynamic ->
+        val target = ev?.target as? org.w3c.dom.Element ?: return@addEventListener
+        val btn = target.closest(".sd-chat-msg-menu-item") as? org.w3c.dom.Element ?: return@addEventListener
+        when (btn.getAttribute("data-action")) {
+            "reply" -> {
+                updateState { chatReplyToMessageId = messageId; chatReplyToText = messageText }
+                val bubble = anchorEl.querySelector(".sd-msg-bubble-wrap")
+                bubble?.unsafeCast<org.w3c.dom.HTMLElement>()?.scrollIntoView()
+            }
+            "copy" -> {
+                val text = messageText
+                val nav = js("navigator").unsafeCast<dynamic>()
+                val clip = nav.clipboard
+                if (clip != null && clip.writeText != null) {
+                    clip.writeText(text).catch { _: dynamic -> Unit }
+                } else {
+                    val ta = document.createElement("textarea").unsafeCast<org.w3c.dom.HTMLTextAreaElement>()
+                    ta.value = text
+                    document.body?.appendChild(ta)
+                    ta.select()
+                    try { document.execCommand("copy") } catch (_: Throwable) { }
+                    ta.remove()
+                }
+            }
+            "delete" -> {
+                val msg = appState.chatMessages.find { it.id == messageId }
+                if (msg != null && msg.isVoice && msg.senderId == uid) {
+                    deleteVoiceMessageFully(roomId, messageId, msg.voiceUrl).catch { _: dynamic -> Unit }
+                } else {
+                    deleteMessageForUser(roomId, messageId, uid).catch { _: dynamic -> Unit }
+                }
+            }
+        }
+        hideChatMessageMenu()
+        (ev as? org.w3c.dom.events.Event)?.preventDefault()
+        (ev as? org.w3c.dom.events.Event)?.stopPropagation()
+    }, true)
+}
+
+private fun handleChatAdminFileSelected(uid: String?, fileInput: HTMLInputElement?) {
+    if (uid == null) return
+    val file = fileInput?.files?.item(0) ?: return
+    val size = (file.asDynamic().size as? Number)?.toDouble()?.toLong() ?: 0L
+    if (size > CHAT_ADMIN_FILE_MAX_BYTES) {
+        updateState { networkError = "Файл больше 8 МБ." }
+        fileInput.value = ""
+        return
+    }
+    val roomId = when {
+        appState.selectedChatGroupId != null -> groupChatRoomId(appState.selectedChatGroupId!!)
+        else -> {
+            val contactId = appState.selectedChatContactId ?: return
+            chatRoomId(uid, contactId)
+        }
+    }
+    val chatInput = document.getElementById("sd-chat-input") as? HTMLInputElement
+    val caption = (chatInput?.value ?: "").trim()
+    val fileName = (file.asDynamic().name as? String) ?: "file"
+    val mime = (file.asDynamic().type as? String)?.takeIf { it.isNotBlank() } ?: "application/octet-stream"
+    val reader = js("new FileReader()").unsafeCast<dynamic>()
+    reader.onload = { _: dynamic ->
+        val dataUrl = reader.result as? String
+        if (dataUrl == null) {
+            updateState { networkError = "Не удалось прочитать файл." }
+            fileInput.value = ""
+        } else {
+            val base64 = dataUrl.substringAfter("base64,")
+            showToast("Отправка файла…")
+            uploadChatAdminFile(roomId, fileName, mime, base64) { err, url ->
+                fileInput.value = ""
+                if (err != null) {
+                    updateState { networkError = err }
+                } else if (url == null) {
+                    updateState { networkError = "Пустой ответ сервера" }
+                } else {
+                    sendFileMessage(
+                        roomId,
+                        uid,
+                        caption,
+                        url,
+                        fileName,
+                        mime,
+                        appState.chatReplyToMessageId,
+                        appState.chatReplyToText,
+                    ).then {
+                        chatInput?.value = ""
+                        updateState { chatReplyToMessageId = null; chatReplyToText = null }
+                    }.catch { _ ->
+                        updateState { networkError = "Не удалось отправить сообщение с файлом." }
+                    }
+                }
+            }
+        }
+    }
+    reader.onerror = { _: dynamic ->
+        updateState { networkError = "Ошибка чтения файла." }
+        fileInput.value = ""
+    }
+    reader.readAsDataURL(file.asDynamic())
+}
+
 private fun sendChatMessage(chatInput: HTMLInputElement?, uid: String?) {
     val text = (chatInput?.value ?: "").trim()
     if (text.isBlank() || uid == null) return
-    val contactId = appState.selectedChatContactId ?: return
-    val roomId = chatRoomId(uid, contactId)
-    sendMessage(roomId, uid, text)
+    val roomId = when {
+        appState.selectedChatGroupId != null -> groupChatRoomId(appState.selectedChatGroupId!!)
+        else -> {
+            val contactId = appState.selectedChatContactId ?: return
+            chatRoomId(uid, contactId)
+        }
+    }
+    val replyId = appState.chatReplyToMessageId
+    val replyText = appState.chatReplyToText
+    sendMessage(roomId, uid, text, replyId, replyText)
         .then {
             chatInput?.value = ""
+            updateState { chatReplyToMessageId = null; chatReplyToText = null }
         }
         .catch { _ ->
             updateState { networkError = "Не удалось отправить сообщение." }
         }
 }
 
-private fun startVoiceRecording(uid: String?) {
-    if (uid == null || appState.selectedChatContactId == null) return
+private fun startVoiceRecording(uid: String?, autoSendOnStop: Boolean) {
+    if (uid == null) return
+    if (appState.selectedChatGroupId == null && appState.selectedChatContactId == null) return
+    val roomId = when {
+        appState.selectedChatGroupId != null -> groupChatRoomId(appState.selectedChatGroupId!!)
+        else -> chatRoomId(uid, appState.selectedChatContactId!!)
+    }
+
+    // Если была готовая запись — очищаем превью и локальные ресурсы.
+    if (appState.chatVoiceReviewReady) discardVoiceReview()
+    voiceDiscardOnStop = false
+    voiceAutoSendOnStop = autoSendOnStop
+    voiceReviewBlob = null
+
+    // Очищаем local object URL (если был)
+    voiceReviewObjectUrl?.let { old ->
+        js("(function(u){ try { URL.revokeObjectURL(u); } catch(e) {} })").unsafeCast<(String) -> Unit>()(old)
+    }
+    voiceReviewObjectUrl = null
+
+    updateState {
+        chatVoiceRecording = true
+        chatVoiceRecordingAutoSend = autoSendOnStop
+        chatVoiceReviewReady = false
+        chatVoiceReviewLocalUrl = null
+        chatVoiceReviewDurationSec = 0
+        chatVoiceRecordStartMs = js("Date.now()").unsafeCast<Double>()
+        chatVoiceRecordElapsedSec = 0
+    }
+
     val nav = js("navigator").unsafeCast<dynamic>()
     val mediaDevices = nav.mediaDevices
     if (mediaDevices == null || mediaDevices.getUserMedia == null) {
         updateState { networkError = "Нужен доступ к микрофону для голосовых сообщений." }
         return
     }
+
     voiceRecorderChunks = js("[]")
     val constraints = js("({ audio: true })")
     mediaDevices.getUserMedia(constraints).then { stream: dynamic ->
@@ -5632,21 +9646,39 @@ private fun startVoiceRecording(uid: String?) {
                 js("(function(){ var a=window.__sdVoiceChunks,d=window.__sdVoiceChunkData; if(a&&d){ a.push(d); } })()")
             }
         }
-        recorder.onstop = { _: dynamic ->
+
+        recorder.onstop = onStop@{ _: dynamic ->
             val chunks = voiceRecorderChunks
             val mimeType = voiceRecorderMimeType
             val stopStream = voiceRecorderStream
+
             js("(function(s){ if(s&&s.getTracks) s.getTracks().forEach(function(t){ t.stop(); }); })").unsafeCast<(dynamic) -> Unit>().invoke(stopStream)
+
             voiceRecorderStream = null
             voiceRecorder = null
             voiceRecorderChunks = null
             if (voiceRecordInterval != 0) { window.clearInterval(voiceRecordInterval); voiceRecordInterval = 0 }
-            updateState { chatVoiceRecording = false; chatVoiceRecordElapsedSec = 0 }
-            if (chunks != null) {
-                val blob = js("(function(c,t){ return new Blob(c, { type: t || 'audio/webm' }); })").unsafeCast<(dynamic, String) -> dynamic>().invoke(chunks, mimeType)
-                val roomId = chatRoomId(uid, appState.selectedChatContactId!!)
-                val startMs = appState.chatVoiceRecordStartMs
-                val durationSec = ((js("Date.now()").unsafeCast<Double>() - startMs) / 1000.0).toInt().coerceAtLeast(1)
+
+            val startMs = appState.chatVoiceRecordStartMs
+            val durationSec = ((js("Date.now()").unsafeCast<Double>() - startMs) / 1000.0).toInt().coerceAtLeast(1)
+
+            // Сбрасываем текущий режим записи
+            updateState {
+                chatVoiceRecording = false
+                chatVoiceRecordElapsedSec = 0
+                chatVoiceRecordingAutoSend = false
+            }
+
+            if (chunks == null) return@onStop
+            if (voiceDiscardOnStop) {
+                voiceDiscardOnStop = false
+                return@onStop
+            }
+
+            val blob = js("(function(c,t){ return new Blob(c, { type: t || 'audio/webm' }); })").unsafeCast<(dynamic, String) -> dynamic>().invoke(chunks, mimeType)
+
+            if (voiceAutoSendOnStop) {
+                voiceAutoSendOnStop = false
                 sendVoiceMessage(roomId, uid, blob, durationSec)
                     .then {
                         subscribeMessages(roomId) { list -> updateState { chatMessages = list } }
@@ -5655,22 +9687,179 @@ private fun startVoiceRecording(uid: String?) {
                     .catch { e: dynamic ->
                         updateState { networkError = "Не удалось отправить голосовое: ${(e?.message as? String) ?: "ошибка"}" }
                     }
+            } else {
+                // Режим превью: сохраняем Blob в память и показываем плеер
+                voiceReviewBlob = blob
+                val objUrl = js("(function(b){ return URL.createObjectURL(b); })").unsafeCast<(dynamic) -> String>()(blob)
+                voiceReviewObjectUrl = objUrl
+                updateState {
+                    chatVoiceReviewReady = true
+                    chatVoiceReviewLocalUrl = objUrl
+                    chatVoiceReviewDurationSec = durationSec
+                }
             }
         }
+
         recorder.start(1000)
         voiceRecorder = recorder
-        updateState { chatVoiceRecording = true; chatVoiceRecordStartMs = js("Date.now()").unsafeCast<Double>(); chatVoiceRecordElapsedSec = 0 }
     }.catch { _: dynamic ->
         updateState { networkError = "Нужен доступ к микрофону для голосовых сообщений." }
+        updateState {
+            chatVoiceRecording = false
+            chatVoiceRecordingAutoSend = false
+            chatVoiceReviewReady = false
+            chatVoiceReviewLocalUrl = null
+            chatVoiceReviewDurationSec = 0
+        }
     }
 }
 
-private fun stopVoiceRecordingAndSend(uid: String?) {
+private fun stopVoiceRecording() {
     val rec = voiceRecorder
-    if (rec != null) {
-        try {
-            if (js("rec.state").unsafeCast<String>() == "recording") rec.stop()
-        } catch (_: Throwable) { }
+    if (rec == null) return
+    try {
+        rec.stop()
+    } catch (_: Throwable) { }
+}
+
+/** Удаляет готовое превью (без отправки). */
+private fun discardVoiceReview() {
+    // Остановить проигрывание, если играет
+    val audio = document.getElementById("sd-chat-voice-review-audio")?.asDynamic()
+    try { audio?.pause?.invoke() } catch (_: Throwable) { }
+
+    voiceReviewBlob = null
+    voiceReviewObjectUrl?.let { old ->
+        js("(function(u){ try { URL.revokeObjectURL(u); } catch(e) {} })").unsafeCast<(String) -> Unit>()(old)
+    }
+    voiceReviewObjectUrl = null
+    voiceReviewAudioBoundForUrl = null
+    updateState {
+        chatVoiceRecording = false
+        chatVoiceRecordElapsedSec = 0
+        chatVoiceRecordingAutoSend = false
+        chatVoiceReviewReady = false
+        chatVoiceReviewLocalUrl = null
+        chatVoiceReviewDurationSec = 0
+    }
+}
+
+/** Отправить голосовое из режима превью (после паузы). */
+private fun sendVoiceReviewMessage() {
+    if (!appState.chatVoiceReviewReady) return
+    val uid = appState.user?.id ?: return
+    if (voiceReviewBlob == null) return
+    val roomId = when {
+        appState.selectedChatGroupId != null -> groupChatRoomId(appState.selectedChatGroupId!!)
+        else -> {
+            val contactId = appState.selectedChatContactId ?: return
+            chatRoomId(uid, contactId)
+        }
+    }
+    val durationSec = appState.chatVoiceReviewDurationSec
+
+    val blob = voiceReviewBlob
+    val objUrlToRevoke = voiceReviewObjectUrl
+
+    // Скрываем превью, чтобы пользователь не отправил повторно
+    updateState {
+        chatVoiceRecording = false
+        chatVoiceRecordElapsedSec = 0
+        chatVoiceRecordingAutoSend = false
+        chatVoiceReviewReady = false
+        chatVoiceReviewLocalUrl = null
+        chatVoiceReviewDurationSec = 0
+    }
+
+    // Затем отправляем
+    fun cleanup() {
+        voiceReviewBlob = null
+        if (objUrlToRevoke != null) {
+            js("(function(u){ try { URL.revokeObjectURL(u); } catch(e) {} })").unsafeCast<(String) -> Unit>()(objUrlToRevoke)
+        }
+        voiceReviewObjectUrl = null
+        voiceReviewAudioBoundForUrl = null
+    }
+
+    sendVoiceMessage(roomId, uid, blob, durationSec)
+        .then {
+            subscribeMessages(roomId) { list -> updateState { chatMessages = list } }
+            window.setTimeout({ scrollChatToBottom() }, 50)
+            cleanup()
+        }
+        .catch { e: dynamic ->
+            updateState { networkError = "Не удалось отправить голосовое: ${(e?.message as? String) ?: "ошибка"}" }
+            cleanup()
+        }
+}
+
+private fun ensureVoiceReviewAudioBound() {
+    val localUrl = appState.chatVoiceReviewLocalUrl ?: return
+    if (localUrl.isBlank()) return
+    if (voiceReviewAudioBoundForUrl == localUrl) return
+    voiceReviewAudioBoundForUrl = localUrl
+
+    val audio = document.getElementById("sd-chat-voice-review-audio")?.asDynamic() ?: return
+    val range = document.getElementById("sd-chat-voice-review-range") as? org.w3c.dom.HTMLInputElement
+    val currentEl = document.getElementById("sd-chat-voice-review-current")
+    val durationSec = appState.chatVoiceReviewDurationSec
+    val playBtn = document.getElementById("sd-chat-voice-review-play-btn") as? org.w3c.dom.HTMLButtonElement
+
+    fun patchFromAudio() {
+        if (audio == null || range == null) return
+        val curMs = ((audio.currentTime as Double) * 1000).toInt()
+        val curSec = (curMs / 1000).coerceAtLeast(0)
+        range.value = ((curSec.toDouble() / durationSec.toDouble()) * 1000.0).toInt().coerceIn(0, 1000).toString()
+        currentEl?.textContent = formatVoiceDurationSec(curSec)
+        if (playBtn != null) {
+            playBtn.innerHTML = if (audio.paused == false) SD_ICON_PAUSE_SVG else SD_ICON_PLAY_SVG
+            playBtn.setAttribute("title", if (audio.paused == false) "Пауза" else "Воспроизвести")
+            playBtn.setAttribute("aria-label", if (audio.paused == false) "Пауза" else "Воспроизвести")
+        }
+    }
+
+    audio.ontimeupdate = { _: dynamic -> patchFromAudio() }
+    audio.onended = { _: dynamic ->
+        if (range != null) range.value = "1000"
+        currentEl?.textContent = formatVoiceDurationSec(durationSec)
+        if (playBtn != null) {
+            playBtn.innerHTML = SD_ICON_PLAY_SVG
+            playBtn.setAttribute("title", "Воспроизвести")
+            playBtn.setAttribute("aria-label", "Воспроизвести")
+        }
+    }
+    // Инициализируем сразу
+    js("(function(a){ try { a.currentTime = 0; } catch(e){} })").unsafeCast<(dynamic) -> Unit>().invoke(audio)
+}
+
+private fun toggleVoiceReviewPlay() {
+    if (!appState.chatVoiceReviewReady) return
+    ensureVoiceReviewAudioBound()
+    val audio = document.getElementById("sd-chat-voice-review-audio")?.asDynamic() ?: return
+    val playBtn = document.getElementById("sd-chat-voice-review-play-btn") as? org.w3c.dom.HTMLButtonElement
+    if (audio.paused == false) {
+        audio.pause()
+        if (playBtn != null) playBtn.innerHTML = SD_ICON_PLAY_SVG
+        return
+    }
+    audio.play()?.catch { _: dynamic -> Unit }
+    if (playBtn != null) playBtn.innerHTML = SD_ICON_PAUSE_SVG
+}
+
+private fun setVoiceReviewPlaybackPositionFromRange() {
+    if (!appState.chatVoiceReviewReady) return
+    val audio = document.getElementById("sd-chat-voice-review-audio")?.asDynamic() ?: return
+    val range = document.getElementById("sd-chat-voice-review-range") as? org.w3c.dom.HTMLInputElement ?: return
+    val durationSec = appState.chatVoiceReviewDurationSec
+    if (durationSec <= 0) return
+    val ratio = (range.value.toIntOrNull()?.toDouble() ?: 0.0) / 1000.0
+    audio.currentTime = ratio * durationSec.toDouble()
+    val curSec = (ratio * durationSec.toDouble()).toInt().coerceAtLeast(0)
+    val currentEl = document.getElementById("sd-chat-voice-review-current")
+    currentEl?.textContent = formatVoiceDurationSec(curSec)
+    val playBtn = document.getElementById("sd-chat-voice-review-play-btn") as? org.w3c.dom.HTMLButtonElement
+    if (playBtn != null) {
+        playBtn.innerHTML = if (audio.paused == false) SD_ICON_PAUSE_SVG else SD_ICON_PLAY_SVG
     }
 }
 
@@ -5688,36 +9877,11 @@ private fun getOrCreateGlobalVoiceAudio(): dynamic {
     return el.asDynamic()
 }
 
-private fun toggleVoicePlay(audioEl: dynamic, msgId: String, voiceUrl: String, durationSec: Int) {
-    val globalAudio = getOrCreateGlobalVoiceAudio()
-    val currentlyPlaying = appState.chatPlayingVoiceId
-    if (currentlyPlaying == msgId) {
-        globalAudio.pause()
-        if (voicePlayInterval != 0) { window.clearInterval(voicePlayInterval); voicePlayInterval = 0 }
-        appState.chatPlayingVoiceId = null
-        appState.chatPlayingVoiceCurrentMs = 0
-        patchVoicePlayerDOM()
-        return
-    }
-    if (currentlyPlaying != null) {
-        globalAudio.pause()
-        if (voicePlayInterval != 0) { window.clearInterval(voicePlayInterval); voicePlayInterval = 0 }
-    }
-    if (voiceUrl.isBlank() || (!voiceUrl.startsWith("http") && !voiceUrl.startsWith("data:"))) return
-    appState.chatPlayingVoiceId = msgId
-    appState.chatPlayingVoiceCurrentMs = 0
-    patchVoicePlayerDOM()
-    globalAudio.src = voiceUrl
-    globalAudio.currentTime = 0.0
-    val playPromise = globalAudio.play()
-    if (playPromise != null) {
-        js("(function(p){ if(p&&typeof p.catch==='function') p.catch(function(){ }); })").unsafeCast<(dynamic) -> Unit>().invoke(playPromise)
-    }
-    globalAudio.onended = {
-        if (voicePlayInterval != 0) { window.clearInterval(voicePlayInterval); voicePlayInterval = 0 }
-        appState.chatPlayingVoiceId = null
-        appState.chatPlayingVoiceCurrentMs = durationSec * 1000
-        patchVoicePlayerDOM()
+/** Обновление позиции по таймеру, пока глобальный audio играет (не вызывать в паузе). */
+private fun startVoicePlaybackTicker(durationSec: Int) {
+    if (voicePlayInterval != 0) {
+        window.clearInterval(voicePlayInterval)
+        voicePlayInterval = 0
     }
     voicePlayInterval = window.setInterval({
         val a = document.getElementById("sd-global-voice-audio")?.asDynamic()
@@ -5728,10 +9892,70 @@ private fun toggleVoicePlay(audioEl: dynamic, msgId: String, voiceUrl: String, d
             window.clearInterval(voicePlayInterval)
             voicePlayInterval = 0
             appState.chatPlayingVoiceId = null
+            appState.chatVoicePlaybackPaused = false
             appState.chatPlayingVoiceCurrentMs = durationSec * 1000
             patchVoicePlayerDOM()
         }
     }, 200).unsafeCast<Int>()
+}
+
+private fun toggleVoicePlay(audioEl: dynamic, msgId: String, voiceUrl: String, durationSec: Int) {
+    val globalAudio = getOrCreateGlobalVoiceAudio()
+    val activeId = appState.chatPlayingVoiceId
+    val paused = appState.chatVoicePlaybackPaused
+
+    if (activeId == msgId) {
+        if (!paused) {
+            globalAudio.pause()
+            appState.chatPlayingVoiceCurrentMs = ((globalAudio.currentTime as Double) * 1000).toInt()
+            appState.chatVoicePlaybackPaused = true
+            if (voicePlayInterval != 0) {
+                window.clearInterval(voicePlayInterval)
+                voicePlayInterval = 0
+            }
+            patchVoicePlayerDOM()
+            return
+        } else {
+            appState.chatVoicePlaybackPaused = false
+            val playPromise = globalAudio.play()
+            if (playPromise != null) {
+                js("(function(p){ if(p&&typeof p.catch==='function') p.catch(function(){ }); })").unsafeCast<(dynamic) -> Unit>().invoke(playPromise)
+            }
+            startVoicePlaybackTicker(durationSec)
+            patchVoicePlayerDOM()
+            return
+        }
+    }
+
+    if (activeId != null) {
+        globalAudio.pause()
+        if (voicePlayInterval != 0) {
+            window.clearInterval(voicePlayInterval)
+            voicePlayInterval = 0
+        }
+    }
+    if (voiceUrl.isBlank() || (!voiceUrl.startsWith("http") && !voiceUrl.startsWith("data:"))) return
+    appState.chatPlayingVoiceId = msgId
+    appState.chatVoicePlaybackPaused = false
+    appState.chatPlayingVoiceCurrentMs = 0
+    patchVoicePlayerDOM()
+    globalAudio.src = voiceUrl
+    globalAudio.currentTime = 0.0
+    val playPromise = globalAudio.play()
+    if (playPromise != null) {
+        js("(function(p){ if(p&&typeof p.catch==='function') p.catch(function(){ }); })").unsafeCast<(dynamic) -> Unit>().invoke(playPromise)
+    }
+    globalAudio.onended = {
+        if (voicePlayInterval != 0) {
+            window.clearInterval(voicePlayInterval)
+            voicePlayInterval = 0
+        }
+        appState.chatPlayingVoiceId = null
+        appState.chatVoicePlaybackPaused = false
+        appState.chatPlayingVoiceCurrentMs = durationSec * 1000
+        patchVoicePlayerDOM()
+    }
+    startVoicePlaybackTicker(durationSec)
 }
 
 private fun seekToVoicePosition(msgId: String, voiceUrl: String, durationSec: Int, ratio: Double) {
@@ -5744,9 +9968,15 @@ private fun seekToVoicePosition(msgId: String, voiceUrl: String, durationSec: In
         patchVoicePlayerDOM()
     } else {
         if (voiceUrl.isBlank() || (!voiceUrl.startsWith("http") && !voiceUrl.startsWith("data:"))) return
+        if (voicePlayInterval != 0) {
+            window.clearInterval(voicePlayInterval)
+            voicePlayInterval = 0
+        }
+        globalAudio.pause()
         globalAudio.src = voiceUrl
         globalAudio.currentTime = r * durationSec
         appState.chatPlayingVoiceId = msgId
+        appState.chatVoicePlaybackPaused = true
         appState.chatPlayingVoiceCurrentMs = currentMs
         patchVoicePlayerDOM()
     }

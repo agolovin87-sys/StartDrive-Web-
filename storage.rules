@@ -29,5 +29,15 @@ service firebase.storage {
     match /chats/voice/{chatRoomId}/{allPaths=**} {
       allow read, write: if request.auth != null;
     }
+    // Аватар группы: chats/group_avatars/{groupId}/avatar.png (см. Firebase.kt).
+    // {allPaths=**} — один сегмент (avatar.png) или несколько; литерал /avatar.png в match иногда не срабатывает.
+    match /chats/group_avatars/{groupId}/{allPaths=**} {
+      allow read, write: if request.auth != null;
+    }
+    // Вложения в чат (загрузка только через Callable + Admin SDK; чтение по token URL).
+    match /chats/files/{roomPath}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
   }
 }

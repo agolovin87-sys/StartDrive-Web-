@@ -157,6 +157,8 @@ private fun parseUserFromDoc(doc: dynamic, d: dynamic): User {
     val chatAvatarUrl = (data["chatAvatarUrl"] as? String) ?: (data.chatAvatarUrl as? String)
     val cadetGroupIdRaw = (data["cadetGroupId"] as? String) ?: (data.cadetGroupId as? String)
     val cadetGroupId = cadetGroupIdRaw?.takeIf { it.isNotBlank() }
+    val trainingVehicleRaw = (data["trainingVehicle"] as? String) ?: (data.trainingVehicle as? String)
+    val trainingVehicle = trainingVehicleRaw?.trim()?.takeIf { it.isNotBlank() }
     return User(
         id = id,
         fullName = fullName,
@@ -170,7 +172,23 @@ private fun parseUserFromDoc(doc: dynamic, d: dynamic): User {
         assignedCadets = assignedCadets,
         chatAvatarUrl = chatAvatarUrl,
         cadetGroupId = cadetGroupId,
+        trainingVehicle = trainingVehicle,
     )
+}
+
+/** Учебное ТС для инструктора (только админ в UI). */
+fun setInstructorTrainingVehicle(instructorId: String, value: String?, callback: (String?) -> Unit) {
+    val firestore = getFirestore()
+    val payload = js("{}").unsafeCast<dynamic>()
+    if (value.isNullOrBlank()) {
+        payload.trainingVehicle = js("firebase.firestore.FieldValue.delete()")
+    } else {
+        payload.trainingVehicle = value.trim()
+    }
+    firestore.collection(FirebasePaths.USERS).doc(instructorId)
+        .update(payload)
+        .then { callback(null) }
+        .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
 }
 
 /** Обновить привязку курсанта к группе (null — снять группу). */
@@ -246,6 +264,102 @@ fun subscribeCurrentUserDocument(onUpdate: (User) -> Unit): () -> Unit {
             } catch (_: Throwable) { }
         }
     }
+}
+
+/**
+ * Лента для администратора: документы пишут только Cloud Functions ([FirebasePaths.ADMIN_EVENTS]).
+ * Нужна, чтобы веб-админка получала те же уведомления, что и FCM на устройстве (без токена в браузере).
+ */
+fun subscribeAdminEventsFeed(onMessage: (String) -> Unit): () -> Unit {
+    val q = getFirestore().collection(FirebasePaths.ADMIN_EVENTS)
+        .orderBy("createdAt", "desc")
+        .limit(40)
+    /** Первый снимок — только запоминаем id, без уведомлений (история). Дальше — любой новый id. */
+    var firstSnapshot = true
+    val knownIds = mutableSetOf<String>()
+    val unsubscribe = q.onSnapshot({ snap: dynamic ->
+        val snapD = snap.unsafeCast<dynamic>()
+        val docs = snapD.docs
+        val len = (docs.length as? Int) ?: 0
+        if (firstSnapshot) {
+            for (i in 0 until len) {
+                val doc = docs[i].unsafeCast<dynamic>()
+                val id = doc.id as? String ?: continue
+                knownIds.add(id)
+            }
+            firstSnapshot = false
+            return@onSnapshot
+        }
+        for (i in 0 until len) {
+            val doc = docs[i].unsafeCast<dynamic>()
+            val id = doc.id as? String ?: continue
+            if (id in knownIds) continue
+            knownIds.add(id)
+            val dataFn = doc.data
+            val d = dataFn.unsafeCast<dynamic>().call(doc) ?: continue
+            val dd = d.unsafeCast<dynamic>()
+            val title = (dd.title as? String) ?: ""
+            val body = (dd.body as? String) ?: ""
+            val text = if (title.isNotBlank()) "$title: $body" else body
+            if (text.isNotBlank()) onMessage(text)
+        }
+    }) { err: dynamic ->
+        val msg = (err?.message as? String) ?: "$err"
+        js("console.error").unsafeCast<(Any?) -> Unit>().invoke("subscribeAdminEventsFeed: $msg")
+    }
+    return {
+        try {
+            unsubscribe.unsafeCast<dynamic>().invoke()
+        } catch (_: Throwable) {
+            try {
+                js("(function(u){ try { if (typeof u === 'function') u(); } catch(e) {} })").unsafeCast<(dynamic) -> Unit>().invoke(unsubscribe)
+            } catch (_: Throwable) { }
+        }
+    }
+}
+
+private fun adminEventCreatedAtToMillis(ts: dynamic): Long {
+    if (ts == null || ts == undefined) return js("Date.now()").unsafeCast<Double>().toLong()
+    return try {
+        val toMillis = ts.toMillis?.unsafeCast<dynamic>()
+        if (toMillis != null) (toMillis.call(ts) as? Number)?.toLong()
+            ?: ((ts.seconds as? Number)?.toLong() ?: 0L) * 1000L
+        else ((ts.seconds as? Number)?.toLong() ?: 0L) * 1000L
+    } catch (_: Throwable) {
+        js("Date.now()").unsafeCast<Double>().toLong()
+    }
+}
+
+/**
+ * Одна выгрузка последних событий (для экрана «Уведомления» и подстраховки, если live-подписка не успела).
+ */
+fun fetchAdminEventsForNotifications(callback: (List<Pair<Long, String>>) -> Unit) {
+    getFirestore().collection(FirebasePaths.ADMIN_EVENTS)
+        .orderBy("createdAt", "desc")
+        .limit(50)
+        .get()
+        .then { snap: dynamic ->
+            try {
+                val docs = snap?.docs ?: js("[]")
+                val len = (docs.length as? Int) ?: 0
+                val list = mutableListOf<Pair<Long, String>>()
+                for (i in 0 until len) {
+                    val doc = docs[i].unsafeCast<dynamic>()
+                    val dataFn = doc.data
+                    val d = dataFn.unsafeCast<dynamic>().call(doc) ?: continue
+                    val dd = d.unsafeCast<dynamic>()
+                    val title = (dd.title as? String) ?: ""
+                    val body = (dd.body as? String) ?: ""
+                    val text = if (title.isNotBlank()) "$title: $body" else body
+                    val ms = adminEventCreatedAtToMillis(dd.createdAt)
+                    if (text.isNotBlank()) list.add(Pair(ms, text))
+                }
+                callback(list)
+            } catch (_: Throwable) {
+                callback(emptyList())
+            }
+        }
+        .catch { _ -> callback(emptyList()) }
 }
 
 fun getUsers(callback: (List<User>) -> Unit) {

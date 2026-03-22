@@ -96,6 +96,12 @@ data class AppState(
     var selectedChatContactId: String? = null,
     /** Открыт групповой чат (Firestore id документа chat_groups). */
     var selectedChatGroupId: String? = null,
+    /** Админ: режим просмотра переписки между двумя пользователями (не с админом). */
+    var chatAdminCorrespondenceMode: Boolean = false,
+    /** Первый участник диалога (чья переписка смотрится). */
+    var chatAdminCorrespondenceSubjectId: String? = null,
+    /** Второй участник (комната subjectId_peerId). */
+    var chatAdminCorrespondencePeerId: String? = null,
     /** Групповые чаты, в которых состоит пользователь. */
     var chatGroups: List<ChatGroup> = emptyList(),
     /** Модалка создания группы (только админ). */
@@ -149,6 +155,8 @@ data class AppState(
     var adminEditingGroupId: String? = null,
     /** Открыт выбор группы для курсанта (id курсанта). */
     var adminCadetGroupPickerCadetId: String? = null,
+    /** Выбор учебного ТС для инструктора (id инструктора). */
+    var adminTrainingVehiclePickerInstructorId: String? = null,
     var cadetInstructor: User? = null,
     var instructorCadets: List<User> = emptyList(),
     var chatVoiceRecording: Boolean = false,

@@ -18,6 +18,7 @@ data class User(
     @get:PropertyName("createdAt") @set:PropertyName("createdAt") var createdAt: Timestamp? = null,
     @get:PropertyName("chatAvatarUrl") @set:PropertyName("chatAvatarUrl") var chatAvatarUrl: String? = null,
     @get:PropertyName("cadetGroupId") @set:PropertyName("cadetGroupId") var cadetGroupId: String? = null,
+    @get:PropertyName("trainingVehicle") @set:PropertyName("trainingVehicle") var trainingVehicle: String? = null,
 ) {
     fun initials(): String = fullName.split(" ").take(2).mapNotNull { it.firstOrNull()?.uppercase() }.joinToString("")
     fun shortName(): String = fullName.split(" ").getOrNull(0)?.plus(" ")?.plus(

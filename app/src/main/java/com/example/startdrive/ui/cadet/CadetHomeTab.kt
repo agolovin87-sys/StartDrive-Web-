@@ -774,6 +774,27 @@ private fun InstructorCardInStyle(
                     }
                 }
             }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.DirectionsCar,
+                    contentDescription = null,
+                    tint = Color.Black,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "Учебное ТС: ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Black,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    instructor.trainingVehicle?.takeIf { it.isNotBlank() } ?: "—",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Black,
+                    maxLines = 2,
+                )
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center,

@@ -3,7 +3,7 @@ const { onDocumentUpdated, onDocumentCreated } = require("firebase-functions/v2/
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
 const { initializeApp } = require("firebase-admin/app");
-const { getFirestore } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { getDatabase } = require("firebase-admin/database");
 const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
@@ -186,6 +186,184 @@ function sendFcmToInstructor(firestore, instructorId, title, body, data = {}) {
   });
 }
 
+/** Короткое ФИО / email для текста уведомлений. */
+async function getUserDisplayName(firestore, uid) {
+  if (!uid) return "Пользователь";
+  try {
+    const doc = await firestore.collection("users").doc(uid).get();
+    const d = doc.data();
+    const fn = (d?.fullName && String(d.fullName).trim()) || "";
+    if (fn) return fn;
+    return (d?.email && String(d.email).trim()) || `${uid.slice(0, 8)}…`;
+  } catch (e) {
+    console.error("getUserDisplayName", uid, e);
+    return "Пользователь";
+  }
+}
+
+/**
+ * Формат «Фамилия И.О.» для уведомлений администратору.
+ * Если в профиле только email — показываем локальную часть.
+ */
+function formatPersonShortRu(display) {
+  const s = (display && String(display).trim()) || "";
+  if (!s) return "Пользователь";
+  if (s.includes("@")) {
+    const local = s.split("@")[0];
+    return local.length > 48 ? `${local.slice(0, 45)}…` : local;
+  }
+  const parts = s.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "Пользователь";
+  if (parts.length === 1) return parts[0];
+  const surname = parts[0];
+  const initials = parts
+    .slice(1)
+    .map((p) => {
+      const c = p.charAt(0);
+      return c ? `${c}.` : "";
+    })
+    .join("");
+  return `${surname} ${initials}`;
+}
+
+async function getUserShortName(firestore, uid) {
+  const full = await getUserDisplayName(firestore, uid);
+  return formatPersonShortRu(full);
+}
+
+/** Время сообщения из RTDB (число мс или объект) — для подписи в уведомлении админу. */
+function formatChatMessageDateTimeRu(msg) {
+  let ms = Date.now();
+  try {
+    const ts = msg && msg.timestamp;
+    if (typeof ts === "number" && !Number.isNaN(ts)) {
+      ms = ts;
+    } else if (ts && typeof ts === "object") {
+      if (typeof ts._seconds === "number") ms = ts._seconds * 1000;
+      else if (typeof ts.seconds === "number") ms = ts.seconds * 1000;
+    }
+  } catch (e) {
+    console.error("formatChatMessageDateTimeRu", e);
+  }
+  return new Date(ms).toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function roleLabelRu(role) {
+  if (role === "instructor") return "Инструктор";
+  if (role === "cadet") return "Курсант";
+  if (role === "admin") return "Администратор";
+  return "Пользователь";
+}
+
+/** Дательный падеж для «написал в чате …» */
+function roleLabelRuDative(role) {
+  const r = (role && String(role).toLowerCase()) || "";
+  if (r === "cadet") return "курсанту";
+  if (r === "admin") return "администратору";
+  if (r === "instructor") return "инструктору";
+  return "пользователю";
+}
+
+/** Форматирование даты/времени вождения для уведомления. */
+function formatSessionStartTime(startTime) {
+  if (!startTime) return "";
+  try {
+    if (startTime.toDate && typeof startTime.toDate === "function") {
+      const d = startTime.toDate();
+      return d.toLocaleString("ru-RU", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+    const sec = startTime.seconds != null ? startTime.seconds : (startTime._seconds || 0);
+    const ms = sec * 1000;
+    return new Date(ms).toLocaleString("ru-RU", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch (e) {
+    return "";
+  }
+}
+
+/**
+ * Уведомления всем администраторам с FCM (веб/мобильные клиенты с токеном).
+ * @param {Set<string>|string[]|undefined} excludeUserIds — не слать этим uid (например, уже получили как получатель сообщения).
+ */
+async function sendFcmToAllAdmins(firestore, title, body, data = {}, excludeUserIds = []) {
+  const exclude = new Set(
+    Array.isArray(excludeUserIds) ? excludeUserIds : (excludeUserIds instanceof Set ? [...excludeUserIds] : []),
+  );
+  let snap;
+  try {
+    snap = await firestore.collection("users").where("role", "==", "admin").get();
+  } catch (e) {
+    console.error("sendFcmToAllAdmins query", e);
+    return;
+  }
+  const messaging = getMessaging();
+  const tasks = [];
+  for (const doc of snap.docs) {
+    const uid = doc.id;
+    if (exclude.has(uid)) continue;
+    const token = doc.data()?.fcmToken;
+    if (!token) continue;
+    tasks.push(
+      messaging.send({
+        token,
+        notification: { title, body },
+        data: { title, body, ...data },
+        android: {
+          priority: "high",
+          notification: { sound: "default", channelId: data.channelId || "startdrive_general" },
+        },
+      }).catch((err) => {
+        console.error("sendFcmToAllAdmins token", uid, err?.message || err);
+      }),
+    );
+  }
+  await Promise.all(tasks);
+}
+
+/** Запись в ленту Firestore — веб-админка получает уведомления без FCM-токена. */
+async function writeAdminEvent(firestore, title, body, data = {}) {
+  try {
+    const doc = {
+      title: String(title || ""),
+      body: String(body || ""),
+      createdAt: FieldValue.serverTimestamp(),
+      type: String(data.type || "general"),
+    };
+    if (data.channelId != null) doc.channelId = String(data.channelId);
+    if (data.sessionId != null) doc.sessionId = String(data.sessionId);
+    if (data.roomId != null) doc.roomId = String(data.roomId);
+    if (data.senderId != null) doc.senderId = String(data.senderId);
+    if (data.recipientId != null) doc.recipientId = String(data.recipientId);
+    if (data.groupId != null) doc.groupId = String(data.groupId);
+    await firestore.collection("admin_events").add(doc);
+  } catch (e) {
+    console.error("writeAdminEvent", e);
+  }
+}
+
+/** Push (FCM) + запись в admin_events для веб-админа. */
+async function notifyAdminsFcmAndFeed(firestore, title, body, data = {}, excludeUserIds = []) {
+  await sendFcmToAllAdmins(firestore, title, body, data, excludeUserIds);
+  await writeAdminEvent(firestore, title, body, data);
+}
+
 // ——— Чат: входящее сообщение (уже есть; получатель = инструктор, если пишет курсант)
 exports.onNewChatMessage = onValueCreated(
   {
@@ -201,38 +379,161 @@ exports.onNewChatMessage = onValueCreated(
     const text = (msg && msg.text) || "";
     if (!senderId || !roomId) return;
 
+    const firestore = getFirestore();
+
+    /** Превью текста / голоса / файла для уведомления админу. */
+    function chatPreviewForAdmin(m) {
+      const t = (m && m.text && String(m.text).trim()) || "";
+      if (t) return t.length > 120 ? t.slice(0, 117) + "…" : t;
+      if (m && m.voiceUrl) return "[голосовое сообщение]";
+      if (m && m.fileUrl) {
+        const fn = (m.fileName && String(m.fileName).trim()) || "файл";
+        return `[файл: ${fn}]`;
+      }
+      return "[сообщение]";
+    }
+
+    // Групповой чат — админам только если пишет инструктор
+    if (roomId.startsWith("group_")) {
+      const groupId = roomId.slice("group_".length);
+      const senderDoc = await firestore.collection("users").doc(senderId).get();
+      const senderRole = (senderDoc.data()?.role && String(senderDoc.data().role).toLowerCase()) || "";
+      if (senderRole === "admin") return;
+      if (senderRole !== "instructor") return;
+      const senderName = await getUserShortName(firestore, senderId);
+      const preview = chatPreviewForAdmin(msg);
+      let gName = "Группа";
+      try {
+        const gDoc = await firestore.collection("chat_groups").doc(groupId).get();
+        if (gDoc.exists) gName = (gDoc.data()?.name && String(gDoc.data().name).trim()) || gName;
+      } catch (e) {
+        console.error("onNewChatMessage group name", e);
+      }
+      const label = roleLabelRu("instructor");
+      const when = formatChatMessageDateTimeRu(msg);
+      await notifyAdminsFcmAndFeed(
+        firestore,
+        "Сообщение в группе",
+        `${gName}: ${label} ${senderName} — ${preview} (${when})`,
+        {
+          type: "chat_group",
+          channelId: "startdrive_chat",
+          roomId,
+          senderId: String(senderId),
+          groupId: String(groupId),
+        },
+      );
+      return;
+    }
+
     const parts = roomId.split("_");
+    if (parts.length !== 2) return;
     const recipientId = parts[0] === senderId ? parts[1] : parts[0];
     if (!recipientId) return;
 
-    const firestore = getFirestore();
     const recipientDoc = await firestore.collection("users").doc(recipientId).get();
     const fcmToken = recipientDoc.data()?.fcmToken;
-    if (!fcmToken) return;
+    if (fcmToken) {
+      const messaging = getMessaging();
+      const bodyText = text.length > 80 ? text.slice(0, 77) + "…" : text;
+      await messaging.send({
+        token: fcmToken,
+        notification: {
+          title: "Новое сообщение в чате",
+          body: bodyText || chatPreviewForAdmin(msg),
+        },
+        data: {
+          title: "Новое сообщение в чате",
+          body: text || chatPreviewForAdmin(msg),
+          type: "chat",
+          channelId: "startdrive_chat",
+          roomId,
+        },
+        android: {
+          priority: "high",
+          notification: { sound: "default", channelId: "startdrive_chat" },
+        },
+      });
+    }
 
-    const messaging = getMessaging();
-    await messaging.send({
-      token: fcmToken,
-      notification: {
-        title: "Новое сообщение в чате",
-        body: text.length > 80 ? text.slice(0, 77) + "…" : text,
-      },
-      data: {
-        title: "Новое сообщение в чате",
-        body: text,
+    // Администраторам — только если сообщение от инструктора
+    const senderDoc = await firestore.collection("users").doc(senderId).get();
+    const senderRole = (senderDoc.data()?.role && String(senderDoc.data().role).toLowerCase()) || "";
+    if (senderRole === "admin") return;
+    if (senderRole !== "instructor") return;
+
+    const recipientRole = (recipientDoc.data()?.role && String(recipientDoc.data().role).toLowerCase()) || "";
+    const senderShort = await getUserShortName(firestore, senderId);
+    const recipientShort = await getUserShortName(firestore, recipientId);
+    const when = formatChatMessageDateTimeRu(msg);
+    const preview = chatPreviewForAdmin(msg);
+    const previewSuffix =
+      preview && preview !== "[сообщение]"
+        ? preview.length > 100
+          ? ` — ${preview.slice(0, 97)}…`
+          : ` — ${preview}`
+        : "";
+    let adminBody;
+    if (recipientRole === "cadet") {
+      adminBody = `Инструктор ${senderShort} написал в чате курсанту ${recipientShort} ${when}${previewSuffix}`;
+    } else {
+      const whom = roleLabelRuDative(recipientRole);
+      adminBody = `Инструктор ${senderShort} написал в чате ${whom} ${recipientShort} ${when}${previewSuffix}`;
+    }
+    await notifyAdminsFcmAndFeed(
+      firestore,
+      "Сообщение в чате",
+      adminBody,
+      {
         type: "chat",
         channelId: "startdrive_chat",
         roomId,
+        senderId: String(senderId),
+        recipientId: String(recipientId),
       },
-      android: {
-        priority: "high",
-        notification: { sound: "default", channelId: "startdrive_chat" },
-      },
-    });
+      [recipientId],
+    );
   }
 );
 
-// ——— Вождение: обновление сессии — уведомления инструктору
+// ——— Вождение: новая запись (курсант записался) — уведомления администраторам
+exports.onDrivingSessionCreated = onDocumentCreated(
+  { document: "driving_sessions/{sessionId}", region: "europe-west1" },
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    const data = snap.data();
+    if (!data || data.status !== "scheduled") return;
+    const instructorId = data.instructorId;
+    const cadetId = data.cadetId;
+    if (!instructorId || !cadetId) return;
+
+    const firestore = getFirestore();
+    const openWid = data.openWindowId;
+    const bookedByCadetViaWindow = openWid != null && String(openWid).trim() !== "";
+    // Админу — только запись от инструктора (не бронь курсанта по окну)
+    if (!bookedByCadetViaWindow) {
+      const instructorName = await getUserDisplayName(firestore, instructorId);
+      const cadetName = await getUserDisplayName(firestore, cadetId);
+      const timeStr = formatSessionStartTime(data.startTime);
+      const body = timeStr
+        ? `Инструктор ${instructorName} записал курсанта ${cadetName} на вождение. ${timeStr}`
+        : `Инструктор ${instructorName} записал курсанта ${cadetName} на вождение.`;
+      await notifyAdminsFcmAndFeed(
+        firestore,
+        "Запись на вождение",
+        body,
+        {
+          type: "driving_booked",
+          channelId: "startdrive_driving",
+          sessionId: event.params.sessionId,
+        },
+      );
+    }
+  },
+);
+
+// ——— Вождение: обновление сессии — уведомления инструктору и администраторам
 exports.onDrivingSessionUpdated = onDocumentUpdated(
   { document: "driving_sessions/{sessionId}", region: "europe-west1" },
   async (event) => {
@@ -241,9 +542,11 @@ exports.onDrivingSessionUpdated = onDocumentUpdated(
     const before = change.before.data();
     const after = change.after.data();
     const instructorId = after?.instructorId;
-    if (!instructorId) return;
+    const cadetId = after?.cadetId;
+    if (!instructorId || !cadetId) return;
 
     const firestore = getFirestore();
+    const sessionId = event.params.sessionId;
     const statusBefore = before?.status;
     const statusAfter = after?.status;
     const sessionBefore = before?.session || {};
@@ -251,22 +554,37 @@ exports.onDrivingSessionUpdated = onDocumentUpdated(
     const cadetConfirmedBefore = sessionBefore.cadetConfirmed === true;
     const cadetConfirmedAfter = sessionAfter.cadetConfirmed === true;
 
-    // Подтверждение начала вождения курсантом
+    const instructorName = () => getUserDisplayName(firestore, instructorId);
+    const cadetName = () => getUserDisplayName(firestore, cadetId);
+
+    // Подтверждение начала вождения курсантом — админу не шлём (действие курсанта)
     if (!cadetConfirmedBefore && cadetConfirmedAfter) {
       await sendFcmToInstructor(firestore, instructorId,
         "Подтверждение вождения",
         "Курсант подтвердил начало вождения.",
-        { type: "driving_confirm", channelId: "startdrive_driving" }
+        { type: "driving_confirm", channelId: "startdrive_driving", sessionId },
       );
       return;
     }
 
-    // Отмена вождения курсантом
+    // Отмена вождения инструктором
+    if (statusAfter === "cancelledByInstructor" && statusBefore !== "cancelledByInstructor") {
+      const [inName, caName] = await Promise.all([instructorName(), cadetName()]);
+      await notifyAdminsFcmAndFeed(
+        firestore,
+        "Отмена вождения",
+        `Инструктор ${inName} отменил вождение с курсантом ${caName}.`,
+        { type: "driving_cancel", channelId: "startdrive_driving", sessionId },
+      );
+      return;
+    }
+
+    // Отмена вождения курсантом — админу не шлём (действие курсанта)
     if (statusAfter === "cancelledByCadet" && statusBefore !== "cancelledByCadet") {
       await sendFcmToInstructor(firestore, instructorId,
         "Отмена вождения",
         "Курсант отменил запланированное вождение.",
-        { type: "driving_cancel", channelId: "startdrive_driving" }
+        { type: "driving_cancel", channelId: "startdrive_driving", sessionId },
       );
       return;
     }
@@ -276,10 +594,17 @@ exports.onDrivingSessionUpdated = onDocumentUpdated(
       await sendFcmToInstructor(firestore, instructorId,
         "Вождение завершено",
         "Сессия вождения успешно завершена.",
-        { type: "driving_complete", channelId: "startdrive_driving" }
+        { type: "driving_complete", channelId: "startdrive_driving", sessionId },
+      );
+      const [inName, caName] = await Promise.all([instructorName(), cadetName()]);
+      await notifyAdminsFcmAndFeed(
+        firestore,
+        "Вождение завершено",
+        `Завершено: курсант ${caName}, инструктор ${inName}.`,
+        { type: "driving_complete", channelId: "startdrive_driving", sessionId },
       );
     }
-  }
+  },
 );
 
 // ——— По расписанию: автостарт вождения через 5 мин после назначенного времени

@@ -22,6 +22,8 @@ data class User(
     val chatAvatarUrl: String? = null,
     /** Id документа в [FirebasePaths.CADET_GROUPS] (только для role=cadet). */
     val cadetGroupId: String? = null,
+    /** Учебное ТС (модель и госномер), задаётся администратором для role=instructor. */
+    val trainingVehicle: String? = null,
 ) {
     fun initials(): String =
         fullName.split(" ").take(2).mapNotNull { it.firstOrNull()?.uppercase() }.joinToString("")

@@ -69,6 +69,7 @@ class AuthRepository {
                 assignedCadets = (data["assignedCadets"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList(),
                 isActive = data["isActive"] as? Boolean ?: false,
                 createdAt = data["createdAt"] as? Timestamp,
+                trainingVehicle = data["trainingVehicle"] as? String,
             )
         } catch (e: Exception) {
             null

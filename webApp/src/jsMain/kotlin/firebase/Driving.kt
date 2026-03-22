@@ -19,6 +19,8 @@ data class DrivingSession(
     val completedAtMillis: Long? = null,
     val cancelledAtMillis: Long? = null,
     val cancelReason: String = "",
+    /** Курсант подтвердил начало вождения (поле session.cadetConfirmed в Firestore). */
+    val cadetConfirmed: Boolean = false,
 )
 
 data class InstructorOpenWindow(
@@ -54,6 +56,7 @@ private fun drivingSessionFromDoc(doc: dynamic): DrivingSession {
     val sessionStartMs = (sessionObj?.startTime as? Number)?.toLong()
     val sessActive = sessionObj?.isActive
     val sessPausedAt = sessionObj?.pausedAt
+    val cadetConf = sessionObj?.cadetConfirmed as? Boolean ?: false
     return DrivingSession(
         id = doc.id,
         instructorId = (d?.instructorId as? String) ?: "",
@@ -71,6 +74,7 @@ private fun drivingSessionFromDoc(doc: dynamic): DrivingSession {
         completedAtMillis = parseTimestamp(d?.completedAt),
         cancelledAtMillis = parseTimestamp(d?.cancelledAt),
         cancelReason = (d?.cancelReason as? String) ?: "",
+        cadetConfirmed = cadetConf,
     )
 }
 
@@ -288,6 +292,7 @@ fun getSession(sessionId: String, callback: (DrivingSession?) -> Unit) {
             val sessionStartMs = (sessionObj?.startTime as? Number)?.toLong()
             val sessActive = sessionObj?.isActive
             val sessPausedAt = sessionObj?.pausedAt
+            val cadetConf = sessionObj?.cadetConfirmed as? Boolean ?: false
             callback(DrivingSession(
                 id = doc.id,
                 instructorId = (dyn["instructorId"] as? String) ?: "",
@@ -305,6 +310,7 @@ fun getSession(sessionId: String, callback: (DrivingSession?) -> Unit) {
                 completedAtMillis = parseTimestamp(dyn["completedAt"]),
                 cancelledAtMillis = parseTimestamp(dyn["cancelledAt"]),
                 cancelReason = (dyn["cancelReason"] as? String) ?: "",
+                cadetConfirmed = cadetConf,
             ))
         }
         .catch { _ -> callback(null) }

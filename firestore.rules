@@ -34,6 +34,14 @@ service cloud.firestore {
     }
 
     // Учебные группы курсантов: чтение — всем авторизованным; создание/изменение — только админ.
+    // События для админки (FCM + веб): только чтение админом, запись — из Cloud Functions (Admin SDK).
+    match /admin_events/{eventId} {
+      allow read: if request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'admin';
+      allow create, update, delete: if false;
+    }
+
     match /cadet_groups/{groupId} {
       allow read: if request.auth != null;
       allow create, update, delete: if request.auth != null

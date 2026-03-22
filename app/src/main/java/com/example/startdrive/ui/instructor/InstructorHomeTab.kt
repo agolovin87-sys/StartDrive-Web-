@@ -8,8 +8,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
@@ -592,6 +594,11 @@ private fun ProfileCard(instructor: User, balanceBadgeScale: Float = 1f) {
                 }
                 ProfileRow(label = "ФИО:", value = instructor.fullName.ifBlank { "—" }, icon = Icons.Default.Person)
                 ProfileRow(label = "Email:", value = instructor.email.ifBlank { "—" }, icon = Icons.Default.Email)
+                ProfileRow(
+                    label = "Учебное ТС:",
+                    value = instructor.trainingVehicle?.takeIf { it.isNotBlank() } ?: "—",
+                    icon = Icons.Default.DirectionsCar,
+                )
                 ProfileRow(label = "Тел.:", value = instructor.phone.ifBlank { "—" }, icon = Icons.Default.Phone)
                 ProfileRow(label = "Роль:", value = "Инструктор", icon = Icons.Default.Badge)
                 ProfileRow(

@@ -79,6 +79,19 @@ private var groupChatAvatarRootListenersBound = false
 
 /** Сигнатура списка курсантов для блока форм: при частичном обновлении вкладки «Запись» пересобираем только стабильные поля, если изменился состав курсантов. */
 private var lastInstructorRecordingCadetSigForStable: String? = null
+/** Держим состояние модалки «Начать раньше», чтобы она не закрывалась при render()/polling. */
+private var startEarlyModalSessionId: String? = null
+private var startEarlyModalMinutesLeft: Int = 0
+private var completeEarlyModalSessionId: String? = null
+private var completeEarlyModalText: String = ""
+private var runningLateModalSessionId: String? = null
+private var homeCancelUnconfirmedModalSessionId: String? = null
+private var cancelReasonModalSessionId: String? = null
+private var recDeleteWindowModalWindowId: String? = null
+private var instructorRateCadetModalSessionId: String? = null
+private var instructorRateCadetModalCadetName: String = ""
+/** Чтобы не сбрасывать радио «оценка курсанту» при каждом poll/render после выбора пользователя. */
+private var instructorRateModalRadioInitSessionId: String? = null
 
 private fun instructorCadetsSignature(cadets: List<User>): String {
     return cadets.map { "${it.id}:${it.balance}" }.sorted().joinToString(",")
@@ -291,6 +304,7 @@ fun main() {
                         appendChatGroupModalsIfNeeded(root)
                         appendInstructorCancelReasonModalIfNeeded(root)
                         appendInstructorRunningLateModalIfNeeded(root)
+                        appendInstructorRateCadetModalIfNeeded(root)
                         appendRecCancelSessionConfirmModalIfNeeded(root)
                         appendAllowSoundBarIfNeeded(root)
                         return
@@ -333,6 +347,7 @@ fun main() {
                 appendChatGroupModalsIfNeeded(root)
                 appendInstructorCancelReasonModalIfNeeded(root)
                 appendInstructorRunningLateModalIfNeeded(root)
+                appendInstructorRateCadetModalIfNeeded(root)
                 appendRecCancelSessionConfirmModalIfNeeded(root)
                 appendAllowSoundBarIfNeeded(root)
                 return
@@ -355,6 +370,7 @@ fun main() {
             appendChatGroupModalsIfNeeded(root)
             appendInstructorCancelReasonModalIfNeeded(root)
             appendInstructorRunningLateModalIfNeeded(root)
+            appendInstructorRateCadetModalIfNeeded(root)
             appendRecCancelSessionConfirmModalIfNeeded(root)
             appendAllowSoundBarIfNeeded(root)
         }
@@ -2075,11 +2091,15 @@ private fun getDatetimeLocalMin(): String {
     return js("(function(){ var d=new Date(); var p=function(n){ return (n<10?'0':'')+n; }; return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes()); })()").unsafeCast<String>()
 }
 
-/** Сигнатура списков для опроса: не вызывать updateState, если данные не изменились — иначе перерисовка рвёт открытый select/datetime. */
+/** Сигнатура списков для опроса: не вызывать updateState, если данные не изменились — иначе перерисовка рвёт открытый select/datetime.
+ * Важно включать все поля, от которых зависит UI «Моё вождение» / график инструктора: иначе при смене только
+ * startRequestedByInstructor / cadetConfirmed / таймера сессии сигнатура не меняется и кнопки/таймер не появляются до перезахода.
+ */
 private fun recordingPollSignature(wins: List<InstructorOpenWindow>, sess: List<DrivingSession>): String {
     val w = wins.sortedBy { it.id }.joinToString(";") { "${it.id}:${it.dateTimeMillis}:${it.status}" }
     val s = sess.sortedBy { it.id }.joinToString(";") {
-        "${it.id}:${it.status}:${it.startTimeMillis}:${it.cadetId}:${it.instructorConfirmed}:${it.openWindowId}"
+        "${it.id}:${it.status}:${it.startTimeMillis}:${it.cadetId}:${it.instructorConfirmed}:${it.openWindowId}:" +
+            "${it.startRequestedByInstructor}:${it.cadetConfirmed}:${it.actualStartMs}:${it.sessionIsActive}:${it.sessionPausedAt}"
     }
     return "$w|$s"
 }
@@ -2147,6 +2167,67 @@ private fun formatDateOnly(ms: Long?): String {
     return js("d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })").unsafeCast<String>()
 }
 
+private fun isModalOpenById(id: String): Boolean =
+    document.getElementById(id)?.classList?.contains("sd-hidden") == false
+
+private fun syncStartEarlyModalVisibility() {
+    val modal = document.getElementById("sd-start-early-modal") ?: return
+    val sid = startEarlyModalSessionId
+    if (sid.isNullOrBlank()) {
+        modal.classList.add("sd-hidden")
+        return
+    }
+    modal.asDynamic().dataset["sessionId"] = sid
+    document.getElementById("sd-start-early-mins")?.textContent = startEarlyModalMinutesLeft.toString()
+    modal.classList.remove("sd-hidden")
+}
+
+private fun syncInstructorActionModalsVisibility() {
+    fun syncSimple(id: String, key: String, value: String?) {
+        val m = document.getElementById(id) ?: return
+        if (value.isNullOrBlank()) {
+            m.classList.add("sd-hidden")
+        } else {
+            m.asDynamic().dataset[key] = value
+            m.classList.remove("sd-hidden")
+        }
+    }
+    syncSimple("sd-running-late-modal", "sessionId", runningLateModalSessionId)
+    syncSimple("sd-home-cancel-unconfirmed-modal", "sessionId", homeCancelUnconfirmedModalSessionId)
+    syncSimple("sd-instructor-cancel-reason-modal", "sessionId", cancelReasonModalSessionId)
+    syncSimple("sd-rec-delete-window-confirm-modal", "windowId", recDeleteWindowModalWindowId)
+    syncSimple("sd-instructor-rate-cadet-modal", "sessionId", instructorRateCadetModalSessionId)
+
+    val complete = document.getElementById("sd-complete-early-modal")
+    if (completeEarlyModalSessionId.isNullOrBlank()) {
+        complete?.classList?.add("sd-hidden")
+    } else {
+        // dataset — DOMStringMap: без .set() и без asDynamic() на dataset (не Kotlin-объект)
+        val c = complete
+        if (c != null) {
+            c.asDynamic().dataset["sessionId"] = completeEarlyModalSessionId
+        }
+        document.getElementById("sd-complete-early-text")?.textContent = completeEarlyModalText
+        complete?.classList?.remove("sd-hidden")
+    }
+    document.getElementById("sd-instructor-rate-cadet-name")?.textContent = instructorRateCadetModalCadetName
+    val rateSid = instructorRateCadetModalSessionId
+    if (rateSid.isNullOrBlank()) {
+        instructorRateModalRadioInitSessionId = null
+    } else {
+        val m = document.getElementById("sd-instructor-rate-cadet-modal")
+        if (m != null && !m.classList.contains("sd-hidden")) {
+            if (instructorRateModalRadioInitSessionId != rateSid) {
+                instructorRateModalRadioInitSessionId = rateSid
+                val rateInputs = document.querySelectorAll("input[name=sd-instructor-rate]")
+                for (j in 0 until rateInputs.length) {
+                    (rateInputs.item(j) as? HTMLInputElement)?.checked = false
+                }
+            }
+        }
+    }
+}
+
 private fun formatTimeOnly(ms: Long?): String {
     if (ms == null || ms <= 0) return "—"
     val d = js("new Date(ms)")
@@ -2157,6 +2238,16 @@ private fun weekdayNameLongRu(ms: Long?): String {
     if (ms == null || ms <= 0) return "—"
     val d = js("new Date(ms)")
     return js("d.toLocaleDateString('ru-RU', { weekday: 'long' })").unsafeCast<String>()
+}
+
+private fun weekdayNameShortRu(ms: Long?): String {
+    if (ms == null || ms <= 0) return "—"
+    val d = js("new Date(ms)")
+    val idx = when ((d.getDay() as Int).coerceIn(0, 6)) {
+        0 -> 6
+        else -> (d.getDay() as Int) - 1
+    }
+    return listOf("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")[idx]
 }
 
 /** Ключ сортировки ГГГГ-ММ для группировки истории по месяцам. */
@@ -2520,6 +2611,9 @@ private fun getOrCreateCadetNotificationAudio(): dynamic {
     audio.preload = "auto"
     audio.volume = 1.0
     audio.src = getCadetNotificationSoundUrl()
+    val el = audio.unsafeCast<org.w3c.dom.HTMLElement>()
+    el.setAttribute("playsinline", "true")
+    el.setAttribute("webkit-playsinline", "true")
     cadetNotificationAudio = audio
     return audio
 }
@@ -2762,6 +2856,60 @@ private fun playInstruktorDobavilOknoSound() {
         audio.src = getCadetNotificationSoundUrl()
         audio.currentTime = 0.0
         audio.play()?.catch { _ -> Unit }
+    } catch (_: Throwable) { }
+}
+
+private const val CADET_DRIVING_START_GREETING_MP3 = "zdravstvuyte_dly_kursanta"
+
+/**
+ * Приветствие при нажатии «Начать» у курсанта. Отдельный [HTMLAudioElement] на каждый клик —
+ * жест пользователя остаётся «свежим», не делим src с уведомлениями (иначе часто тишина / гонка).
+ */
+private fun playCadetDrivingStartGreetingSound() {
+    try {
+        if (cadetNotificationAudioContext == null || cadetNotificationAudioContext == js("undefined")) {
+            cadetNotificationAudioContext = js("new (window.AudioContext || window.webkitAudioContext)()").unsafeCast<dynamic>()
+        }
+        cadetNotificationAudioContext.asDynamic().resume()?.catch { _: dynamic -> Unit }
+        val url = getResourceBaseUrl() + "sounds/" + CADET_DRIVING_START_GREETING_MP3 + ".mp3"
+        val audio = document.createElement("audio").asDynamic()
+        audio.preload = "auto"
+        audio.volume = 1.0
+        audio.muted = false
+        audio.src = url
+        val el = audio.unsafeCast<org.w3c.dom.HTMLElement>()
+        el.setAttribute("playsinline", "true")
+        el.setAttribute("webkit-playsinline", "true")
+        document.body?.appendChild(el)
+        val a = audio.asDynamic()
+        fun tryPlay() {
+            try {
+                a.currentTime = 0.0
+                a.play()?.catch { _: dynamic -> Unit }
+            } catch (_: Throwable) { }
+        }
+        val playPromise = a.play()
+        if (playPromise != null) {
+            val onFail: () -> Unit = {
+                val rs = (a.readyState as? Number)?.toInt() ?: 0
+                if (rs >= 2) tryPlay()
+                else {
+                    val once = js("({ once: true })")
+                    audio.addEventListener("canplay", { tryPlay() }, once)
+                }
+            }
+            js("(function(p, onFail){ if(p&&typeof p.catch==='function') p.catch(function(){ onFail(); }); })").unsafeCast<(dynamic, dynamic) -> Unit>().invoke(playPromise, onFail)
+        }
+        val onceEnd = js("({ once: true })")
+        audio.addEventListener(
+            "ended",
+            {
+                try {
+                    el.remove()
+                } catch (_: Throwable) { }
+            },
+            onceEnd
+        )
     } catch (_: Throwable) { }
 }
 
@@ -3358,7 +3506,8 @@ private fun wireInstructorHomeCancelUnconfirmedModalListeners() {
         if (usr.role != "instructor") return@addEventListener
         val modal = document.getElementById("sd-home-cancel-unconfirmed-modal") ?: return@addEventListener
         val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
-        modal.classList.add("sd-hidden")
+        homeCancelUnconfirmedModalSessionId = null
+        syncInstructorActionModalsVisibility()
         val session = appState.recordingSessions.find { it.id == sessionId }
         val startMs = session?.startTimeMillis
         val cadetShortName = appState.instructorCadets.find { it.id == session?.cadetId }?.fullName?.let { formatShortName(it) } ?: "Курсант"
@@ -3378,7 +3527,8 @@ private fun wireInstructorHomeCancelUnconfirmedModalListeners() {
         }
     })
     document.getElementById("sd-home-cancel-unconfirmed-no")?.addEventListener("click", {
-        document.getElementById("sd-home-cancel-unconfirmed-modal")?.let { m -> m.classList.add("sd-hidden") }
+        homeCancelUnconfirmedModalSessionId = null
+        syncInstructorActionModalsVisibility()
     })
 }
 
@@ -3428,7 +3578,8 @@ private fun wireInstructorCancelReasonModalListeners(root: org.w3c.dom.Element) 
             null -> "—"
             else -> rawVal
         }
-        modal.classList.add("sd-hidden")
+        cancelReasonModalSessionId = null
+        syncInstructorActionModalsVisibility()
         document.getElementById("sd-cancel-reason-other-wrap")?.classList?.add("sd-hidden")
         (document.getElementById("sd-cancel-reason-other-text") as? HTMLTextAreaElement)?.value = ""
         val session = appState.recordingSessions.find { it.id == sessionId }
@@ -3452,7 +3603,8 @@ private fun wireInstructorCancelReasonModalListeners(root: org.w3c.dom.Element) 
     document.getElementById("sd-instructor-cancel-reason-cancel")?.addEventListener("click", {
         document.getElementById("sd-cancel-reason-other-wrap")?.classList?.add("sd-hidden")
         (document.getElementById("sd-cancel-reason-other-text") as? HTMLTextAreaElement)?.value = ""
-        document.getElementById("sd-instructor-cancel-reason-modal")?.let { m -> m.classList.add("sd-hidden") }
+        cancelReasonModalSessionId = null
+        syncInstructorActionModalsVisibility()
     })
 }
 
@@ -3470,6 +3622,55 @@ private fun appendInstructorRunningLateModalIfNeeded(root: org.w3c.dom.Element) 
     val el = wrap.firstElementChild ?: return
     root.appendChild(el)
     wireInstructorRunningLateModalListeners()
+}
+
+/** Модалка оценки курсанту — вне #sd-card, чтобы радио не сбрасывались при каждом перерисовке графика. */
+private fun instructorRateCadetModalOverlayHtml(): String = """<div class="sd-modal-overlay sd-hidden" id="sd-instructor-rate-cadet-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вождение завершено, поставьте оценку курсанту:</h3><p id="sd-instructor-rate-cadet-name" class="sd-rate-cadet-name"></p><div class="sd-rate-options-instructor"><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="3" /> 3</label><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="4" /> 4</label><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="5" /> 5</label></div><p class="sd-modal-actions"><button type="button" id="sd-instructor-rate-cadet-confirm" class="sd-btn sd-btn-primary">Подтвердить</button></p></div></div>"""
+
+private fun appendInstructorRateCadetModalIfNeeded(root: org.w3c.dom.Element) {
+    if (appState.screen != AppScreen.Instructor || appState.user?.role != "instructor") {
+        document.getElementById("sd-instructor-rate-cadet-modal")?.remove()
+        return
+    }
+    if (document.getElementById("sd-instructor-rate-cadet-modal") != null) return
+    val wrap = document.createElement("div")
+    wrap.innerHTML = instructorRateCadetModalOverlayHtml()
+    val el = wrap.firstElementChild ?: return
+    root.appendChild(el)
+    wireInstructorRateCadetModalListeners()
+    // attachListeners вызывается до append* — иначе sync не находит узел при первом входе инструктора.
+    syncInstructorActionModalsVisibility()
+}
+
+private fun wireInstructorRateCadetModalListeners() {
+    document.getElementById("sd-instructor-rate-cadet-confirm")?.addEventListener("click", {
+        val usr = appState.user ?: return@addEventListener
+        if (usr.role != "instructor") return@addEventListener
+        val modal = document.getElementById("sd-instructor-rate-cadet-modal") ?: return@addEventListener
+        val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
+        val startMs = appState.recordingSessions.find { it.id == sessionId }?.startTimeMillis
+        val checked = document.querySelector("input[name=sd-instructor-rate]:checked") as? HTMLInputElement
+        val rating = checked?.value?.toIntOrNull() ?: return@addEventListener
+        if (rating !in 3..5) return@addEventListener
+        instructorRateCadetModalSessionId = null
+        instructorRateCadetModalCadetName = ""
+        syncInstructorActionModalsVisibility()
+        setInstructorRating(sessionId, rating) { err ->
+            if (err != null) updateState { networkError = err }
+            else {
+                showNotification("Оценка курсанту поставлена" + formatDayTimeShort(startMs))
+                getOpenWindowsForInstructor(usr.id) { wins ->
+                    getSessionsForInstructor(usr.id) { sess ->
+                        getBalanceHistory(usr.id) { hist ->
+                            updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
+                            getCurrentUser { newUser, _ -> if (newUser != null) updateState { user = newUser } }
+                            notifyNewBalanceOpsForCurrentUser(hist)
+                        }
+                    }
+                }
+            }
+        }
+    })
 }
 
 private fun wireInstructorRunningLateModalListeners() {
@@ -3495,7 +3696,8 @@ private fun wireInstructorRunningLateModalListeners() {
                     if (remaining.isEmpty()) {
                         getSessionsForInstructor(usr.id) { s -> updateState { recordingSessions = s } }
                         showNotification("Опаздываю: сдвиг на $delay мин." + formatDayTimeShort(originalStart))
-                        modal.classList.add("sd-hidden")
+                        runningLateModalSessionId = null
+                        syncInstructorActionModalsVisibility()
                         return
                     }
                     val sess = remaining.first()
@@ -3508,7 +3710,8 @@ private fun wireInstructorRunningLateModalListeners() {
         }
     })
     document.getElementById("sd-running-late-cancel")?.addEventListener("click", {
-        document.getElementById("sd-running-late-modal")?.let { m -> m.classList.add("sd-hidden") }
+        runningLateModalSessionId = null
+        syncInstructorActionModalsVisibility()
     })
 }
 
@@ -4288,7 +4491,6 @@ private fun instructorHomeProfileCardHtml(user: User, showProfileShortcut: Boole
     val card = """
         <div class="sd-profile-card">
             <div class="sd-profile-accent-bar"></div>
-            <div class="sd-profile-card-shimmer" aria-hidden="true"></div>
             <div class="sd-profile-hero">
                 $instrProfileAvatarHtml
                 <div class="sd-profile-hero-info">
@@ -4367,19 +4569,62 @@ private fun renderInstructorProfileStatsContent(user: User, version: String): St
         """<div class="sd-instr-rating-pie" style="background:$pieBg"></div><div class="sd-instr-rating-pie-center">$starSvgLarge<span class="sd-instr-rating-avg-overlay">$averageStr</span></div>"""
     } else """<p class="sd-muted sd-instr-no-ratings">Нет оценок</p>"""
     val completedForWeek = sessions.filter { it.status == "completed" }
-    val dayCountsCompleted = IntArray(7)
+    val dayCountsByWeekday = IntArray(7)
     completedForWeek.forEach { s ->
         val t = s.completedAtMillis ?: s.startTimeMillis ?: return@forEach
-        dayCountsCompleted[weekdayIndexMon0Local(t)]++
+        dayCountsByWeekday[weekdayIndexMon0Local(t)]++
     }
-    val weekBarsHtml = (0 until 7).joinToString("") { i ->
-        val cnt = dayCountsCompleted[i]
-        val h = if (cnt == 0) 4 else ((cnt.toFloat() / 8f * 90f).toInt().coerceIn(4, 90))
-        val barCls = if (cnt == 0) "sd-instr-bar sd-instr-bar-zero" else "sd-instr-bar"
-        val short = listOf("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")[i]
-        """<div class="sd-instr-bar-col"><div class="$barCls" style="height:${h}px"></div><span class="sd-instr-bar-day">$short</span><span class="sd-instr-bar-num">$cnt</span></div>"""
+    val maxDow = dayCountsByWeekday.maxOrNull()?.coerceAtLeast(1) ?: 1
+    val dowShort = listOf("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+    val weekFreqHtml = if (completedForWeek.isEmpty()) {
+        """<p class="sd-muted">Нет данных</p>"""
+    } else {
+        val vbW = 560
+        val vbH = 130
+        val paddingLeft = 20
+        val paddingRight = 10
+        val paddingTop = 12
+        val paddingBottom = 30
+        val plotW = vbW - paddingLeft - paddingRight
+        val plotH = vbH - paddingTop - paddingBottom
+        val maxD = maxDow.coerceAtLeast(1)
+
+        val polyPoints = (0 until 7).joinToString(" ") { i ->
+            val cnt = dayCountsByWeekday[i]
+            val x = paddingLeft + plotW * (i.toDouble() / 6.0)
+            val y = paddingTop + plotH * (1.0 - (cnt.toDouble() / maxD.toDouble()))
+            "${x.toInt()},${y.toInt()}"
+        }
+
+        val circlesHtml = (0 until 7).joinToString("") { i ->
+            val cnt = dayCountsByWeekday[i]
+            val x = paddingLeft + plotW * (i.toDouble() / 6.0)
+            val y = paddingTop + plotH * (1.0 - (cnt.toDouble() / maxD.toDouble()))
+            val fill = if (cnt == 0) "#ffffff" else "#1565C0"
+            val stroke = if (cnt == 0) "#1565C0" else "#1565C0"
+            val r = if (cnt == 0) 2 else 3
+            """<circle cx="${x.toInt()}" cy="${y.toInt()}" r="$r" fill="$fill" stroke="$stroke" stroke-width="2">
+                    <title>$cnt занятий</title>
+               </circle>"""
+        }
+
+        val xLabelsHtml = (0 until 7).joinToString("") { i ->
+            """<div class="sd-cadet-point-x-label" aria-hidden="true"><span>${dowShort[i]}</span><span class="sd-cadet-point-x-cnt">${
+                dayCountsByWeekday[i]
+            }</span></div>"""
+        }
+
+        """<div class="sd-cadet-dow-chart-wrap">
+            <div class="sd-cadet-dow-y-labels" aria-hidden="true"><span>$maxDow</span><span>0</span></div>
+            <div class="sd-cadet-point-chart">
+                <svg class="sd-cadet-point-svg" viewBox="0 0 $vbW $vbH" preserveAspectRatio="none" role="img" aria-label="Частота вождений по дням">
+                    <polyline points="$polyPoints" fill="none" stroke="#1565C0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
+                    $circlesHtml
+                </svg>
+                <div class="sd-cadet-point-x-labels">$xLabelsHtml</div>
+            </div>
+        </div>"""
     }
-    val avgWeek = if (completedForWeek.isNotEmpty()) completedForWeek.size / 7f else 0f
     val cancelled = sessions.filter { it.status == "cancelledByCadet" }
     val dayCountsCancel = IntArray(7)
     cancelled.forEach { s ->
@@ -4432,10 +4677,9 @@ private fun renderInstructorProfileStatsContent(user: User, version: String): St
             </div>
         </div>
         <div class="sd-instr-stat-card">
-            <h3 class="sd-instr-stat-heading">График завершённых вождений:</h3>
-            <p class="sd-muted sd-instr-chart-hint">Всего: ${completedForWeek.size} вождений (макс. 8 в день)</p>
-            <div class="sd-instr-bars">$weekBarsHtml</div>
-            <p class="sd-muted sd-instr-chart-avg">Среднее: ${formatFixed1(avgWeek.toDouble())} вождений в день</p>
+            <h3 class="sd-instr-stat-heading">Частота вождений в неделю:</h3>
+            <p class="sd-muted sd-instr-chart-hint">Вертикаль — число занятий, по горизонтали — день недели (все завершённые вождения).</p>
+            <div class="sd-cadet-week-chart sd-cadet-week-chart-dow">$weekFreqHtml</div>
         </div>
         <div class="sd-instr-stat-card">
             <h3 class="sd-instr-stat-heading">График отменённых вождений:</h3>
@@ -4561,9 +4805,10 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
                 val schCadet = cadets.find { it.id == s.cadetId }
                 val schAvatarHtml = avatarBlockHtml("sd-sch-avatar", schCadet, user.id, avatarLetter.ifBlank { "?" })
                 val showConfirm = bookedByCadet && !s.instructorConfirmed && s.status != "completed"
-                val showStart = s.status == "scheduled" && s.instructorConfirmed && !s.startRequestedByInstructor
+                val showStart = s.status == "scheduled" && s.instructorConfirmed
                 val nowMs = js("Date.now()").unsafeCast<Double>().toLong()
-                val startBtnDisabled = showStart && (nowMs < startMs - START_ALLOWED_MINUTES_BEFORE * 60 * 1000)
+                val startRequested = s.startRequestedByInstructor
+                val startBtnDisabled = showStart && (startRequested || (nowMs < startMs - START_ALLOWED_MINUTES_BEFORE * 60 * 1000))
                 val statusClass = when {
                     s.status == "completed" && s.instructorRating == 0 -> "sd-sch-status-waiting"
                     bookedByCadet && !s.instructorConfirmed -> "sd-sch-status-waiting"
@@ -4573,7 +4818,8 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
                     else -> "sd-sch-status-confirmed"
                 }
                 val confirmBtn = if (showConfirm) """<button type="button" class="sd-sch-btn sd-sch-confirm-btn sd-home-schedule-confirm" data-session-id="${s.id.escapeHtml()}">$iconSelectSvg Подтвердить</button>""" else ""
-                val startBtn = if (showStart) """<button type="button" class="sd-sch-btn sd-sch-start-btn sd-home-schedule-start${if (startBtnDisabled) " sd-sch-start-disabled" else ""}" data-session-id="${s.id.escapeHtml()}" data-start-ms="$startMs">$iconPlaySvg Начать</button>""" else ""
+                val startBtnLabel = if (startRequested) "Ожидание" else "Начать"
+                val startBtn = if (showStart) """<button type="button" class="sd-sch-btn sd-sch-start-btn sd-home-schedule-start${if (startBtnDisabled) " sd-sch-start-disabled" else ""}" data-session-id="${s.id.escapeHtml()}" data-start-ms="$startMs">$iconPlaySvg $startBtnLabel</button>""" else ""
                 val lateBtn = if (s.status == "scheduled") """<button type="button" class="sd-sch-btn sd-sch-late-btn sd-home-schedule-late" data-session-id="${s.id.escapeHtml()}"${if (lateDisabled) " disabled title=\"Задержка активна\"" else ""}>$iconLateSvg Опаздываю</button>""" else ""
                 val cadetNotConfirmedYet = !bookedByCadet && !s.instructorConfirmed
                 val cancelCadetUnconfirmedAttr = if (cadetNotConfirmedYet) """ data-home-cancel-needs-cadet-confirm="1"""" else ""
@@ -4620,14 +4866,13 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
     }
     val startEarlyModalHtml = """<div class="sd-modal-overlay sd-hidden" id="sd-start-early-modal"><div class="sd-modal"><h3 class="sd-modal-title">Начать вождение раньше?</h3><p id="sd-start-early-text" class="sd-start-early-text">Вы уверены начать вождение раньше? До вождения еще: <span id="sd-start-early-mins">0</span> минут.</p><p class="sd-modal-actions"><button type="button" id="sd-start-early-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-start-early-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>"""
     val completeEarlyModalHtml = """<div class="sd-modal-overlay sd-hidden" id="sd-complete-early-modal"><div class="sd-modal"><h3 class="sd-modal-title">Завершить вождение досрочно?</h3><p id="sd-complete-early-text"></p><p class="sd-modal-actions"><button type="button" id="sd-complete-early-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-complete-early-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>"""
-    val instructorRateCadetModalHtml = """<div class="sd-modal-overlay sd-hidden" id="sd-instructor-rate-cadet-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вождение завершено, поставьте оценку курсанту:</h3><p id="sd-instructor-rate-cadet-name" class="sd-rate-cadet-name"></p><div class="sd-rate-options-instructor"><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="3" /> 3</label><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="4" /> 4</label><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="5" /> 5</label></div><p class="sd-modal-actions"><button type="button" id="sd-instructor-rate-cadet-confirm" class="sd-btn sd-btn-primary">Подтвердить</button></p></div></div>"""
     val profileCard = instructorHomeProfileCardHtml(user, showProfileShortcut = true)
     val myCadetsOpen = if (appState.instructorMyCadetsSectionOpen) " open" else ""
     return """<h2>Главная</h2>
         $profileCard
-        <details class="sd-block sd-details-block" data-instructor-my-cadets$myCadetsOpen><summary class="sd-block-title">Мои курсанты (${cadets.size})</summary><div class="sd-cadet-cards">$cadetsListHtml</div></details>
+        <details class="sd-block sd-details-block" data-instructor-my-cadets$myCadetsOpen><summary class="sd-block-title">Мои курсанты (${cadets.size})</summary><div class="sd-cadet-cards sd-instructor-my-cadets-cards">$cadetsListHtml</div></details>
         $loadingLine
-        <div class="sd-block sd-block-schedule"><h3 class="sd-block-title">Мой график</h3><div class="sd-schedule-days">$scheduleSectionsHtml</div>$startEarlyModalHtml$completeEarlyModalHtml$instructorRateCadetModalHtml</div>
+        <div class="sd-block sd-block-schedule"><h3 class="sd-block-title">Мой график</h3><div class="sd-schedule-days">$scheduleSectionsHtml</div>$startEarlyModalHtml$completeEarlyModalHtml</div>
         <p class="sd-version">Версия: $version</p>"""
 }
 
@@ -4661,7 +4906,6 @@ private fun cadetHomeProfileCardHtml(user: User, showProfileShortcut: Boolean): 
     val card = """
         <div class="sd-profile-card">
             <div class="sd-profile-accent-bar"></div>
-            <div class="sd-profile-card-shimmer" aria-hidden="true"></div>
             <div class="sd-profile-hero">
                 $cadetProfileAvatarHtml
                 <div class="sd-profile-hero-info">
@@ -4705,69 +4949,51 @@ private fun renderCadetProfileStatsContent(user: User, version: String): String 
             <div class="sd-cadet-seg-row"><span class="sd-cadet-role-sq" style="background:#1565C0"></span><span>15–25 занятий (Профи)</span></div>
             <div class="sd-cadet-seg-row"><span class="sd-cadet-role-sq" style="background:#C62828"></span><span>25–30 занятий (Эксперт)</span></div>
         </div>"""
-    val instRated = sessions.filter { it.status == "completed" && it.instructorRating in 3..5 }
-    val ratingCounts = (3..5).map { r -> instRated.count { it.instructorRating == r } }
-    val maxRating = ratingCounts.maxOrNull()?.coerceAtLeast(1) ?: 1
-    val ratingBarsHtml = (3..5).mapIndexed { idx, r ->
-        val cnt = ratingCounts[idx]
-        val h = if (maxRating > 0) ((cnt.toFloat() / maxRating * 100f).toInt().coerceIn(4, 100)) else 4
-        """<div class="sd-cadet-inst-rating-col"><div class="sd-cadet-inst-rating-bar" style="height:${h}px"></div><span class="sd-cadet-inst-rating-num">$r</span><span class="sd-cadet-inst-rating-cnt">$cnt</span></div>"""
-    }.joinToString("")
-    val completedSessions = sessions.filter { it.status == "completed" }
-    val dayCountsByWeekday = IntArray(7)
-    completedSessions.forEach { s ->
-        val t = s.completedAtMillis ?: s.startTimeMillis ?: return@forEach
-        dayCountsByWeekday[weekdayIndexMon0Local(t)]++
-    }
-    val dowShort = listOf("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
-    val maxDow = dayCountsByWeekday.maxOrNull()?.coerceAtLeast(1) ?: 1
-    val weekFreqHtml = if (completedSessions.isEmpty()) {
-        """<p class="sd-muted">Нет завершённых вождений</p>"""
+    val ratedSessions = sessions
+        .filter { it.status == "completed" && it.instructorRating in 3..5 }
+        .sortedBy { it.completedAtMillis ?: it.startTimeMillis ?: 0L }
+        .takeLast(10)
+    val ratingLineHtml = if (ratedSessions.isEmpty()) {
+        """<p class="sd-muted">Нет оценок по завершённым вождениям</p>"""
     } else {
-        val vbW = 320
-        val vbH = 130
-        val paddingLeft = 20
-        val paddingRight = 10
-        val paddingTop = 12
-        val paddingBottom = 30
-        val plotW = vbW - paddingLeft - paddingRight
-        val plotH = vbH - paddingTop - paddingBottom
-        val maxD = maxDow.coerceAtLeast(1)
-
-        val polyPoints = (0 until 7).joinToString(" ") { i ->
-            val cnt = dayCountsByWeekday[i]
-            val x = paddingLeft + plotW * (i.toDouble() / 6.0)
-            val y = paddingTop + plotH * (1.0 - (cnt.toDouble() / maxD.toDouble()))
-            "${x.toInt()},${y.toInt()}"
+        val vbW = 560
+        val vbH = 190
+        val leftPad = 36
+        val rightPad = 12
+        val topPad = 12
+        val bottomPad = 54
+        val plotW = vbW - leftPad - rightPad
+        val plotH = vbH - topPad - bottomPad
+        fun yForRating(r: Int): Int {
+            val frac = ((r - 3).toDouble() / 2.0).coerceIn(0.0, 1.0)
+            return (topPad + plotH * (1.0 - frac)).toInt()
         }
-
-        val circlesHtml = (0 until 7).joinToString("") { i ->
-            val cnt = dayCountsByWeekday[i]
-            val x = paddingLeft + plotW * (i.toDouble() / 6.0)
-            val y = paddingTop + plotH * (1.0 - (cnt.toDouble() / maxD.toDouble()))
-            val fill = if (cnt == 0) "#ffffff" else "#1565C0"
-            val stroke = if (cnt == 0) "#1565C0" else "#1565C0"
-            val r = if (cnt == 0) 2 else 3
-            """<circle cx="${x.toInt()}" cy="${y.toInt()}" r="$r" fill="$fill" stroke="$stroke" stroke-width="2">
-                    <title>$cnt занятий</title>
-               </circle>"""
+        val points = ratedSessions.mapIndexed { idx, s ->
+            val x = if (ratedSessions.size <= 1) leftPad + plotW / 2.0 else leftPad + plotW * (idx.toDouble() / (ratedSessions.size - 1).toDouble())
+            val y = yForRating(s.instructorRating)
+            Triple(x.toInt(), y, s)
         }
-
-        val xLabelsHtml = (0 until 7).joinToString("") { i ->
-            """<div class="sd-cadet-point-x-label" aria-hidden="true"><span>${dowShort[i]}</span><span class="sd-cadet-point-x-cnt">${
-                dayCountsByWeekday[i]
-            }</span></div>"""
+        val polyPoints = points.joinToString(" ") { "${it.first},${it.second}" }
+        val pointDots = points.joinToString("") { (x, y, s) ->
+            val dt = formatDateOnly(s.completedAtMillis ?: s.startTimeMillis)
+            """<circle cx="$x" cy="$y" r="4" fill="#1565C0" stroke="#ffffff" stroke-width="2"><title>$dt: ${s.instructorRating}</title></circle>"""
         }
-
-        """<div class="sd-cadet-dow-chart-wrap">
-            <div class="sd-cadet-dow-y-labels" aria-hidden="true"><span>$maxDow</span><span>0</span></div>
-            <div class="sd-cadet-point-chart">
-                <svg class="sd-cadet-point-svg" viewBox="0 0 $vbW $vbH" preserveAspectRatio="none" role="img" aria-label="Частота вождений по дням">
-                    <polyline points="$polyPoints" fill="none" stroke="#1565C0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
-                    $circlesHtml
-                </svg>
-                <div class="sd-cadet-point-x-labels">$xLabelsHtml</div>
-            </div>
+        val yGrid = (3..5).joinToString("") { r ->
+            val y = yForRating(r)
+            """<line x1="$leftPad" y1="$y" x2="${leftPad + plotW}" y2="$y" stroke="rgba(21,101,192,0.20)" stroke-width="1"></line>
+               <text x="${leftPad - 8}" y="${y + 4}" text-anchor="end" font-size="12" fill="#607D8B">$r</text>"""
+        }
+        val xLabels = points.mapIndexed { idx, (x, _, _) ->
+            val leftPct = (x.toDouble() * 100.0 / vbW.toDouble())
+            """<div class="sd-cadet-rating-date" style="left:${formatFixed1(leftPct)}%">${(idx + 1).toString().escapeHtml()}</div>"""
+        }.joinToString("")
+        """<div class="sd-cadet-rating-line-wrap">
+            <svg class="sd-cadet-rating-line-svg" viewBox="0 0 $vbW $vbH" preserveAspectRatio="none" role="img" aria-label="Ваши оценки по датам">
+                $yGrid
+                <polyline points="$polyPoints" fill="none" stroke="#1565C0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
+                $pointDots
+            </svg>
+            <div class="sd-cadet-rating-dates">$xLabels</div>
         </div>"""
     }
     val cancelled = sessions.filter { it.status == "cancelledByCadet" }
@@ -4809,13 +5035,8 @@ private fun renderCadetProfileStatsContent(user: User, version: String): String 
         </div>
         <div class="sd-instr-stat-card">
             <h3 class="sd-instr-stat-heading">Ваши оценки:</h3>
-            <p class="sd-muted sd-instr-chart-hint">Оценки по завершённым вождениям (3–5).</p>
-            <div class="sd-cadet-inst-rating-chart sd-cadet-inst-rating-chart-3">$ratingBarsHtml</div>
-        </div>
-        <div class="sd-instr-stat-card">
-            <h3 class="sd-instr-stat-heading">Частота вождений в неделю:</h3>
-            <p class="sd-muted sd-instr-chart-hint">Вертикаль — число занятий, по горизонтали — день недели (все завершённые вождения).</p>
-            <div class="sd-cadet-week-chart sd-cadet-week-chart-dow">$weekFreqHtml</div>
+            <p class="sd-muted sd-instr-chart-hint">Вертикаль — оценка (3–5), горизонталь — порядковый номер вождения.</p>
+            <div class="sd-cadet-rating-line-chart">$ratingLineHtml</div>
         </div>
         <div class="sd-instr-stat-card">
             <h3 class="sd-instr-stat-heading">Отменённые курсантом вождения:</h3>
@@ -5020,6 +5241,7 @@ private fun renderInstructorRecordingDynamicPanelHtml(user: User): String {
     val loadingLine = if (loading) """<div class="sd-rec-loading">Загрузка… <button type="button" id="sd-stop-loading" class="sd-btn sd-btn-small sd-btn-secondary">Показать пусто</button></div>""" else ""
     val recCalendarIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>"""
     val recClockIco = """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>"""
+    val recWeekdayIco = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18"/><path d="M7 3v4"/><path d="M17 3v4"/><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 11h8"/><path d="M8 15h5"/></svg>"""
     val recCheckIco = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>"""
     val scheduledSessions = sessions.filter { it.status == "scheduled" || it.status == "inProgress" }.take(50)
     val freeWindows = windows.filter { it.status == "free" }
@@ -5034,6 +5256,7 @@ private fun renderInstructorRecordingDynamicPanelHtml(user: User): String {
             val recAvatarHtml = avatarBlockHtml("sd-rec-scard-avatar", recCadet, user.id, avatarLetter)
             val dateStr = formatDateOnly(s.startTimeMillis)
             val timeStr = formatTimeOnly(s.startTimeMillis)
+            val weekdayShort = weekdayNameShortRu(s.startTimeMillis)
             val bookedByCadet = s.openWindowId.isNotBlank()
             val statusText = when {
                 bookedByCadet && !s.instructorConfirmed -> "Ожидает вашего подтверждения ($cadetNameEsc)"
@@ -5052,7 +5275,7 @@ private fun renderInstructorRecordingDynamicPanelHtml(user: User): String {
                 <div class="sd-rec-scard-body">
                     <div class="sd-rec-scard-name">${cadetName.escapeHtml()}</div>
                     <div class="sd-rec-scard-dt">
-                        <span class="sd-rec-dt-pill">$recCalendarIco $dateStr</span>
+                        <span class="sd-rec-dt-pill">$recWeekdayIco $weekdayShort • $recCalendarIco $dateStr</span>
                         <span class="sd-rec-dt-pill">$recClockIco $timeStr</span>
                     </div>
                     <span class="sd-rec-scard-status $statusClass">$statusText</span>
@@ -5064,18 +5287,19 @@ private fun renderInstructorRecordingDynamicPanelHtml(user: User): String {
             </div>"""
         }
     }
-    val freeWindowsList = if (freeWindows.isEmpty()) {
+            val freeWindowsList = if (freeWindows.isEmpty()) {
         """<div class="sd-rec-empty"><div class="sd-rec-empty-ico">🕐</div><div>Нет свободных окон</div></div>"""
     } else {
         freeWindows.joinToString("") { w ->
             val dateStr = formatDateOnly(w.dateTimeMillis)
             val timeStr = formatTimeOnly(w.dateTimeMillis)
+            val weekdayShort = weekdayNameShortRu(w.dateTimeMillis)
             """<div class="sd-rec-window-card">
                 <div class="sd-rec-window-avatar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
                 <div class="sd-rec-scard-body">
                     <span class="sd-rec-window-status">Свободно</span>
                     <div class="sd-rec-scard-dt">
-                        <span class="sd-rec-dt-pill sd-rec-dt-pill-purple">$recCalendarIco $dateStr</span>
+                        <span class="sd-rec-dt-pill sd-rec-dt-pill-purple">$recWeekdayIco $weekdayShort • $recCalendarIco $dateStr</span>
                         <span class="sd-rec-dt-pill sd-rec-dt-pill-purple">$recClockIco $timeStr</span>
                     </div>
                 </div>
@@ -5110,7 +5334,7 @@ private fun renderInstructorRecordingDynamicPanelHtml(user: User): String {
                     </div>
                     <div class="sd-rec-windows">$freeWindowsList</div>
                 </div>
-            <div class="sd-modal-overlay sd-hidden" id="sd-instructor-rate-cadet-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вождение завершено, поставьте оценку курсанту:</h3><p id="sd-instructor-rate-cadet-name" class="sd-rate-cadet-name"></p><div class="sd-rate-options-instructor"><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="3" /> 3</label><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="4" /> 4</label><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="5" /> 5</label></div><p class="sd-modal-actions"><button type="button" id="sd-instructor-rate-cadet-confirm" class="sd-btn sd-btn-primary">Подтвердить</button></p></div></div><div class="sd-modal-overlay sd-hidden" id="sd-rec-delete-window-confirm-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вы уверены?</h3><p class="sd-modal-actions"><button type="button" id="sd-rec-delete-window-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-rec-delete-window-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>"""
+            <div class="sd-modal-overlay sd-hidden" id="sd-rec-delete-window-confirm-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вы уверены?</h3><p class="sd-modal-actions"><button type="button" id="sd-rec-delete-window-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-rec-delete-window-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>"""
 }
 
 /** Формы «Записать курсанта» / «Добавить окно» — стабильный DOM, не пересоздаётся при опросе сессий. */
@@ -5188,6 +5412,7 @@ private fun renderRecordingTabContent(user: User): String {
         }
         "cadet" -> {
             val myScheduled = sessions.filter { it.status == "scheduled" }.take(10)
+            val recWeekdayIco = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18"/><path d="M7 3v4"/><path d="M17 3v4"/><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 11h8"/><path d="M8 15h5"/></svg>"""
 
             val slotsHtml = if (windows.isEmpty()) {
                 """<div class="sd-rec-empty"><div class="sd-rec-empty-ico">🗓️</div><div>Нет свободных окон инструктора</div></div>"""
@@ -5195,12 +5420,13 @@ private fun renderRecordingTabContent(user: User): String {
                 windows.joinToString("") { w ->
                     val dateStr = formatDateOnly(w.dateTimeMillis)
                     val timeStr = formatTimeOnly(w.dateTimeMillis)
+                    val weekdayShort = weekdayNameShortRu(w.dateTimeMillis)
                     """<div class="sd-rec-slot-card">
                         <div class="sd-rec-slot-avatar" aria-hidden="true">$recClockIco</div>
                         <div class="sd-rec-slot-body">
                             <div class="sd-rec-slot-title">Свободное окно</div>
                             <div class="sd-rec-slot-dt">
-                                <span class="sd-rec-dt-pill sd-rec-slot-pill">$recCalendarIco $dateStr</span>
+                                <span class="sd-rec-dt-pill sd-rec-slot-pill">$recWeekdayIco $weekdayShort • $recCalendarIco $dateStr</span>
                                 <span class="sd-rec-dt-pill sd-rec-slot-pill">$recClockIco $timeStr</span>
                             </div>
                         </div>
@@ -5228,12 +5454,13 @@ private fun renderRecordingTabContent(user: User): String {
                     val cancelBtn = """<button type="button" class="sd-rec-cancel-btn sd-recording-cancel-session" data-session-id="${s.id.escapeHtml()}">Отменить</button>"""
                     val dateStr = formatDateOnly(s.startTimeMillis)
                     val timeStr = formatTimeOnly(s.startTimeMillis)
+                    val weekdayShort = weekdayNameShortRu(s.startTimeMillis)
                     """<div class="sd-rec-my-record">
                         <div class="sd-rec-my-record-avatar" aria-hidden="true">$recCarIco</div>
                         <div class="sd-rec-my-record-body">
                             <div class="sd-rec-my-record-title">Вождение</div>
                             <div class="sd-rec-my-dt">
-                                <span class="sd-rec-dt-pill">$recCalendarIco $dateStr</span>
+                                <span class="sd-rec-dt-pill">$recWeekdayIco $weekdayShort • $recCalendarIco $dateStr</span>
                                 <span class="sd-rec-dt-pill">$recClockIco $timeStr</span>
                             </div>
                             <span class="sd-rec-my-record-status $statusClass">$statusIco $statusText</span>
@@ -6940,16 +7167,18 @@ private fun renderPanel(user: User, roleTitle: String, tabs: List<String>): Stri
                 <h1>StartDrive · $roleTitle</h1>
                 <p>${formatShortName(user.fullName)} · ${user.email}</p>
             </div>
-            <button type="button" id="sd-btn-notifications" class="$notifBtnClass" title="Уведомления" aria-label="Уведомления">
-                <span class="sd-btn-notif-wrap">$notifWrapHtml</span>
-            </button>
-            <button type="button" id="sd-btn-signout" class="sd-btn sd-btn-signout" title="Выйти" aria-label="Выйти">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20" aria-hidden="true">
-                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-                    <polyline points="16 17 21 12 16 7"/>
-                    <line x1="21" y1="12" x2="9" y2="12"/>
-                </svg>
-            </button>
+            <div class="sd-header-actions">
+                <button type="button" id="sd-btn-notifications" class="$notifBtnClass" title="Уведомления" aria-label="Уведомления">
+                    <span class="sd-btn-notif-wrap">$notifWrapHtml</span>
+                </button>
+                <button type="button" id="sd-btn-signout" class="sd-btn sd-btn-signout" title="Выйти" aria-label="Выйти">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20" aria-hidden="true">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                        <polyline points="16 17 21 12 16 7"/>
+                        <line x1="21" y1="12" x2="9" y2="12"/>
+                    </svg>
+                </button>
+            </div>
         </header>
         <main class="sd-content">
             <div class="sd-card" id="sd-card">
@@ -6977,6 +7206,7 @@ private fun refreshPanelCardContent(root: org.w3c.dom.Element) {
     attachListeners(root)
     appendInstructorCancelReasonModalIfNeeded(root)
     appendInstructorRunningLateModalIfNeeded(root)
+    appendInstructorRateCadetModalIfNeeded(root)
     appendRecCancelSessionConfirmModalIfNeeded(root)
 }
 
@@ -6989,6 +7219,7 @@ private fun refreshTicketsCardContent(root: org.w3c.dom.Element) {
     attachListeners(root)
     appendInstructorCancelReasonModalIfNeeded(root)
     appendInstructorRunningLateModalIfNeeded(root)
+    appendInstructorRateCadetModalIfNeeded(root)
     appendRecCancelSessionConfirmModalIfNeeded(root)
 }
 
@@ -7073,16 +7304,18 @@ private fun forceFullPanelRender(root: org.w3c.dom.Element, useExamContent: Bool
                 <h1>StartDrive · $roleTitle</h1>
                 <p>${formatShortName(user.fullName)} · ${user.email}</p>
             </div>
-            <button type="button" id="sd-btn-notifications" class="$notifBtnClass" title="Уведомления" aria-label="Уведомления">
-                <span class="sd-btn-notif-wrap">$notifWrapHtml</span>
-            </button>
-            <button type="button" id="sd-btn-signout" class="sd-btn sd-btn-signout" title="Выйти" aria-label="Выйти">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20" aria-hidden="true">
-                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-                    <polyline points="16 17 21 12 16 7"/>
-                    <line x1="21" y1="12" x2="9" y2="12"/>
-                </svg>
-            </button>
+            <div class="sd-header-actions">
+                <button type="button" id="sd-btn-notifications" class="$notifBtnClass" title="Уведомления" aria-label="Уведомления">
+                    <span class="sd-btn-notif-wrap">$notifWrapHtml</span>
+                </button>
+                <button type="button" id="sd-btn-signout" class="sd-btn sd-btn-signout" title="Выйти" aria-label="Выйти">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20" aria-hidden="true">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                        <polyline points="16 17 21 12 16 7"/>
+                        <line x1="21" y1="12" x2="9" y2="12"/>
+                    </svg>
+                </button>
+            </div>
         </header>
         <main class="sd-content">
             <div class="sd-card" id="sd-card">
@@ -7107,6 +7340,7 @@ private fun forceFullPanelRender(root: org.w3c.dom.Element, useExamContent: Bool
     reattachInstructorProfileEarnedCalcMount(root)
     appendInstructorCancelReasonModalIfNeeded(root)
     appendInstructorRunningLateModalIfNeeded(root)
+    appendInstructorRateCadetModalIfNeeded(root)
     appendRecCancelSessionConfirmModalIfNeeded(root)
     root.querySelector("#sd-card")?.unsafeCast<dynamic>()?.scrollIntoView(js("({ block: 'start', behavior: 'auto' })"))
 }
@@ -7281,10 +7515,8 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                     (e as? org.w3c.dom.events.Event)?.preventDefault()
                     (e as? org.w3c.dom.events.Event)?.stopPropagation()
                     val wid = delWindowBtn.getAttribute("data-window-id") ?: return@addEventListener
-                    document.getElementById("sd-rec-delete-window-confirm-modal")?.let { modal ->
-                        modal.asDynamic().dataset["windowId"] = wid
-                        modal.classList.remove("sd-hidden")
-                    }
+                    recDeleteWindowModalWindowId = wid
+                    syncInstructorActionModalsVisibility()
                     return@addEventListener
                 }
             }
@@ -8293,6 +8525,19 @@ private fun installGlobalModalEscapeListenerOnce() {
 
 private fun attachListeners(root: org.w3c.dom.Element) {
     installGlobalModalEscapeListenerOnce()
+    syncStartEarlyModalVisibility()
+    // Авто-открытие модалки оценки: задаём sessionId до sync, чтобы не скрывать окно и не дублировать setTimeout с reset радио.
+    if (appState.user?.role == "instructor" && appState.instructorHomeSubView == "main") {
+        val need = appState.recordingSessions.filter { it.status == "completed" && it.instructorRating == 0 }
+        if (need.isNotEmpty() && instructorRateCadetModalSessionId.isNullOrBlank()) {
+            val first = need.first()
+            val cadetName = appState.instructorCadets.find { it.id == first.cadetId }?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "Курсант"
+            instructorRateCadetModalSessionId = first.id
+            instructorRateCadetModalCadetName = cadetName
+            instructorRateModalRadioInitSessionId = null
+        }
+    }
+    syncInstructorActionModalsVisibility()
     ensureInstructorProfileEarnedCalcDelegation()
     setupInstructorRecordingSubmitButtonsDelegationOnce()
     // Один раз: черновик формы «Запись» у инструктора (курсант + даты) — иначе при каждом attachListeners дублировались change
@@ -8930,16 +9175,19 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                             val u = appState.user ?: return@setInterval
                             if (u.role != "instructor") return@setInterval
                             if (appState.selectedTabIndex != 0 && appState.selectedTabIndex != 1) return@setInterval
-                            if (appState.instructorHomeSubView == "profile" && appState.selectedTabIndex == 0) return@setInterval
+                            // Не пропускать опрос на подэкране «Профиль»: иначе recordingSessions не обновляется,
+                            // и при возврате на главную таймер inProgress не появляется до следующего цикла/действия.
+                            if (isModalOpenById("sd-start-early-modal")) return@setInterval
                             getOpenWindowsForInstructor(u.id) { wins ->
                                 getSessionsForInstructor(u.id) { sess ->
+                                    if (isModalOpenById("sd-start-early-modal")) return@getSessionsForInstructor
                                     val newSig = recordingPollSignature(wins, sess)
                                     val oldSig = recordingPollSignature(appState.recordingOpenWindows, appState.recordingSessions)
                                     if (newSig == oldSig) return@getSessionsForInstructor
                                     updateState { recordingOpenWindows = wins; recordingSessions = sess }
                                 }
                             }
-                        }, 15000).unsafeCast<Int>()
+                        }, 5000).unsafeCast<Int>()
                     }
                     if (appState.instructorCadets.isEmpty()) {
                         getCurrentUser { freshUser, _ ->
@@ -8991,7 +9239,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                                     }
                                 }
                             }
-                        }, 15000).unsafeCast<Int>()
+                        }, 5000).unsafeCast<Int>()
                     }
                 }
                 usr.role == "instructor" && appState.selectedTabIndex == 4 -> {
@@ -9129,22 +9377,6 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     }
                 }
             if (usr.role == "instructor") {
-                val needInstructorRating = appState.recordingSessions.filter { it.status == "completed" && it.instructorRating == 0 }
-                if (appState.instructorHomeSubView == "main" && needInstructorRating.isNotEmpty()) {
-                    val first = needInstructorRating.first()
-                    val cadetName = appState.instructorCadets.find { it.id == first.cadetId }?.fullName?.takeIf { it.isNotBlank() }?.let { formatShortName(it) } ?: "Курсант"
-                    window.setTimeout({
-                        document.getElementById("sd-instructor-rate-cadet-modal")?.let { modal ->
-                            modal.asDynamic().dataset["sessionId"] = first.id
-                            modal.classList.remove("sd-hidden")
-                        }
-                        document.getElementById("sd-instructor-rate-cadet-name")?.textContent = cadetName
-                        val rateInputs = root.querySelectorAll("input[name=sd-instructor-rate]")
-                        for (j in 0 until rateInputs.length) {
-                            (rateInputs.item(j) as? HTMLInputElement)?.checked = (j == 0)
-                        }
-                    }, 0)
-                }
                 document.getElementById("sd-instructor-profile-open")?.addEventListener("click", {
                     val uid = usr.id
                     resetInstructorProfileCalculatorCache()
@@ -9159,6 +9391,12 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 document.getElementById("sd-instructor-profile-back")?.addEventListener("click", {
                     resetInstructorProfileCalculatorCache()
                     updateState { instructorHomeSubView = "main" }
+                    // Сразу подтянуть сессии (курсант мог нажать «Начать», пока открыт профиль).
+                    getOpenWindowsForInstructor(usr.id) { wins ->
+                        getSessionsForInstructor(usr.id) { sess ->
+                            updateState { recordingOpenWindows = wins; recordingSessions = sess }
+                        }
+                    }
                 })
                 val homeConfirmNodes = root.querySelectorAll(".sd-home-schedule-confirm")
                 for (k in 0 until homeConfirmNodes.length) {
@@ -9190,11 +9428,9 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                         }
                         if (now < startMs) {
                             val minutesLeft = ((startMs - now) / 60000L).toInt().coerceAtLeast(1)
-                            document.getElementById("sd-start-early-modal")?.let { modal ->
-                                modal.asDynamic().dataset["sessionId"] = sessionId
-                                document.getElementById("sd-start-early-mins")?.textContent = minutesLeft.toString()
-                                modal.classList.remove("sd-hidden")
-                            }
+                            startEarlyModalSessionId = sessionId
+                            startEarlyModalMinutesLeft = minutesLeft
+                            syncStartEarlyModalVisibility()
                             return@addEventListener
                         }
                         requestStartByInstructor(sessionId) { err ->
@@ -9206,24 +9442,27 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 document.getElementById("sd-start-early-yes")?.addEventListener("click", {
                     val modal = document.getElementById("sd-start-early-modal") ?: return@addEventListener
                     val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
-                    modal.classList.add("sd-hidden")
+                    startEarlyModalSessionId = null
+                    startEarlyModalMinutesLeft = 0
+                    syncStartEarlyModalVisibility()
                     requestStartByInstructor(sessionId) { err ->
                         if (err != null) updateState { networkError = err }
                         else getSessionsForInstructor(usr.id) { sess -> updateState { recordingSessions = sess } }
                     }
                 })
                 document.getElementById("sd-start-early-no")?.addEventListener("click", {
-                    document.getElementById("sd-start-early-modal")?.classList?.add("sd-hidden")
+                    startEarlyModalSessionId = null
+                    startEarlyModalMinutesLeft = 0
+                    syncStartEarlyModalVisibility()
                 })
                 val homeLateNodes = root.querySelectorAll(".sd-home-schedule-late")
                 for (k in 0 until homeLateNodes.length) {
                     val btn = homeLateNodes.item(k) as? org.w3c.dom.Element ?: continue
                     val sessionId = btn.getAttribute("data-session-id") ?: continue
                     btn.addEventListener("click", {
-                        val modal = document.getElementById("sd-running-late-modal") ?: return@addEventListener
-                        modal.asDynamic().dataset["sessionId"] = sessionId
+                        runningLateModalSessionId = sessionId
                         (document.querySelector("input[name=\"sd-late-mins\"][value=\"5\"]")?.asDynamic())?.checked = true
-                        modal.classList.remove("sd-hidden")
+                        syncInstructorActionModalsVisibility()
                     })
                 }
                 val homeCancelNodes = root.querySelectorAll(".sd-home-schedule-cancel")
@@ -9232,10 +9471,8 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     val sessionId = btn.getAttribute("data-session-id") ?: continue
                     btn.addEventListener("click", {
                         if (btn.getAttribute("data-home-cancel-needs-cadet-confirm") == "1") {
-                            document.getElementById("sd-home-cancel-unconfirmed-modal")?.let { m ->
-                                m.asDynamic().dataset["sessionId"] = sessionId
-                                m.classList.remove("sd-hidden")
-                            }
+                            homeCancelUnconfirmedModalSessionId = sessionId
+                            syncInstructorActionModalsVisibility()
                             return@addEventListener
                         }
                         document.getElementById("sd-instructor-cancel-reason-modal")?.let { modal ->
@@ -9244,7 +9481,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                             val now = js("Date.now()").unsafeCast<Double>().toLong()
                             val timeReached = session?.startTimeMillis == null || now >= (session.startTimeMillis ?: 0L)
                             val allowCadetNoShow = cadetConfirmed && timeReached
-                            modal.asDynamic().dataset["sessionId"] = sessionId
+                            cancelReasonModalSessionId = sessionId
                             document.getElementById("sd-cancel-reason-other-wrap")?.classList?.add("sd-hidden")
                             (document.getElementById("sd-cancel-reason-other-text") as? HTMLTextAreaElement)?.value = ""
                             document.querySelectorAll("input[name=sd-cancel-reason]").let { radios ->
@@ -9255,7 +9492,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                                     radio.checked = (allowCadetNoShow && isCadetNoShow) || (!allowCadetNoShow && radio.value == "ТС на ремонте")
                                 }
                             }
-                            modal.classList.remove("sd-hidden")
+                            syncInstructorActionModalsVisibility()
                         }
                     })
                 }
@@ -9263,7 +9500,8 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     val modal = document.getElementById("sd-rec-delete-window-confirm-modal") ?: return@addEventListener
                     val wid = modal.asDynamic().dataset["windowId"] as? String ?: return@addEventListener
                     val windowMs = appState.recordingOpenWindows.find { it.id == wid }?.dateTimeMillis
-                    modal.classList.add("sd-hidden")
+                    recDeleteWindowModalWindowId = null
+                    syncInstructorActionModalsVisibility()
                     deleteOpenWindow(wid) { err ->
                         if (err != null) updateState { networkError = err }
                         else {
@@ -9275,7 +9513,8 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     }
                 })
                 document.getElementById("sd-rec-delete-window-no")?.addEventListener("click", {
-                    document.getElementById("sd-rec-delete-window-confirm-modal")?.classList?.add("sd-hidden")
+                    recDeleteWindowModalWindowId = null
+                    syncInstructorActionModalsVisibility()
                 })
                 val timerPauseNodes = root.querySelectorAll(".sd-sch-timer-actions .sd-sch-pause")
                 for (kp in 0 until timerPauseNodes.length) {
@@ -9309,18 +9548,18 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                         val now = js("Date.now()").unsafeCast<Double>().toLong()
                         val remainingMs = (endMs - now).coerceAtLeast(0L)
                         val remainingMin = (remainingMs / 60000L).toInt()
-                        val modal = document.getElementById("sd-complete-early-modal") ?: return@addEventListener
-                        val textEl = document.getElementById("sd-complete-early-text")
-                        textEl?.textContent = "Еще осталось: $remainingMin мин.!"
-                        modal.asDynamic().dataset["sessionId"] = sessionId
-                        modal.classList.remove("sd-hidden")
+                        completeEarlyModalSessionId = sessionId
+                        completeEarlyModalText = "Еще осталось: $remainingMin мин.!"
+                        syncInstructorActionModalsVisibility()
                     })
                 }
                 document.getElementById("sd-complete-early-yes")?.addEventListener("click", {
                     val modal = document.getElementById("sd-complete-early-modal") ?: return@addEventListener
                     val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
                     val startMs = appState.recordingSessions.find { it.id == sessionId }?.startTimeMillis
-                    modal.classList.add("sd-hidden")
+                    completeEarlyModalSessionId = null
+                    completeEarlyModalText = ""
+                    syncInstructorActionModalsVisibility()
                     completeDrivingSession(sessionId) { err ->
                         if (err != null) updateState { networkError = err }
                         else {
@@ -9338,7 +9577,9 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     }
                 })
                 document.getElementById("sd-complete-early-no")?.addEventListener("click", {
-                    document.getElementById("sd-complete-early-modal")?.classList?.add("sd-hidden")
+                    completeEarlyModalSessionId = null
+                    completeEarlyModalText = ""
+                    syncInstructorActionModalsVisibility()
                 })
                 val rateCadetBtns = root.querySelectorAll(".sd-instructor-rate-cadet-btn")
                 for (ri in 0 until rateCadetBtns.length) {
@@ -9346,41 +9587,12 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     btn.addEventListener("click", {
                         val sessionId = btn.getAttribute("data-session-id") ?: return@addEventListener
                         val cadetName = btn.getAttribute("data-cadet-name") ?: "Курсант"
-                        document.getElementById("sd-instructor-rate-cadet-modal")?.let { modal ->
-                            modal.asDynamic().dataset["sessionId"] = sessionId
-                            modal.classList.remove("sd-hidden")
-                        }
-                        document.getElementById("sd-instructor-rate-cadet-name")?.textContent = cadetName
-                        val rateInputs = root.querySelectorAll("input[name=sd-instructor-rate]")
-                        for (j in 0 until rateInputs.length) {
-                            (rateInputs.item(j) as? HTMLInputElement)?.checked = false
-                        }
+                        instructorRateModalRadioInitSessionId = null
+                        instructorRateCadetModalSessionId = sessionId
+                        instructorRateCadetModalCadetName = cadetName
+                        syncInstructorActionModalsVisibility()
                     })
                 }
-                document.getElementById("sd-instructor-rate-cadet-confirm")?.addEventListener("click", {
-                    val modal = document.getElementById("sd-instructor-rate-cadet-modal") ?: return@addEventListener
-                    val sessionId = modal.asDynamic().dataset["sessionId"] as? String ?: return@addEventListener
-                    val startMs = appState.recordingSessions.find { it.id == sessionId }?.startTimeMillis
-                    val checked = root.querySelector("input[name=sd-instructor-rate]:checked") as? HTMLInputElement
-                    val rating = checked?.value?.toIntOrNull() ?: return@addEventListener
-                    if (rating !in 3..5) return@addEventListener
-                    modal.classList.add("sd-hidden")
-                    setInstructorRating(sessionId, rating) { err ->
-                        if (err != null) updateState { networkError = err }
-                        else {
-                            showNotification("Оценка курсанту поставлена" + formatDayTimeShort(startMs))
-                            getOpenWindowsForInstructor(usr.id) { wins ->
-                                getSessionsForInstructor(usr.id) { sess ->
-                                    getBalanceHistory(usr.id) { hist ->
-                                        updateState { recordingOpenWindows = wins; recordingSessions = sess; historySessions = sess; historyBalance = hist }
-                                        getCurrentUser { newUser, _ -> if (newUser != null) updateState { user = newUser } }
-                                        notifyNewBalanceOpsForCurrentUser(hist)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                })
                 startDrivingTimers()
             }
             document.getElementById("sd-chat-back")?.addEventListener("click", {
@@ -9579,6 +9791,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 val btn = cadetConfirmStartNodes.item(k) as? org.w3c.dom.Element ?: continue
                 val sessionId = btn.getAttribute("data-session-id") ?: continue
                 btn.addEventListener("click", {
+                    playCadetDrivingStartGreetingSound()
                     val startMs = appState.recordingSessions.find { it.id == sessionId }?.startTimeMillis
                     startSession(sessionId) { err ->
                         if (err != null) updateState { networkError = err }

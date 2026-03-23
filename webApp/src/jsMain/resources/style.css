@@ -45,6 +45,72 @@ html {
     }
 }
 
+/* Стартовая анимированная загрузка (до инициализации приложения) */
+.sd-boot-loader {
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: radial-gradient(120% 120% at 50% 15%, #f1f7ff 0%, #e7f1ff 45%, #dce9ff 100%);
+    font-family: 'Inter', sans-serif;
+}
+.sd-boot-loader-mark {
+    position: relative;
+    width: 72px;
+    height: 72px;
+}
+.sd-boot-loader-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 4px solid rgba(21, 101, 192, 0.18);
+    border-top-color: #1565C0;
+    animation: sd-boot-spin 1s linear infinite;
+}
+.sd-boot-loader-core {
+    position: absolute;
+    inset: 18px;
+    border-radius: 50%;
+    background: linear-gradient(180deg, #60A5FA 0%, #1976D2 100%);
+    box-shadow: 0 0 0 4px rgba(25, 118, 210, 0.14);
+    animation: sd-boot-pulse 1.3s ease-in-out infinite;
+}
+.sd-boot-loader-text {
+    font-size: 1.12rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    color: #0d47a1;
+}
+.sd-boot-loader-dots {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+}
+.sd-boot-loader-dots span {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #1565C0;
+    opacity: 0.28;
+    animation: sd-boot-dot 1s ease-in-out infinite;
+}
+.sd-boot-loader-dots span:nth-child(2) { animation-delay: 0.15s; }
+.sd-boot-loader-dots span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes sd-boot-spin {
+    to { transform: rotate(360deg); }
+}
+@keyframes sd-boot-pulse {
+    0%, 100% { transform: scale(0.92); }
+    50% { transform: scale(1); }
+}
+@keyframes sd-boot-dot {
+    0%, 100% { opacity: 0.28; transform: translateY(0); }
+    50% { opacity: 1; transform: translateY(-2px); }
+}
+
 .sd-hidden { display: none !important; }
 
 /* Все кнопки и кликабельные элементы — с первого нажатия, без задержки на тач-устройствах */
@@ -135,6 +201,19 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-shrink: 0;
+    min-width: fit-content;
+}
+
+/* На узких экранах оставляем место блоку действий (уведомления + выход). */
+@media (max-width: 640px) {
+    .sd-header-text {
+        flex: 1 1 auto;
+        max-width: calc(100% - 92px);
+    }
+    .sd-header-actions {
+        gap: 6px;
+    }
 }
 .sd-notif-dropdown-wrap {
     position: relative;
@@ -396,52 +475,98 @@ body {
         padding: 8px 10px;
     }
 }
+/* Перелив: полоса-блик на ::before, движение через transform (без background-position) */
 .sd-profile-card {
     margin: 0 0 20px 0;
     position: relative;
     border-radius: 16px;
     overflow: hidden;
-    background: linear-gradient(145deg, #1e3a6e 0%, #2a5298 55%, #3468b2 100%);
     border: 1px solid rgba(255,255,255,0.18);
     box-shadow: 0 8px 28px rgba(20,50,110,0.30), 0 2px 8px rgba(20,50,110,0.18);
+    background-color: #2a5298;
+    background-image: linear-gradient(145deg, #1e3a6e 0%, #2a5298 55%, #3468b2 100%);
+    background-size: 100% 100%;
+}
+/* Контент над бликом (полоска — выше остальных блоков) */
+.sd-profile-card > * {
+    position: relative;
+    z-index: 2;
+}
+.sd-profile-card > .sd-profile-accent-bar {
+    z-index: 3;
+}
+/* Синяя карточка профиля: блик без «залипания» у левого края (overflow+radius+ease-in-out давали мигание) */
+.sd-profile-card::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 52%;
+    min-width: 170px;
+    height: 100%;
+    /* radius только у родителя — меньше артефактов клипа у скругления */
+    z-index: 1;
+    pointer-events: none;
+    background: linear-gradient(
+        100deg,
+        rgba(255, 255, 255, 0) 0%,
+        rgba(255, 255, 255, 0) 12%,
+        rgba(255, 255, 255, 0.22) 30%,
+        rgba(255, 255, 255, 0.68) 50%,
+        rgba(255, 255, 255, 0.22) 70%,
+        rgba(255, 255, 255, 0) 88%,
+        rgba(255, 255, 255, 0) 100%
+    );
+    transform: translate3d(-115%, 0, 0);
+    backface-visibility: hidden;
+    /* linear: нет долгой паузы у края; ключи чуть за экран — нет дрожания у clip */
+    animation: sd-profile-card-shine-x 14s linear infinite alternate;
+}
+/* Зелёные карточки курсантов — прежняя интенсивность (на зелёном и так хорошо читается) */
+.sd-cadet-card::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 48%;
+    min-width: 160px;
+    height: 100%;
+    border-radius: inherit;
+    z-index: 1;
+    pointer-events: none;
+    background: linear-gradient(
+        100deg,
+        rgba(255, 255, 255, 0) 0%,
+        rgba(255, 255, 255, 0.1) 32%,
+        rgba(255, 255, 255, 0.52) 50%,
+        rgba(255, 255, 255, 0.1) 68%,
+        rgba(255, 255, 255, 0) 100%
+    );
+    transform: translate3d(-115%, 0, 0);
+    backface-visibility: hidden;
+    animation: sd-profile-card-shine-x 14s linear infinite alternate;
+}
+@media (prefers-reduced-motion: reduce) {
+    .sd-profile-card::before,
+    .sd-cadet-card::before {
+        display: none;
+    }
+}
+@keyframes sd-profile-card-shine-x {
+    /* % от ширины полосы; -115% / 275% — полоса полностью за пределами клипа, без мигания у левого края */
+    0% {
+        transform: translate3d(-115%, 0, 0);
+    }
+    100% {
+        transform: translate3d(275%, 0, 0);
+    }
 }
 .sd-profile-accent-bar {
+    position: relative;
     height: 4px;
     flex-shrink: 0;
     background: linear-gradient(90deg, #3b82f6 0%, #60a5fa 50%, #38bdf8 100%);
     box-shadow: 0 0 12px rgba(59,130,246,0.6);
-}
-/* Эффект переливания */
-.sd-profile-card-shimmer {
-    position: absolute;
-    inset: 0;
-    z-index: 1;
-    pointer-events: none;
-    overflow: hidden;
-    mix-blend-mode: screen;
-}
-.sd-profile-card-shimmer::after {
-    content: "";
-    position: absolute;
-    top: -50%;
-    left: -50%;
-    width: 55%;
-    height: 200%;
-    background: linear-gradient(
-        105deg,
-        transparent 0%,
-        transparent 35%,
-        rgba(255,255,255,0.05) 43%,
-        rgba(255,255,255,0.13) 50%,
-        rgba(255,255,255,0.05) 57%,
-        transparent 65%,
-        transparent 100%
-    );
-    animation: sd-shimmer 3s ease-in-out infinite;
-}
-@keyframes sd-shimmer {
-    0% { transform: translateX(0); }
-    100% { transform: translateX(200%); }
 }
 /* Верхняя секция: аватар + имя + роль */
 .sd-profile-hero {
@@ -614,15 +739,28 @@ body {
     padding: 10px 14px 14px;
 }
 
-/* ── Карточка курсанта (изумрудный стиль) ── */
+/* ── Карточка курсанта (изумрудный стиль); блик см. .sd-profile-card::before + .sd-cadet-card::before выше ── */
 .sd-cadet-card {
-    background: linear-gradient(145deg, #0f5c4a 0%, #1a8266 50%, #22a87e 100%);
+    position: relative;
+    background-color: #1a8266;
+    background-image: linear-gradient(145deg, #0f5c4a 0%, #1a8266 50%, #22a87e 100%);
+    background-size: 100% 100%;
     border-radius: 16px;
     overflow: hidden;
     display: flex;
     flex-direction: column;
     border: 1px solid rgba(255,255,255,0.15);
     box-shadow: 0 6px 24px rgba(5,70,50,0.30), 0 2px 8px rgba(5,70,50,0.18);
+}
+/* Инструктор, блок «Мои курсанты» — без анимированного блика */
+.sd-instructor-my-cadets-cards .sd-cadet-card::before {
+    display: none;
+}
+
+/* Контент поверх блика */
+.sd-cadet-card > * {
+    position: relative;
+    z-index: 2;
 }
 
 /* Цветная полоска сверху */
@@ -879,6 +1017,27 @@ a.sd-cadet-icon-btn:active {
 }
 .sd-instructor-profile-toolbar {
     margin: 0 0 8px 0;
+}
+.sd-instructor-profile-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(21, 101, 192, 0.28);
+    background: linear-gradient(180deg, #f8fbff 0%, #eaf3ff 100%);
+    color: #1565C0;
+    font-weight: 700;
+    box-shadow: 0 1px 3px rgba(21, 101, 192, 0.16);
+    transition: background-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, transform 0.1s ease;
+}
+.sd-instructor-profile-back:hover {
+    background: linear-gradient(180deg, #eef6ff 0%, #dfeeff 100%);
+    color: #0d47a1;
+    box-shadow: 0 2px 6px rgba(21, 101, 192, 0.2);
+}
+.sd-instructor-profile-back:active {
+    transform: translateY(1px);
 }
 .sd-instructor-profile-title {
     margin: 0 0 16px 0;
@@ -1351,6 +1510,97 @@ a.sd-cadet-icon-btn:active {
 }
 .sd-cadet-week-chart-dow {
     width: 100%;
+}
+.sd-cadet-rating-line-chart {
+    width: 100%;
+}
+.sd-cadet-rating-line-wrap {
+    position: relative;
+    width: 100%;
+}
+.sd-cadet-rating-line-svg {
+    width: 100%;
+    height: 190px;
+    display: block;
+}
+.sd-cadet-rating-dates {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 6px;
+    height: 24px;
+    pointer-events: none;
+}
+.sd-cadet-rating-date {
+    position: absolute;
+    transform: translateX(-50%);
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--sd-text-secondary);
+    white-space: nowrap;
+}
+.sd-cadet-binary-chart {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+}
+.sd-cadet-binary-axis {
+    display: grid;
+    grid-template-columns: 54px 1fr 34px;
+    gap: 8px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--sd-text-secondary);
+}
+.sd-cadet-binary-axis span:nth-child(2) {
+    text-align: center;
+}
+.sd-cadet-binary-row {
+    display: grid;
+    grid-template-columns: 54px 1fr 34px;
+    gap: 8px;
+    align-items: center;
+}
+.sd-cadet-binary-day {
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: var(--sd-text-secondary);
+}
+.sd-cadet-binary-track {
+    position: relative;
+    height: 28px;
+    border-radius: 8px;
+    background: linear-gradient(90deg, rgba(198,40,40,0.12) 0 50%, rgba(21,101,192,0.12) 50% 100%);
+    border: 1px solid rgba(0,0,0,0.08);
+    overflow: hidden;
+}
+.sd-cadet-binary-state {
+    position: absolute;
+    top: 3px;
+    height: 20px;
+    min-width: 46%;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: #fff;
+}
+.sd-cadet-binary-state-no {
+    left: 4px;
+    background: linear-gradient(180deg, #ef9a9a 0%, #c62828 100%);
+}
+.sd-cadet-binary-state-yes {
+    right: 4px;
+    background: linear-gradient(180deg, #42a5f5 0%, #1565c0 100%);
+}
+.sd-cadet-binary-count {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #1565C0;
+    text-align: right;
 }
 .sd-cadet-week-chart {
     display: flex;
@@ -4987,6 +5237,18 @@ a.sd-cadet-icon-btn:active {
     touch-action: manipulation;
 }
 
+/* Явно фиксируем отображение иконки выхода (на некоторых мобильных SVG мог не проявляться). */
+.sd-btn-signout svg {
+    display: block;
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    color: #ffffff;
+    stroke: currentColor;
+    stroke-width: 2.4;
+    opacity: 1;
+}
+
 .sd-btn-signout:hover {
     background: rgba(220,50,50,0.45);
     border-color: rgba(255,120,120,0.6);
@@ -7446,22 +7708,14 @@ a.sd-cadet-icon-btn:active {
 @media (max-width: 640px) {
     .sd-tabs {
         flex-wrap: nowrap;
-        justify-content: flex-start;
-        overflow-x: auto;
-        overflow-y: hidden;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: none;
-        overscroll-behavior-x: contain;
+        justify-content: stretch;
+        overflow: hidden;
         gap: 0;
     }
-    .sd-tabs::-webkit-scrollbar {
-        display: none;
-        height: 0;
-    }
     .sd-tab {
-        flex: 0 0 auto;
-        min-width: 58px;
-        max-width: 92px;
+        flex: 1 1 0;
+        min-width: 0;
+        max-width: none;
         padding: 8px 10px 7px;
         font-size: 0.62rem;
         line-height: 1.15;
@@ -7602,8 +7856,8 @@ a.sd-cadet-icon-btn:active {
         border-radius: 10px;
     }
     .sd-tab {
-        min-width: 54px;
-        max-width: 86px;
+        min-width: 0;
+        max-width: none;
         padding: 7px 8px 6px;
         font-size: 0.58rem;
     }
@@ -7632,3 +7886,4 @@ a.sd-cadet-icon-btn:active {
         padding-bottom: max(2px, env(safe-area-inset-bottom, 0px));
     }
 }
+

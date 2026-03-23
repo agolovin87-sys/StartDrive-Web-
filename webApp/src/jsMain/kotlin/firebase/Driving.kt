@@ -49,11 +49,21 @@ private fun parseTimestamp(ts: dynamic): Long? {
         ?: (ts as? Number)?.toLong()
 }
 
+/** startTime внутри session может быть числом (Date.now) или Timestamp из Firestore. */
+private fun sessionNestedStartMs(sessionObj: dynamic): Long? {
+    if (sessionObj == null || sessionObj == undefined) return null
+    val raw = sessionObj.startTime
+    if (raw == null || raw == undefined) return null
+    val n = raw as? Number
+    if (n != null) return n.toLong()
+    return parseTimestamp(raw)
+}
+
 private fun drivingSessionFromDoc(doc: dynamic): DrivingSession {
     val d = (doc.unsafeCast<dynamic>()).data()
     val startTime = d?.startTime
     val sessionObj = d?.session
-    val sessionStartMs = (sessionObj?.startTime as? Number)?.toLong()
+    val sessionStartMs = sessionNestedStartMs(sessionObj)
     val sessActive = sessionObj?.isActive
     val sessPausedAt = sessionObj?.pausedAt
     val cadetConf = sessionObj?.cadetConfirmed as? Boolean ?: false
@@ -289,7 +299,7 @@ fun getSession(sessionId: String, callback: (DrivingSession?) -> Unit) {
             }
             val dyn = d.unsafeCast<dynamic>()
             val sessionObj = dyn["session"]
-            val sessionStartMs = (sessionObj?.startTime as? Number)?.toLong()
+            val sessionStartMs = sessionNestedStartMs(sessionObj)
             val sessActive = sessionObj?.isActive
             val sessPausedAt = sessionObj?.pausedAt
             val cadetConf = sessionObj?.cadetConfirmed as? Boolean ?: false
@@ -352,8 +362,10 @@ fun requestStartByInstructor(sessionId: String, callback: (String?) -> Unit) {
 
 /** Начать вождение (перевести в inProgress, создать объект session). */
 fun startSession(sessionId: String, callback: (String?) -> Unit) {
+    // Firestore не принимает Kotlin Long — только JS number (Double от Date.now()).
+    val nowMs = kotlin.js.Date.now()
     val sessionObj = kotlin.js.json(
-        "startTime" to js("Date.now()"),
+        "startTime" to nowMs,
         "pausedTime" to 0,
         "isActive" to true,
         "cadetConfirmed" to false

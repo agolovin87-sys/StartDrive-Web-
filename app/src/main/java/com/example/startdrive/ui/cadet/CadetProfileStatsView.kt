@@ -62,6 +62,7 @@ fun CadetProgressPieChart(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
+        val lineColor = MaterialTheme.colorScheme.secondary
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -253,6 +254,7 @@ fun CadetWeeklyFrequencyHistogram(
     val sortedWeeks = weekCounts.keys.sorted().takeLast(2)
     val counts = sortedWeeks.map { weekCounts[it] ?: 0 }
     val maxCount = counts.maxOrNull()?.coerceAtLeast(1) ?: 1
+    val lineColor = MaterialTheme.colorScheme.secondary
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -291,7 +293,6 @@ fun CadetWeeklyFrequencyHistogram(
 
                         val plotW = (w - leftPad - rightPad).coerceAtLeast(0f)
                         val plotH = (h - topPad - bottomPad).coerceAtLeast(0f)
-                        val color = MaterialTheme.colorScheme.secondary
 
                         val denom = if (counts.size <= 1) 1 else (counts.size - 1)
                         val pts = counts.mapIndexed { i, count ->
@@ -304,7 +305,7 @@ fun CadetWeeklyFrequencyHistogram(
                         // Линия между точками
                         for (i in 0 until pts.size - 1) {
                             drawLine(
-                                color = color,
+                                color = lineColor,
                                 start = pts[i],
                                 end = pts[i + 1],
                                 strokeWidth = 3.dp.toPx(),
@@ -314,7 +315,7 @@ fun CadetWeeklyFrequencyHistogram(
                         // Точки
                         pts.forEach { p ->
                             drawCircle(
-                                color = color,
+                                color = lineColor,
                                 radius = 3.dp.toPx(),
                                 center = p,
                             )

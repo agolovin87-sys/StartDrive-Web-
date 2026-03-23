@@ -15,7 +15,16 @@
     <link rel="stylesheet" href="style.css?v=16">
 </head>
 <body>
-    <div id="root"><div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:'Inter',sans-serif;color:#1565C0;font-size:1.2rem;">Загрузка StartDrive…</div></div>
+    <div id="root">
+        <div class="sd-boot-loader" role="status" aria-live="polite" aria-label="Загрузка StartDrive">
+            <div class="sd-boot-loader-mark">
+                <span class="sd-boot-loader-ring"></span>
+                <span class="sd-boot-loader-core"></span>
+            </div>
+            <div class="sd-boot-loader-text">StartDrive</div>
+            <div class="sd-boot-loader-dots"><span></span><span></span><span></span></div>
+        </div>
+    </div>
     <script src="firebase-config.js"></script>
     <script src="pdd-tickets-bundle.js"></script>
     <script src="webApp.js"></script>

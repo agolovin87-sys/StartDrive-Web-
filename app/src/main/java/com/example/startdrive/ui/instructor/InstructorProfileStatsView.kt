@@ -202,6 +202,7 @@ fun InstructorCadetRatingsPieChart(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
+        val lineColor = MaterialTheme.colorScheme.secondary
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -307,19 +308,18 @@ fun InstructorWeeklyWorkloadChart(
 ) {
     val completed = sessions.filter { it.status == "completed" }
     val cal = Calendar.getInstance(Locale.getDefault())
-    val dayCounts = IntArray(7)
+    val weekCounts = mutableMapOf<String, Int>()
     completed.forEach { s ->
         val t = s.completedAt?.toDate()?.time ?: s.startTime?.toDate()?.time ?: return@forEach
         cal.timeInMillis = t
-        val dayOfWeek = cal.get(Calendar.DAY_OF_WEEK)
-        val index = when (dayOfWeek) {
-            Calendar.SUNDAY -> 6
-            else -> dayOfWeek - Calendar.MONDAY
-        }.coerceIn(0, 6)
-        dayCounts[index]++
+        cal.set(Calendar.DAY_OF_WEEK, cal.firstDayOfWeek)
+        val weekKey = "${cal.get(Calendar.YEAR)}-W${cal.get(Calendar.WEEK_OF_YEAR)}"
+        weekCounts[weekKey] = (weekCounts[weekKey] ?: 0) + 1
     }
-    val maxCount = dayCounts.maxOrNull()?.coerceAtLeast(1) ?: 1
-    val avg = if (completed.isNotEmpty()) dayCounts.sum() / 7f else 0f
+    val sortedWeeks = weekCounts.keys.sorted().takeLast(2)
+    val counts = sortedWeeks.map { weekCounts[it] ?: 0 }
+    val maxCount = counts.maxOrNull()?.coerceAtLeast(1) ?: 1
+    val lineColor = MaterialTheme.colorScheme.secondary
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -331,55 +331,88 @@ fun InstructorWeeklyWorkloadChart(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                "График завершенных вождений:",
+                "Частота вождений в неделю:",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            Text(
-                "Всего: ${completed.size} вождений (макс. 8 в день)",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(120.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                dayCounts.forEachIndexed { i, count ->
-                    val barHeight = (count.toFloat() / 8f * 90).dp.coerceAtMost(90.dp)
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.weight(1f),
+            if (sortedWeeks.isEmpty()) {
+                Text(
+                    "Нет данных",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Column {
+                    Canvas(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(90.dp),
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(0.6f)
-                                .height(barHeight.coerceAtLeast(4.dp))
-                                .background(
-                                    if (count == 0) Color(0xFFE53935) else MaterialTheme.colorScheme.primary,
-                                    RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp),
-                                ),
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            WEEKDAY_NAMES_SHORT[i],
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            "$count",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (count == 0) Color(0xFFE53935) else MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold,
-                        )
+                        val leftPad = 14.dp.toPx()
+                        val rightPad = 8.dp.toPx()
+                        val topPad = 10.dp.toPx()
+                        val bottomPad = 24.dp.toPx()
+                        val w = size.width
+                        val h = size.height
+
+                        val plotW = (w - leftPad - rightPad).coerceAtLeast(0f)
+                        val plotH = (h - topPad - bottomPad).coerceAtLeast(0f)
+
+                        val denom = if (counts.size <= 1) 1 else (counts.size - 1)
+                        val pts = counts.mapIndexed { i, count ->
+                            val x = leftPad + plotW * (i.toFloat() / denom.toFloat())
+                            val yFrac = if (maxCount > 0) count.toFloat() / maxCount.toFloat() else 0f
+                            val y = topPad + plotH * (1f - yFrac)
+                            Offset(x, y)
+                        }
+
+                        for (i in 0 until pts.size - 1) {
+                            drawLine(
+                                color = lineColor,
+                                start = pts[i],
+                                end = pts[i + 1],
+                                strokeWidth = 3.dp.toPx(),
+                            )
+                        }
+                        pts.forEach { p ->
+                            drawCircle(
+                                color = lineColor,
+                                radius = 3.dp.toPx(),
+                                center = p,
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        counts.forEachIndexed { i, count ->
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(
+                                    sortedWeeks[i].takeLast(4),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    "$count",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.secondary,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
                     }
                 }
             }
             Text(
-                "Среднее: %.1f вождений".format(Locale.US, avg),
+                "Всего завершено: ${completed.size}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

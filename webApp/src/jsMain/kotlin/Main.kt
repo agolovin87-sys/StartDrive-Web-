@@ -4645,6 +4645,12 @@ private fun cadetHomeProfileCardHtml(user: User, showProfileShortcut: Boolean): 
     val svgInstructor = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>"""
     val svgDriving = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/></svg>"""
     val completedDrivingsCount = (appState.recordingSessions + appState.historySessions).distinctBy { it.id }.count { it.status == "completed" }
+    val cadetRoleName = when {
+        completedDrivingsCount < 5 -> "Новичок"
+        completedDrivingsCount < 15 -> "Любитель"
+        completedDrivingsCount < 25 -> "Профи"
+        else -> "Эксперт"
+    }
     val cadetProfileAvatarHtml = avatarBlockHtml("sd-profile-avatar", user, user.id)
     val iconPerson = """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>"""
     val profileBtn = if (showProfileShortcut) {
@@ -4667,7 +4673,7 @@ private fun cadetHomeProfileCardHtml(user: User, showProfileShortcut: Boolean): 
                 <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgEmail</span><span class="sd-profile-info-label">Email</span><span class="sd-profile-info-value">${(user.email.ifBlank { "—" }).escapeHtml()}</span></div>
                 <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgPhoneP</span><span class="sd-profile-info-label">Телефон</span><span class="sd-profile-info-value">${(user.phone.ifBlank { "—" }).escapeHtml()}</span></div>
                 <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgInstructor</span><span class="sd-profile-info-label">Инструктор</span><span class="sd-profile-info-value">$instText</span></div>
-                <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgDriving</span><span class="sd-profile-info-label">Вождений завершено</span><span class="sd-profile-info-value">$completedDrivingsCount</span></div>
+                <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgDriving</span><span class="sd-profile-info-label">Вождений завершено</span><span class="sd-profile-info-value">${completedDrivingsCount} (${cadetRoleName})</span></div>
                 <div class="sd-profile-info-row sd-profile-info-row-balance"><span class="sd-profile-info-icon">$svgTicketP</span><span class="sd-profile-info-label">Талоны</span><span class="sd-balance-badge">${user.balance}</span></div>
             </div>
         </div>"""
@@ -4694,10 +4700,10 @@ private fun renderCadetProfileStatsContent(user: User, version: String): String 
     /** Кольцо 30 занятий: 0–5 жёлтый, 5–15 зелёный, 15–25 синий, 25–30 красный (доли круга 60°+120°+120°+60°). */
     val segLegend = """
         <div class="sd-cadet-seg-legend">
-            <div class="sd-cadet-seg-row"><span class="sd-cadet-role-sq" style="background:#FFC107"></span><span>0–5 занятий</span></div>
-            <div class="sd-cadet-seg-row"><span class="sd-cadet-role-sq" style="background:#2E7D32"></span><span>5–15 занятий</span></div>
-            <div class="sd-cadet-seg-row"><span class="sd-cadet-role-sq" style="background:#1565C0"></span><span>15–25 занятий</span></div>
-            <div class="sd-cadet-seg-row"><span class="sd-cadet-role-sq" style="background:#C62828"></span><span>25–30 занятий</span></div>
+            <div class="sd-cadet-seg-row"><span class="sd-cadet-role-sq" style="background:#FFC107"></span><span>0–5 занятий (Новичок)</span></div>
+            <div class="sd-cadet-seg-row"><span class="sd-cadet-role-sq" style="background:#2E7D32"></span><span>5–15 занятий (Любитель)</span></div>
+            <div class="sd-cadet-seg-row"><span class="sd-cadet-role-sq" style="background:#1565C0"></span><span>15–25 занятий (Профи)</span></div>
+            <div class="sd-cadet-seg-row"><span class="sd-cadet-role-sq" style="background:#C62828"></span><span>25–30 занятий (Эксперт)</span></div>
         </div>"""
     val instRated = sessions.filter { it.status == "completed" && it.instructorRating in 3..5 }
     val ratingCounts = (3..5).map { r -> instRated.count { it.instructorRating == r } }
@@ -4718,14 +4724,51 @@ private fun renderCadetProfileStatsContent(user: User, version: String): String 
     val weekFreqHtml = if (completedSessions.isEmpty()) {
         """<p class="sd-muted">Нет завершённых вождений</p>"""
     } else {
+        val vbW = 320
+        val vbH = 130
+        val paddingLeft = 20
+        val paddingRight = 10
+        val paddingTop = 12
+        val paddingBottom = 30
+        val plotW = vbW - paddingLeft - paddingRight
+        val plotH = vbH - paddingTop - paddingBottom
+        val maxD = maxDow.coerceAtLeast(1)
+
+        val polyPoints = (0 until 7).joinToString(" ") { i ->
+            val cnt = dayCountsByWeekday[i]
+            val x = paddingLeft + plotW * (i.toDouble() / 6.0)
+            val y = paddingTop + plotH * (1.0 - (cnt.toDouble() / maxD.toDouble()))
+            "${x.toInt()},${y.toInt()}"
+        }
+
+        val circlesHtml = (0 until 7).joinToString("") { i ->
+            val cnt = dayCountsByWeekday[i]
+            val x = paddingLeft + plotW * (i.toDouble() / 6.0)
+            val y = paddingTop + plotH * (1.0 - (cnt.toDouble() / maxD.toDouble()))
+            val fill = if (cnt == 0) "#ffffff" else "#1565C0"
+            val stroke = if (cnt == 0) "#1565C0" else "#1565C0"
+            val r = if (cnt == 0) 2 else 3
+            """<circle cx="${x.toInt()}" cy="${y.toInt()}" r="$r" fill="$fill" stroke="$stroke" stroke-width="2">
+                    <title>$cnt занятий</title>
+               </circle>"""
+        }
+
+        val xLabelsHtml = (0 until 7).joinToString("") { i ->
+            """<div class="sd-cadet-point-x-label" aria-hidden="true"><span>${dowShort[i]}</span><span class="sd-cadet-point-x-cnt">${
+                dayCountsByWeekday[i]
+            }</span></div>"""
+        }
+
         """<div class="sd-cadet-dow-chart-wrap">
             <div class="sd-cadet-dow-y-labels" aria-hidden="true"><span>$maxDow</span><span>0</span></div>
-            <div class="sd-cadet-dow-chart">""" +
-            (0 until 7).joinToString("") { i ->
-                val cnt = dayCountsByWeekday[i]
-                val h = if (maxDow > 0) ((cnt.toFloat() / maxDow * 90f).toInt().coerceIn(4, 90)) else 4
-                """<div class="sd-cadet-dow-col"><div class="sd-cadet-dow-bar" style="height:${h}px" title="$cnt занятий"></div><span class="sd-cadet-dow-day">${dowShort[i]}</span><span class="sd-cadet-dow-cnt">$cnt</span></div>"""
-            } + "</div></div>"
+            <div class="sd-cadet-point-chart">
+                <svg class="sd-cadet-point-svg" viewBox="0 0 $vbW $vbH" preserveAspectRatio="none" role="img" aria-label="Частота вождений по дням">
+                    <polyline points="$polyPoints" fill="none" stroke="#1565C0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
+                    $circlesHtml
+                </svg>
+                <div class="sd-cadet-point-x-labels">$xLabelsHtml</div>
+            </div>
+        </div>"""
     }
     val cancelled = sessions.filter { it.status == "cancelledByCadet" }
     val weekCountsCancel = mutableMapOf<String, Int>()
@@ -4755,7 +4798,6 @@ private fun renderCadetProfileStatsContent(user: User, version: String): String 
         $profileCard
         <div class="sd-instr-stat-card">
             <h3 class="sd-instr-stat-heading">Прогресс вождений:</h3>
-            <p class="sd-muted sd-instr-chart-hint">Максимум 30 занятий. Завершено: $completed из 30.</p>
             <div class="sd-cadet-progress-row">
                 <div class="sd-cadet-progress-ring-wrap">
                     <div class="sd-cadet-progress-ring"></div>
@@ -4766,7 +4808,7 @@ private fun renderCadetProfileStatsContent(user: User, version: String): String 
             </div>
         </div>
         <div class="sd-instr-stat-card">
-            <h3 class="sd-instr-stat-heading">Ваши оценки: распределение</h3>
+            <h3 class="sd-instr-stat-heading">Ваши оценки:</h3>
             <p class="sd-muted sd-instr-chart-hint">Оценки по завершённым вождениям (3–5).</p>
             <div class="sd-cadet-inst-rating-chart sd-cadet-inst-rating-chart-3">$ratingBarsHtml</div>
         </div>

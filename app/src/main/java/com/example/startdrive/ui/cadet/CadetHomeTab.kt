@@ -612,7 +612,11 @@ private fun CadetProfileCard(cadet: User, completedDrivingsCount: Int = 0, balan
                 ProfileRow(label = "Email:", value = cadet.email.ifBlank { "—" }, icon = Icons.Default.Email)
                 ProfileRow(label = "Тел.:", value = cadet.phone.ifBlank { "—" }, icon = Icons.Default.Phone)
                 ProfileRow(label = "Роль:", value = "Курсант", icon = Icons.Default.Badge)
-                ProfileRow(label = "Вождений:", value = completedDrivingsCount.toString(), icon = Icons.Default.DirectionsCar)
+                ProfileRow(
+                    label = "Вождений:",
+                    value = "${completedDrivingsCount} (${getCadetRoleName(completedDrivingsCount)})",
+                    icon = Icons.Default.DirectionsCar,
+                )
                 ProfileRow(
                     label = "Баланс талонов:",
                     value = cadet.balance.toString(),
@@ -624,6 +628,16 @@ private fun CadetProfileCard(cadet: User, completedDrivingsCount: Int = 0, balan
             }
         }
     }
+}
+
+private val CAD_ROLES_THRESHOLDS = listOf(8, 16, 24, 30) // Новичок 0-7, Любитель 8-15, Профи 16-23, Эксперт 24-30
+private val CAD_ROLES_NAMES = listOf("Новичок", "Любитель", "Профи", "Эксперт")
+
+private fun getCadetRoleName(completedDrivingsCount: Int): String {
+    for (i in CAD_ROLES_NAMES.indices) {
+        if (completedDrivingsCount < CAD_ROLES_THRESHOLDS[i]) return CAD_ROLES_NAMES[i]
+    }
+    return CAD_ROLES_NAMES.last()
 }
 
 @Composable

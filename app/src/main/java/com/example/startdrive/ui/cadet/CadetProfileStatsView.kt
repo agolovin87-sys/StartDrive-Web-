@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -115,14 +116,31 @@ fun CadetProgressPieChart(
                             startAngle += sweepAngle
                         }
                     }
-                    Text(
-                        "$completedDrivingsCount",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
+                    // Белый круг в центре с количеством завершенных вождений
+                    Box(
+                        modifier = Modifier
+                            .size(66.dp)
+                            .background(Color.White, CircleShape)
+                            .padding(6.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "$completedDrivingsCount",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.Black,
+                        )
+                    }
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    // Роль справа от значения (в скобках)
+                    Text(
+                        "(${currentRoleName})",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = ROLE_COLORS[currentRoleIndex],
+                    )
+                    Spacer(Modifier.height(4.dp))
                     ROLE_NAMES.forEachIndexed { i, name ->
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -148,12 +166,6 @@ fun CadetProgressPieChart(
                     }
                 }
             }
-            Text(
-                "Текущая роль: $currentRoleName",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Bold,
-                color = ROLE_COLORS[currentRoleIndex],
-            )
         }
     }
 }
@@ -264,40 +276,74 @@ fun CadetWeeklyFrequencyHistogram(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(100.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.Bottom,
-                ) {
-                    counts.forEachIndexed { i, count ->
-                        val barHeight = if (maxCount > 0) (count.toFloat() / maxCount * 80).dp else 0.dp
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth(0.7f)
-                                    .height(barHeight.coerceAtLeast(4.dp))
-                                    .background(
-                                        MaterialTheme.colorScheme.secondary,
-                                        RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp),
-                                    ),
+                Column {
+                    Canvas(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(90.dp),
+                    ) {
+                        val leftPad = 14.dp.toPx()
+                        val rightPad = 8.dp.toPx()
+                        val topPad = 10.dp.toPx()
+                        val bottomPad = 24.dp.toPx()
+                        val w = size.width
+                        val h = size.height
+
+                        val plotW = (w - leftPad - rightPad).coerceAtLeast(0f)
+                        val plotH = (h - topPad - bottomPad).coerceAtLeast(0f)
+                        val color = MaterialTheme.colorScheme.secondary
+
+                        val denom = if (counts.size <= 1) 1 else (counts.size - 1)
+                        val pts = counts.mapIndexed { i, count ->
+                            val x = leftPad + plotW * (i.toFloat() / denom.toFloat())
+                            val yFrac = if (maxCount > 0) count.toFloat() / maxCount.toFloat() else 0f
+                            val y = topPad + plotH * (1f - yFrac)
+                            Offset(x, y)
+                        }
+
+                        // Линия между точками
+                        for (i in 0 until pts.size - 1) {
+                            drawLine(
+                                color = color,
+                                start = pts[i],
+                                end = pts[i + 1],
+                                strokeWidth = 3.dp.toPx(),
+                                cap = StrokeCap.Round,
                             )
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                sortedWeeks[i].takeLast(4),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        }
+                        // Точки
+                        pts.forEach { p ->
+                            drawCircle(
+                                color = color,
+                                radius = 3.dp.toPx(),
+                                center = p,
                             )
-                            Text(
-                                "$count",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.secondary,
-                                fontWeight = FontWeight.Bold,
-                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        counts.forEachIndexed { i, count ->
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(
+                                    sortedWeeks[i].takeLast(4),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    "$count",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.secondary,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
                         }
                     }
                 }

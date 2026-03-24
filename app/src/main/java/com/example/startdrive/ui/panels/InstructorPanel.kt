@@ -101,6 +101,22 @@ import com.example.startdrive.ui.components.AnimatedGlossOverlay
 private fun surnameFromFullName(fullName: String?): String =
     fullName?.trim()?.split(Regex("\\s+"))?.firstOrNull()?.takeIf { it.isNotBlank() } ?: "—"
 
+private fun playInstructorNotificationSound(context: android.content.Context, resId: Int) {
+    if (!AppSettings.getSoundNotificationsEnabled(context)) return
+    try {
+        MediaPlayer.create(context, resId)?.apply {
+            setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            )
+            setOnCompletionListener { release() }
+            start()
+        }
+    } catch (_: Exception) { }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun InstructorPanel(
@@ -207,33 +223,38 @@ fun InstructorPanel(
                 val msg = "Курсант ($surname) забронировал вождение — подтвердите бронь"
                 if (AppSettings.getTextNotificationsEnabled(context)) snackbarHostState.showSnackbar(msg)
                 addNotification(msg)
-                if (AppSettings.getSoundNotificationsEnabled(context)) {
-                    MediaPlayer.create(context, R.raw.kursan_zabroniroval)?.apply {
-                        start()
-                        setOnCompletionListener { release() }
-                    }
-                }
+                playInstructorNotificationSound(context, R.raw.kursan_zabroniroval)
             }
+            val becameInProgress = prev != null && prev.first != "inProgress" && s.status == "inProgress"
             if (prev != null && !prevInstructorConfirmed && s.instructorConfirmed) {
                 val surname = surnameFromFullName(cadets.find { it.id == s.cadetId }?.fullName)
                 val msg = "Курсант ($surname) подтвердил запись на вождение"
                 if (AppSettings.getTextNotificationsEnabled(context)) snackbarHostState.showSnackbar(msg)
                 addNotification(msg)
+                playInstructorNotificationSound(context, R.raw.instruktor_dobavil_okno)
             }
             if (prev != null && !prevCadetConfirmed && s.session?.cadetConfirmed == true) {
                 val surname = surnameFromFullName(cadets.find { it.id == s.cadetId }?.fullName)
                 val msg = "Курсант ($surname) подтвердил начало вождения"
                 if (AppSettings.getTextNotificationsEnabled(context)) snackbarHostState.showSnackbar(msg)
                 addNotification(msg)
+                if (!becameInProgress) {
+                    playInstructorNotificationSound(context, R.raw.zvuk_starter)
+                }
+            }
+            if (becameInProgress) {
+                playInstructorNotificationSound(context, R.raw.zvuk_starter)
             }
             if (prev != null && prev.first != "cancelledByCadet" && s.status == "cancelledByCadet") {
                 val surname = surnameFromFullName(cadets.find { it.id == s.cadetId }?.fullName)
                 val msg = "Курсант ($surname) отменил вождение"
                 if (AppSettings.getTextNotificationsEnabled(context)) snackbarHostState.showSnackbar(msg)
                 addNotification(msg)
+                playInstructorNotificationSound(context, R.raw.spisanie_s_balansa)
             }
             if (prev != null && prev.first != "completed" && s.status == "completed") {
                 showDrivingCompletedSession = s
+                playInstructorNotificationSound(context, R.raw.voidenie_zaversheno_kursanty)
             }
             if (prev != null && s.status == "completed" && s.cadetRating > 0 && s.id !in cadetRatingShownFor) {
                 val msg = "Вождение завершено!"

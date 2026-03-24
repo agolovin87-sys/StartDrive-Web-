@@ -1095,8 +1095,11 @@ fun getUsersForChat(currentUser: User, callback: (List<User>) -> Unit) {
             "admin" -> all.filter { it.role != "admin" }
             "instructor" -> {
                 val admin = all.firstOrNull { it.role == "admin" }
+                val peerInstructors = all
+                    .filter { it.role == "instructor" && it.id != currentUser.id }
+                    .sortedBy { it.fullName }
                 val cadets = currentUser.assignedCadets.mapNotNull { id -> all.find { it.id == id } }
-                listOfNotNull(admin) + cadets
+                (listOfNotNull(admin) + peerInstructors + cadets).distinctBy { it.id }
             }
             "cadet" -> {
                 val admin = all.firstOrNull { it.role == "admin" }

@@ -1,5 +1,6 @@
 package com.example.startdrive.ui.instructor
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -16,11 +18,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.text.KeyboardOptions
@@ -36,12 +43,44 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.startdrive.data.model.BalanceHistory
 import com.example.startdrive.data.model.DrivingSession
+import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
+
+private const val INSTRUCTOR_WEEK_MAX_OFFSET = 52
+
+/** Понедельник 00:00 … воскресенье (конец недели не включён) — границы календарной недели, [weekOffsetBack] от текущей. */
+private fun weekBoundsMs(weekOffsetBack: Int): Pair<Long, Long> {
+    val start = Calendar.getInstance(Locale.getDefault())
+    start.timeInMillis = System.currentTimeMillis()
+    start.set(Calendar.HOUR_OF_DAY, 0)
+    start.set(Calendar.MINUTE, 0)
+    start.set(Calendar.SECOND, 0)
+    start.set(Calendar.MILLISECOND, 0)
+    val dow = start.get(Calendar.DAY_OF_WEEK)
+    val daysFromMonday = (dow - Calendar.MONDAY + 7) % 7
+    start.add(Calendar.DAY_OF_MONTH, -daysFromMonday)
+    start.add(Calendar.DAY_OF_MONTH, -7 * weekOffsetBack)
+    val end = start.clone() as Calendar
+    end.add(Calendar.DAY_OF_MONTH, 7)
+    return start.timeInMillis to end.timeInMillis
+}
+
+private fun formatInstructorWeekRangeLabel(startMs: Long): String {
+    val fmt = SimpleDateFormat("d MMM", Locale("ru", "RU"))
+    val cal = Calendar.getInstance(Locale.getDefault())
+    cal.timeInMillis = startMs
+    val s0 = fmt.format(cal.time)
+    cal.add(Calendar.DAY_OF_MONTH, 6)
+    val s6 = fmt.format(cal.time)
+    return "$s0 — $s6"
+}
 
 private val WEEKDAY_NAMES_SHORT = listOf("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
 private val RATING_COLORS = listOf(
@@ -55,6 +94,8 @@ private val RATING_COLORS = listOf(
 @Composable
 fun InstructorTotalEarnedCard(
     balanceHistory: List<BalanceHistory>,
+    /** Текущий баланс талонов — подставляется в поле калькулятора по умолчанию. */
+    currentBalance: Int,
     modifier: Modifier = Modifier,
 ) {
     val totalEarned = balanceHistory.filter { it.type == "credit" }.sumOf { it.amount }
@@ -63,7 +104,7 @@ fun InstructorTotalEarnedCard(
     val earnedLastMonth = balanceHistory
         .filter { it.type == "credit" && (it.timestamp?.toDate()?.time ?: 0L) >= monthAgo }
         .sumOf { it.amount }
-    var tokensStr by remember(totalEarned) { mutableStateOf(totalEarned.toString()) }
+    var tokensStr by remember(currentBalance) { mutableStateOf(currentBalance.coerceAtLeast(0).toString()) }
     var rubPerTokenStr by remember { mutableStateOf("") }
     val tokens = tokensStr.toIntOrNull() ?: 0
     val rubPerToken = rubPerTokenStr.replace(",", ".").toDoubleOrNull() ?: 0.0
@@ -306,19 +347,28 @@ fun InstructorWeeklyWorkloadChart(
     sessions: List<DrivingSession>,
     modifier: Modifier = Modifier,
 ) {
-    val completed = sessions.filter { it.status == "completed" }
+    var weekOffsetBack by remember { mutableStateOf(0) }
+    val completedAll = remember(sessions) { sessions.filter { it.status == "completed" } }
+    val (weekStartMs, weekEndMs) = remember(weekOffsetBack) { weekBoundsMs(weekOffsetBack) }
+    val weekCompleted = remember(completedAll, weekStartMs, weekEndMs) {
+        completedAll.filter { s ->
+            val t = s.completedAt?.toDate()?.time ?: s.startTime?.toDate()?.time ?: return@filter false
+            t >= weekStartMs && t < weekEndMs
+        }
+    }
     val cal = Calendar.getInstance(Locale.getDefault())
-    val weekCounts = mutableMapOf<String, Int>()
-    completed.forEach { s ->
+    val dayCounts = IntArray(7)
+    weekCompleted.forEach { s ->
         val t = s.completedAt?.toDate()?.time ?: s.startTime?.toDate()?.time ?: return@forEach
         cal.timeInMillis = t
-        cal.set(Calendar.DAY_OF_WEEK, cal.firstDayOfWeek)
-        val weekKey = "${cal.get(Calendar.YEAR)}-W${cal.get(Calendar.WEEK_OF_YEAR)}"
-        weekCounts[weekKey] = (weekCounts[weekKey] ?: 0) + 1
+        val dayOfWeek = cal.get(Calendar.DAY_OF_WEEK)
+        val index = when (dayOfWeek) {
+            Calendar.SUNDAY -> 6
+            else -> dayOfWeek - Calendar.MONDAY
+        }.coerceIn(0, 6)
+        dayCounts[index]++
     }
-    val sortedWeeks = weekCounts.keys.sorted().takeLast(2)
-    val counts = sortedWeeks.map { weekCounts[it] ?: 0 }
-    val maxCount = counts.maxOrNull()?.coerceAtLeast(1) ?: 1
+    val maxYScale = 8
     val lineColor = MaterialTheme.colorScheme.secondary
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -336,86 +386,204 @@ fun InstructorWeeklyWorkloadChart(
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            if (sortedWeeks.isEmpty()) {
+            if (completedAll.isEmpty()) {
                 Text(
                     "Нет данных",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                Column {
-                    Canvas(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(90.dp),
-                    ) {
-                        val leftPad = 14.dp.toPx()
-                        val rightPad = 8.dp.toPx()
-                        val topPad = 10.dp.toPx()
-                        val bottomPad = 24.dp.toPx()
-                        val w = size.width
-                        val h = size.height
-
-                        val plotW = (w - leftPad - rightPad).coerceAtLeast(0f)
-                        val plotH = (h - topPad - bottomPad).coerceAtLeast(0f)
-
-                        val denom = if (counts.size <= 1) 1 else (counts.size - 1)
-                        val pts = counts.mapIndexed { i, count ->
-                            val x = leftPad + plotW * (i.toFloat() / denom.toFloat())
-                            val yFrac = if (maxCount > 0) count.toFloat() / maxCount.toFloat() else 0f
-                            val y = topPad + plotH * (1f - yFrac)
-                            Offset(x, y)
-                        }
-
-                        for (i in 0 until pts.size - 1) {
-                            drawLine(
-                                color = lineColor,
-                                start = pts[i],
-                                end = pts[i + 1],
-                                strokeWidth = 3.dp.toPx(),
-                            )
-                        }
-                        pts.forEach { p ->
-                            drawCircle(
-                                color = lineColor,
-                                radius = 3.dp.toPx(),
-                                center = p,
-                            )
-                        }
-                    }
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)),
+                    shadowElevation = 0.dp,
+                    tonalElevation = 0.dp,
+                ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
+                            .padding(5.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        counts.forEachIndexed { i, count ->
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier.weight(1f),
-                            ) {
-                                Text(
-                                    sortedWeeks[i].takeLast(4),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        FilledTonalIconButton(
+                            onClick = { weekOffsetBack = (weekOffsetBack + 1).coerceAtMost(INSTRUCTOR_WEEK_MAX_OFFSET) },
+                            enabled = weekOffsetBack < INSTRUCTOR_WEEK_MAX_OFFSET,
+                            modifier = Modifier.size(44.dp),
+                            colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                                contentColor = MaterialTheme.colorScheme.primary,
+                                disabledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+                                disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                            ),
+                            shape = RoundedCornerShape(11.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.KeyboardArrowLeft,
+                                contentDescription = "Предыдущая неделя",
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+                        Text(
+                            formatInstructorWeekRangeLabel(weekStartMs),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 8.dp)
+                                .background(
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                                    shape = RoundedCornerShape(10.dp),
                                 )
-                                Text(
-                                    "$count",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.secondary,
-                                    fontWeight = FontWeight.Bold,
+                                .padding(horizontal = 12.dp, vertical = 9.dp),
+                        )
+                        FilledTonalIconButton(
+                            onClick = { weekOffsetBack = (weekOffsetBack - 1).coerceAtLeast(0) },
+                            enabled = weekOffsetBack > 0,
+                            modifier = Modifier.size(44.dp),
+                            colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                                contentColor = MaterialTheme.colorScheme.primary,
+                                disabledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+                                disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                            ),
+                            shape = RoundedCornerShape(11.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.KeyboardArrowRight,
+                                contentDescription = "Следующая неделя",
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    val chartH = 120.dp
+                    val topPadDp = 8.dp
+                    val bottomPadDp = 8.dp
+                    val plotHDp = chartH - topPadDp - bottomPadDp
+                    Box(
+                        modifier = Modifier
+                            .widthIn(min = 22.dp)
+                            .height(chartH),
+                    ) {
+                        (maxYScale downTo 1).forEach { k ->
+                            val yFromPlotTop = plotHDp * (1f - k / maxYScale.toFloat())
+                            Text(
+                                "$k",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .offset(y = topPadDp + yFromPlotTop - 6.dp),
+                            )
+                        }
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Canvas(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(chartH),
+                        ) {
+                            val leftPad = 0.dp.toPx()
+                            val rightPad = 0.dp.toPx()
+                            val topPad = topPadDp.toPx()
+                            val bottomPad = bottomPadDp.toPx()
+                            val w = size.width
+                            val h = size.height
+
+                            val plotW = (w - leftPad - rightPad).coerceAtLeast(0f)
+                            val plotH = (h - topPad - bottomPad).coerceAtLeast(0f)
+
+                            fun yPxForCount(cnt: Int): Float {
+                                val c = cnt.coerceIn(0, maxYScale)
+                                return topPad + plotH * (1f - c / maxYScale.toFloat())
+                            }
+
+                            val pts = (0 until 7).map { i ->
+                                val cnt = dayCounts[i].coerceIn(0, maxYScale)
+                                val x = leftPad + plotW * ((i + 0.5f) / 7f)
+                                val y = yPxForCount(cnt)
+                                Offset(x, y)
+                            }
+
+                            val gridColor = lineColor.copy(alpha = 0.2f)
+                            for (k in 1..maxYScale) {
+                                val y = yPxForCount(k)
+                                drawLine(
+                                    color = gridColor,
+                                    start = Offset(leftPad, y),
+                                    end = Offset(leftPad + plotW, y),
+                                    strokeWidth = 1.dp.toPx(),
                                 )
+                            }
+                            drawLine(
+                                color = gridColor,
+                                start = Offset(leftPad, yPxForCount(0)),
+                                end = Offset(leftPad + plotW, yPxForCount(0)),
+                                strokeWidth = 1.dp.toPx(),
+                            )
+
+                            for (i in 0 until pts.size - 1) {
+                                drawLine(
+                                    color = lineColor,
+                                    start = pts[i],
+                                    end = pts[i + 1],
+                                    strokeWidth = 3.dp.toPx(),
+                                    cap = StrokeCap.Round,
+                                )
+                            }
+                            pts.forEach { p ->
+                                drawCircle(
+                                    color = lineColor,
+                                    radius = 3.dp.toPx(),
+                                    center = p,
+                                )
+                            }
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            (0 until 7).forEach { i ->
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text(
+                                        "${dayCounts[i]}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.secondary,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                    Text(
+                                        WEEKDAY_NAMES_SHORT[i],
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
                         }
                     }
                 }
+                Text(
+                    "За выбранную неделю: ${weekCompleted.size}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            Text(
-                "Всего завершено: ${completed.size}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }

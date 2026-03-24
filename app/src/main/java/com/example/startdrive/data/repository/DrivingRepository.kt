@@ -12,6 +12,14 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 
+/** Курсант не может отменить в пределах 6 ч до начала вождения. */
+private fun isCadetCancelBlockedWithinSixHours(startTimeMillis: Long?): Boolean {
+    if (startTimeMillis == null) return false
+    val now = System.currentTimeMillis()
+    if (startTimeMillis <= now) return true
+    return (startTimeMillis - now) <= 6L * 60 * 60 * 1000
+}
+
 class DrivingRepository {
     private val firestore = FirebaseFirestore.getInstance()
 
@@ -224,6 +232,12 @@ class DrivingRepository {
 
     suspend fun cancelByCadet(sessionId: String) {
         val session = getSession(sessionId) ?: return
+        val startMs = session.startTime?.toDate()?.time
+        if (isCadetCancelBlockedWithinSixHours(startMs)) {
+            throw IllegalStateException(
+                "Нельзя отменить за 6 часов до вождения. Сообщите своему инструктору или администратору.",
+            )
+        }
         firestore.collection(FirebasePaths.DRIVING_SESSIONS).document(sessionId).update(
             "status", "cancelledByCadet",
             "cancelledAt", Timestamp.now(),

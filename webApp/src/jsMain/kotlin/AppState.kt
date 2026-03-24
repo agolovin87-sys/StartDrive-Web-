@@ -219,6 +219,8 @@ data class AppState(
     var soundAudioUnlocked: Boolean = false,
     /** До какого времени (мс) кнопка «Опаздываю» неактивна после выбора задержки. */
     var instructorRunningLateUntilMs: Long = 0L,
+    /** Смещение недели для графика «Частота вождений» в профиле инструктора: 0 — текущая, 1 — прошлая и т.д. */
+    var instructorProfileWeekOffset: Int = 0,
     /** Подэкран вкладки «Главная» у инструктора: основная или «Профиль» (без отдельной вкладки внизу). */
     var instructorHomeSubView: String = "main",
     /** Подэкран вкладки «Главная» у курсанта: основная или «Профиль» со статистикой (как в Android). */

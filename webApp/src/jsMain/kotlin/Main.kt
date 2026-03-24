@@ -35,7 +35,7 @@ private var voicePlayInterval: Int = 0
 /** Токен/флаг, чтобы не навешивать слушатели на аудио повторно при каждом рендере. */
 private var voiceReviewAudioBoundForUrl: String? = null
 private var chatMsgLongPressTimerId: Int = 0
-/** Поля калькулятора «талоны × руб» на экране профиля: null = подставить totalEarned из данных. */
+/** Поля калькулятора «талоны × руб» на экране профиля: null = подставить текущий баланс талонов. */
 private var instructorProfileCalcTokensOverride: String? = null
 private var instructorProfileCalcRubInput: String = ""
 /** Узел калькулятора вынесен из-под innerHTML #sd-card, чтобы ввод не моргал. */
@@ -92,6 +92,12 @@ private var instructorRateCadetModalSessionId: String? = null
 private var instructorRateCadetModalCadetName: String = ""
 /** Чтобы не сбрасывать радио «оценка курсанту» при каждом poll/render после выбора пользователя. */
 private var instructorRateModalRadioInitSessionId: String? = null
+/** Первый снимок сессий инструктора без звука; дальше — при изменениях со стороны курсанта/сервера. */
+private var instructorSessionSoundBaselineReady: Boolean = false
+
+private fun resetInstructorSessionSoundBaseline() {
+    instructorSessionSoundBaselineReady = false
+}
 
 private fun instructorCadetsSignature(cadets: List<User>): String {
     return cadets.map { "${it.id}:${it.balance}" }.sorted().joinToString(",")
@@ -407,6 +413,7 @@ fun main() {
                     user = null
                     error = null
                     instructorHomeSubView = "main"
+                    instructorProfileWeekOffset = 0
                     cadetHomeSubView = "main"
                 }
                 return@onAuthStateChanged
@@ -2668,6 +2675,59 @@ private fun playChatMessageSound() {
     } catch (_: Throwable) { }
 }
 
+/** Звук уведомления инструктора о событиях вождения (тот же файл, что выбран в настройках уведомлений). */
+private fun playInstructorSessionEventSound() {
+    if (getSoundNotificationsEnabled() == false) return
+    try {
+        if (cadetNotificationAudioContext != null && cadetNotificationAudioContext != js("undefined")) {
+            cadetNotificationAudioContext.asDynamic().resume()?.catch { _: dynamic -> Unit }
+        }
+        val audio = getOrCreateCadetNotificationAudio()
+        audio.src = getCadetNotificationSoundUrl()
+        audio.currentTime = 0.0
+        audio.volume = 1.0
+        audio.play()?.catch { _: dynamic -> Unit }
+    } catch (_: Throwable) { }
+}
+
+/**
+ * Сравнивает старый и новый список сессий инструктора и воспроизводит звук при:
+ * бронь курсантом, подтверждение записи, подтверждение начала, старт вождения (таймер), отмена курсантом, завершение.
+ */
+private fun maybePlayInstructorSessionSounds(oldS: List<DrivingSession>, newS: List<DrivingSession>) {
+    if (getSoundNotificationsEnabled() == false) return
+    if (!instructorSessionSoundBaselineReady) {
+        instructorSessionSoundBaselineReady = true
+        return
+    }
+    val oldById = oldS.associateBy { it.id }
+    for (s in newS) {
+        val prev = oldById[s.id]
+        if (prev == null) {
+            if (s.status == "scheduled" && s.openWindowId.isNotBlank()) {
+                playInstructorSessionEventSound()
+            }
+            continue
+        }
+        val becameInProgress = prev.status != "inProgress" && s.status == "inProgress"
+        if (!prev.instructorConfirmed && s.instructorConfirmed) {
+            playInstructorSessionEventSound()
+        }
+        if (!prev.cadetConfirmed && s.cadetConfirmed && !becameInProgress) {
+            playInstructorSessionEventSound()
+        }
+        if (becameInProgress) {
+            playInstructorSessionEventSound()
+        }
+        if (prev.status != "cancelledByCadet" && s.status == "cancelledByCadet") {
+            playInstructorSessionEventSound()
+        }
+        if (prev.status != "completed" && s.status == "completed") {
+            playInstructorSessionEventSound()
+        }
+    }
+}
+
 private val chatNotifUnsubByContactId = mutableMapOf<String, () -> Unit>()
 
 private fun chatLastSeenKey(uid: String, contactId: String): String = "sd_chat_last_seen_${uid}_$contactId"
@@ -3625,13 +3685,26 @@ private fun appendInstructorRunningLateModalIfNeeded(root: org.w3c.dom.Element) 
 }
 
 /** Модалка оценки курсанту — вне #sd-card, чтобы радио не сбрасывались при каждом перерисовке графика. */
-private fun instructorRateCadetModalOverlayHtml(): String = """<div class="sd-modal-overlay sd-hidden" id="sd-instructor-rate-cadet-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вождение завершено, поставьте оценку курсанту:</h3><p id="sd-instructor-rate-cadet-name" class="sd-rate-cadet-name"></p><div class="sd-rate-options-instructor"><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="3" /> 3</label><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="4" /> 4</label><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="5" /> 5</label></div><p class="sd-modal-actions"><button type="button" id="sd-instructor-rate-cadet-confirm" class="sd-btn sd-btn-primary">Подтвердить</button></p></div></div>"""
+private fun instructorRateCadetModalOverlayHtml(): String = """<div class="sd-modal-overlay sd-hidden" id="sd-instructor-rate-cadet-modal"><div class="sd-modal"><h3 class="sd-modal-title">Поставьте оценку курсанту:</h3><p id="sd-instructor-rate-cadet-name" class="sd-rate-cadet-name"></p><div class="sd-rate-options-instructor"><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="3" /> 3</label><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="4" /> 4</label><label class="sd-radio"><input type="radio" name="sd-instructor-rate" value="5" /> 5</label></div><p class="sd-modal-actions"><button type="button" id="sd-instructor-rate-cadet-confirm" class="sd-btn sd-btn-primary">Подтвердить</button></p></div></div>"""
+
+private fun removeDuplicateInstructorRateCadetModals() {
+    try {
+        val all = document.querySelectorAll("#sd-instructor-rate-cadet-modal")
+        val len = (all.length as? Int) ?: 0
+        if (len <= 1) return
+        for (i in 1 until len) {
+            val n = all.item(i) ?: continue
+            n.parentNode?.removeChild(n)
+        }
+    } catch (_: Throwable) { }
+}
 
 private fun appendInstructorRateCadetModalIfNeeded(root: org.w3c.dom.Element) {
     if (appState.screen != AppScreen.Instructor || appState.user?.role != "instructor") {
         document.getElementById("sd-instructor-rate-cadet-modal")?.remove()
         return
     }
+    removeDuplicateInstructorRateCadetModals()
     if (document.getElementById("sd-instructor-rate-cadet-modal") != null) return
     val wrap = document.createElement("div")
     wrap.innerHTML = instructorRateCadetModalOverlayHtml()
@@ -3718,17 +3791,41 @@ private fun wireInstructorRunningLateModalListeners() {
 /** Подтверждение отмены занятия на вкладке «Запись» (инструктор/курсант) — вне #sd-card. */
 private fun recCancelSessionConfirmModalOverlayHtml(): String = """<div class="sd-modal-overlay sd-hidden" id="sd-rec-cancel-session-confirm-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вы уверены?</h3><p class="sd-modal-actions"><button type="button" id="sd-rec-cancel-session-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-rec-cancel-session-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>"""
 
+/** Курсант: нельзя отменить за 6 ч до начала — только сообщение и OK. */
+private fun cadetCancelSixHoursBlockedModalOverlayHtml(): String = """<div class="sd-modal-overlay sd-hidden" id="sd-cadet-cancel-six-hours-modal" aria-hidden="true"><div class="sd-modal"><h3 class="sd-modal-title">Внимание</h3><p class="sd-muted">Нельзя отменить за 6 часов до вождения. Сообщите своему инструктору или администратору.</p><p class="sd-modal-actions"><button type="button" id="sd-cadet-cancel-six-hours-ok" class="sd-btn sd-btn-primary">OK</button></p></div></div>"""
+
+private fun cadetCancelBlockedWithinSixHoursOfStart(startTimeMillis: Long?): Boolean {
+    if (startTimeMillis == null) return false
+    val now = js("Date.now()").unsafeCast<Double>().toLong()
+    if (startTimeMillis <= now) return true
+    return (startTimeMillis - now) <= 6L * 60 * 60 * 1000
+}
+
 private fun appendRecCancelSessionConfirmModalIfNeeded(root: org.w3c.dom.Element) {
     if (appState.screen != AppScreen.Instructor && appState.screen != AppScreen.Cadet) {
         document.getElementById("sd-rec-cancel-session-confirm-modal")?.remove()
+        document.getElementById("sd-cadet-cancel-six-hours-modal")?.remove()
+        val w = window.asDynamic()
+        w.__sdRecCancelModalWired = false
         return
     }
-    if (document.getElementById("sd-rec-cancel-session-confirm-modal") != null) return
-    val wrap = document.createElement("div")
-    wrap.innerHTML = recCancelSessionConfirmModalOverlayHtml()
-    val el = wrap.firstElementChild ?: return
-    root.appendChild(el)
-    wireRecCancelSessionConfirmModalListeners()
+    if (document.getElementById("sd-rec-cancel-session-confirm-modal") == null) {
+        val wrap = document.createElement("div")
+        wrap.innerHTML = recCancelSessionConfirmModalOverlayHtml()
+        val el = wrap.firstElementChild ?: return
+        root.appendChild(el)
+    }
+    if (document.getElementById("sd-cadet-cancel-six-hours-modal") == null) {
+        val wrap2 = document.createElement("div")
+        wrap2.innerHTML = cadetCancelSixHoursBlockedModalOverlayHtml()
+        val el2 = wrap2.firstElementChild ?: return
+        root.appendChild(el2)
+    }
+    val w = window.asDynamic()
+    if (w.__sdRecCancelModalWired != true) {
+        w.__sdRecCancelModalWired = true
+        wireRecCancelSessionConfirmModalListeners()
+    }
 }
 
 private fun wireRecCancelSessionConfirmModalListeners() {
@@ -3775,6 +3872,12 @@ private fun wireRecCancelSessionConfirmModalListeners() {
     })
     document.getElementById("sd-rec-cancel-session-no")?.addEventListener("click", {
         document.getElementById("sd-rec-cancel-session-confirm-modal")?.let { m -> m.classList.add("sd-hidden") }
+    })
+    document.getElementById("sd-cadet-cancel-six-hours-ok")?.addEventListener("click", {
+        document.getElementById("sd-cadet-cancel-six-hours-modal")?.let { m ->
+            m.classList.add("sd-hidden")
+            m.setAttribute("aria-hidden", "true")
+        }
     })
 }
 
@@ -4301,6 +4404,36 @@ private fun weekdayIndexMon0Local(ms: Long): Int {
     return if (day == 0) 6 else day - 1
 }
 
+private const val INSTRUCTOR_PROFILE_MAX_WEEK_OFFSET = 52
+
+/** Понедельник 00:00 локального времени для недели, сдвинутой на [weekOffsetBack] назад от текущей. */
+private fun weekStartMondayLocalMs(refMs: Long, weekOffsetBack: Int): Long {
+    val d = js("new Date(refMs)").unsafeCast<dynamic>()
+    d.setHours(0, 0, 0, 0)
+    val day = (d.getDay() as Number).toInt()
+    val daysFromMonday = if (day == 0) 6 else day - 1
+    val oneDay = 24L * 60 * 60 * 1000
+    val mondayStart = (d.getTime() as Number).toLong() - daysFromMonday * oneDay
+    return mondayStart - weekOffsetBack * 7L * oneDay
+}
+
+/** Границы выбранной недели [startMs, endMs) в локальном времени. */
+private fun weekRangeMsForOffset(weekOffsetBack: Int): Pair<Long, Long> {
+    val nowMs = js("Date.now()").unsafeCast<Double>().toLong()
+    val startMs = weekStartMondayLocalMs(nowMs, weekOffsetBack)
+    val endMs = startMs + 7L * 24 * 60 * 60 * 1000
+    return startMs to endMs
+}
+
+private fun formatWeekRangeLabelRu(startMs: Long): String {
+    val d0 = js("new Date(startMs)").unsafeCast<dynamic>()
+    val d6 = js("new Date(startMs + 6 * 24 * 60 * 60 * 1000)").unsafeCast<dynamic>()
+    val opts = js("({ day: 'numeric', month: 'short' })")
+    val s0 = js("d0.toLocaleDateString('ru-RU', opts)").unsafeCast<String>()
+    val s6 = js("d6.toLocaleDateString('ru-RU', opts)").unsafeCast<String>()
+    return "$s0 — $s6"
+}
+
 private fun formatFixed1(x: Double): String =
     js("(function(x){ return Number(x).toFixed(1); })")(x).unsafeCast<String>()
 
@@ -4322,8 +4455,8 @@ private fun detachInstructorProfileEarnedCalcMount() {
     }
 }
 
-private fun instructorProfileEarnedCalcHtml(totalEarned: Int): String {
-    val tokensForCalc = instructorProfileCalcTokensDisplayed(totalEarned)
+private fun instructorProfileEarnedCalcHtml(defaultTokenBalance: Int): String {
+    val tokensForCalc = instructorProfileCalcTokensDisplayed(defaultTokenBalance)
     val tokensAttr = tokensForCalc.escapeHtml()
     val rubAttr = instructorProfileCalcRubInput.escapeHtml()
     val rubTotalLabel = instructorProfileCalcRubTotalLabel(tokensForCalc, instructorProfileCalcRubInput).escapeHtml()
@@ -4355,12 +4488,11 @@ private fun reattachInstructorProfileEarnedCalcMount(root: Element?) {
         }
         return
     }
-    val hist = appState.historyBalance
-    val totalEarned = hist.filter { it.type == "credit" }.sumOf { it.amount }
+    val calcDefaultTokens = appState.user?.balance ?: 0
     var mount = instructorProfileEarnedCalcMountEl
     if (mount == null) {
         val wrap = document.createElement("div")
-        wrap.innerHTML = instructorProfileEarnedCalcHtml(totalEarned)
+        wrap.innerHTML = instructorProfileEarnedCalcHtml(calcDefaultTokens)
         mount = wrap.firstElementChild as? Element
         instructorProfileEarnedCalcMountEl = mount
     } else {
@@ -4432,9 +4564,9 @@ private fun scheduleInstructorEarnedRubDisplayUpdate() {
     }
 }
 
-private fun instructorProfileCalcTokensDisplayed(totalEarned: Int): String =
+private fun instructorProfileCalcTokensDisplayed(defaultTokenBalance: Int): String =
     when (instructorProfileCalcTokensOverride) {
-        null -> totalEarned.toString()
+        null -> defaultTokenBalance.coerceAtLeast(0).toString()
         else -> instructorProfileCalcTokensOverride!!
     }
 
@@ -4568,61 +4700,106 @@ private fun renderInstructorProfileStatsContent(user: User, version: String): St
     val pieInner = if (totalRated > 0) {
         """<div class="sd-instr-rating-pie" style="background:$pieBg"></div><div class="sd-instr-rating-pie-center">$starSvgLarge<span class="sd-instr-rating-avg-overlay">$averageStr</span></div>"""
     } else """<p class="sd-muted sd-instr-no-ratings">Нет оценок</p>"""
-    val completedForWeek = sessions.filter { it.status == "completed" }
+    val weekOffsetBack = appState.instructorProfileWeekOffset.coerceIn(0, INSTRUCTOR_PROFILE_MAX_WEEK_OFFSET)
+    val (weekStartMs, weekEndMs) = weekRangeMsForOffset(weekOffsetBack)
+    val weekRangeLabel = formatWeekRangeLabelRu(weekStartMs)
+    val completedAll = sessions.filter { it.status == "completed" }
+    val completedForWeek = completedAll.filter { s ->
+        val t = s.completedAtMillis ?: s.startTimeMillis ?: return@filter false
+        t >= weekStartMs && t < weekEndMs
+    }
     val dayCountsByWeekday = IntArray(7)
     completedForWeek.forEach { s ->
         val t = s.completedAtMillis ?: s.startTimeMillis ?: return@forEach
         dayCountsByWeekday[weekdayIndexMon0Local(t)]++
     }
-    val maxDow = dayCountsByWeekday.maxOrNull()?.coerceAtLeast(1) ?: 1
     val dowShort = listOf("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
-    val weekFreqHtml = if (completedForWeek.isEmpty()) {
+    /** Макс. занятий в день по правилам — 8; шкала по вертикали 0…8 (подписи 8…1). */
+    val weekFreqMaxY = 8
+    val prevWeekDisabled = weekOffsetBack >= INSTRUCTOR_PROFILE_MAX_WEEK_OFFSET
+    val nextWeekDisabled = weekOffsetBack <= 0
+    val prevWeekAttr = if (prevWeekDisabled) """ disabled""" else ""
+    val nextWeekAttr = if (nextWeekDisabled) """ disabled""" else ""
+    val weekNavHtml = if (completedAll.isEmpty()) {
+        ""
+    } else {
+        """
+        <div class="sd-instr-week-nav" role="group" aria-label="Неделя для графика">
+            <button type="button" class="sd-instr-week-btn" id="sd-instr-week-prev" aria-label="Предыдущая неделя"$prevWeekAttr>
+                <svg class="sd-instr-week-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+            </button>
+            <span class="sd-instr-week-label">${weekRangeLabel.escapeHtml()}</span>
+            <button type="button" class="sd-instr-week-btn" id="sd-instr-week-next" aria-label="Следующая неделя"$nextWeekAttr>
+                <svg class="sd-instr-week-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+            </button>
+        </div>"""
+    }
+    val weekFreqHtml = if (completedAll.isEmpty()) {
         """<p class="sd-muted">Нет данных</p>"""
     } else {
         val vbW = 560
         val vbH = 130
-        val paddingLeft = 20
-        val paddingRight = 10
         val paddingTop = 12
         val paddingBottom = 30
-        val plotW = vbW - paddingLeft - paddingRight
+        val leftPad = 22
+        val rightPad = 8
         val plotH = vbH - paddingTop - paddingBottom
-        val maxD = maxDow.coerceAtLeast(1)
+        val plotChartW = vbW - leftPad - rightPad
+
+        fun yForCount(cnt: Int): Double {
+            val c = cnt.coerceIn(0, weekFreqMaxY)
+            return paddingTop + plotH * (1.0 - c.toDouble() / weekFreqMaxY.toDouble())
+        }
 
         val polyPoints = (0 until 7).joinToString(" ") { i ->
-            val cnt = dayCountsByWeekday[i]
-            val x = paddingLeft + plotW * (i.toDouble() / 6.0)
-            val y = paddingTop + plotH * (1.0 - (cnt.toDouble() / maxD.toDouble()))
-            "${x.toInt()},${y.toInt()}"
+            val cnt = dayCountsByWeekday[i].coerceIn(0, weekFreqMaxY)
+            val x = leftPad + plotChartW * ((i + 0.5) / 7.0)
+            val y = kotlin.math.round(yForCount(cnt)).toInt()
+            "${x.toInt()},$y"
         }
 
         val circlesHtml = (0 until 7).joinToString("") { i ->
-            val cnt = dayCountsByWeekday[i]
-            val x = paddingLeft + plotW * (i.toDouble() / 6.0)
-            val y = paddingTop + plotH * (1.0 - (cnt.toDouble() / maxD.toDouble()))
+            val cnt = dayCountsByWeekday[i].coerceIn(0, weekFreqMaxY)
+            val x = kotlin.math.round(leftPad + plotChartW * ((i + 0.5) / 7.0)).toInt()
+            val y = kotlin.math.round(yForCount(cnt)).toInt()
             val fill = if (cnt == 0) "#ffffff" else "#1565C0"
             val stroke = if (cnt == 0) "#1565C0" else "#1565C0"
             val r = if (cnt == 0) 2 else 3
-            """<circle cx="${x.toInt()}" cy="${y.toInt()}" r="$r" fill="$fill" stroke="$stroke" stroke-width="2">
+            """<circle cx="$x" cy="$y" r="$r" fill="$fill" stroke="$stroke" stroke-width="2">
                     <title>$cnt занятий</title>
                </circle>"""
         }
 
         val xLabelsHtml = (0 until 7).joinToString("") { i ->
-            """<div class="sd-cadet-point-x-label" aria-hidden="true"><span>${dowShort[i]}</span><span class="sd-cadet-point-x-cnt">${
+            """<div class="sd-cadet-point-x-label sd-instr-dow-x-label-col" aria-hidden="true"><span class="sd-cadet-point-x-cnt">${
                 dayCountsByWeekday[i]
-            }</span></div>"""
+            }</span><span class="sd-instr-dow-x-day">${dowShort[i]}</span></div>"""
         }
 
-        """<div class="sd-cadet-dow-chart-wrap">
-            <div class="sd-cadet-dow-y-labels" aria-hidden="true"><span>$maxDow</span><span>0</span></div>
-            <div class="sd-cadet-point-chart">
+        val yAxisTextsHtml = (weekFreqMaxY downTo 1).joinToString("") { k ->
+            val y = kotlin.math.round(yForCount(k)).toInt()
+            """<text x="${leftPad - 6}" y="${y + 4}" text-anchor="end" font-size="11" fill="#607D8B" font-weight="600">$k</text>"""
+        }
+
+        val gridStroke = "rgba(21,101,192,0.20)"
+        val gridLinesHtml = (1..weekFreqMaxY).joinToString("") { k ->
+            val y = kotlin.math.round(yForCount(k)).toInt()
+            """<line x1="$leftPad" y1="$y" x2="${leftPad + plotChartW}" y2="$y" stroke="$gridStroke" stroke-width="1"></line>"""
+        } + run {
+            val y0 = kotlin.math.round(yForCount(0)).toInt()
+            """<line x1="$leftPad" y1="$y0" x2="${leftPad + plotChartW}" y2="$y0" stroke="$gridStroke" stroke-width="1"></line>"""
+        }
+
+        """<div class="sd-instr-dow-chart-grid">
+            <div class="sd-cadet-point-svg-wrap">
                 <svg class="sd-cadet-point-svg" viewBox="0 0 $vbW $vbH" preserveAspectRatio="none" role="img" aria-label="Частота вождений по дням">
+                    $gridLinesHtml
+                    $yAxisTextsHtml
                     <polyline points="$polyPoints" fill="none" stroke="#1565C0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
                     $circlesHtml
                 </svg>
-                <div class="sd-cadet-point-x-labels">$xLabelsHtml</div>
             </div>
+            <div class="sd-cadet-point-x-labels sd-instr-dow-x-labels">$xLabelsHtml</div>
         </div>"""
     }
     val cancelled = sessions.filter { it.status == "cancelledByCadet" }
@@ -4678,7 +4855,8 @@ private fun renderInstructorProfileStatsContent(user: User, version: String): St
         </div>
         <div class="sd-instr-stat-card">
             <h3 class="sd-instr-stat-heading">Частота вождений в неделю:</h3>
-            <p class="sd-muted sd-instr-chart-hint">Вертикаль — число занятий, по горизонтали — день недели (все завершённые вождения).</p>
+            $weekNavHtml
+            <p class="sd-muted sd-instr-chart-hint">Вертикаль — шкала 1–8 занятий в день, по горизонтали — дни недели (завершённые вождения за выбранную неделю).</p>
             <div class="sd-cadet-week-chart sd-cadet-week-chart-dow">$weekFreqHtml</div>
         </div>
         <div class="sd-instr-stat-card">
@@ -4794,7 +4972,7 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
                 val bookedByCadet = s.openWindowId.isNotBlank()
                 val waitingCadetConfirm = s.status == "scheduled" && s.startRequestedByInstructor
                 val statusText = when {
-                    s.status == "completed" && s.instructorRating == 0 -> "Вождение завершено — поставьте оценку курсанту ($cadetNameEsc)"
+                    s.status == "completed" && s.instructorRating == 0 -> "Вождение завершено ($cadetNameEsc) — оценка не выставлена"
                     bookedByCadet && !s.instructorConfirmed -> "Курсант $cadetNameEsc забронировал — ожидает вашего подтверждения"
                     !s.instructorConfirmed -> "Ожидает подтверждения записи курсантом ($cadetNameEsc)"
                     s.status == "inProgress" -> "В процессе ($cadetNameEsc)"
@@ -4878,16 +5056,9 @@ private fun renderInstructorHomeContent(user: User, version: String): String {
 
 /** Карточка курсанта на главной (с кнопкой «Профиль») и на экране статистики. */
 private fun cadetHomeProfileCardHtml(user: User, showProfileShortcut: Boolean): String {
-    val inst = appState.cadetInstructor
-    val instText = when {
-        inst != null -> inst.fullName.escapeHtml()
-        user.assignedInstructorId != null -> "загрузка…"
-        else -> "не назначен"
-    }
     val svgEmail = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>"""
     val svgPhoneP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>"""
     val svgTicketP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M22 10V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2s.9-2 2-2zm-2-1.46c-1.19.69-2 1.99-2 3.46s.81 2.77 2 3.46V18H4v-2.54c1.19-.69 2-1.99 2-3.46 0-1.48-.8-2.77-1.99-3.46L4 6h16v2.54z"/></svg>"""
-    val svgInstructor = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>"""
     val svgDriving = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/></svg>"""
     val completedDrivingsCount = (appState.recordingSessions + appState.historySessions).distinctBy { it.id }.count { it.status == "completed" }
     val cadetRoleName = when {
@@ -4904,7 +5075,7 @@ private fun cadetHomeProfileCardHtml(user: User, showProfileShortcut: Boolean): 
     val wrapOpen = if (showProfileShortcut) """<div class="sd-instructor-profile-card-wrap">""" else ""
     val wrapClose = if (showProfileShortcut) """</div>""" else ""
     val card = """
-        <div class="sd-profile-card">
+        <div class="sd-profile-card sd-profile-card-cadet">
             <div class="sd-profile-accent-bar"></div>
             <div class="sd-profile-hero">
                 $cadetProfileAvatarHtml
@@ -4916,7 +5087,6 @@ private fun cadetHomeProfileCardHtml(user: User, showProfileShortcut: Boolean): 
             <div class="sd-profile-info-rows">
                 <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgEmail</span><span class="sd-profile-info-label">Email</span><span class="sd-profile-info-value">${(user.email.ifBlank { "—" }).escapeHtml()}</span></div>
                 <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgPhoneP</span><span class="sd-profile-info-label">Телефон</span><span class="sd-profile-info-value">${(user.phone.ifBlank { "—" }).escapeHtml()}</span></div>
-                <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgInstructor</span><span class="sd-profile-info-label">Инструктор</span><span class="sd-profile-info-value">$instText</span></div>
                 <div class="sd-profile-info-row"><span class="sd-profile-info-icon">$svgDriving</span><span class="sd-profile-info-label">Вождений завершено</span><span class="sd-profile-info-value">${completedDrivingsCount} (${cadetRoleName})</span></div>
                 <div class="sd-profile-info-row sd-profile-info-row-balance"><span class="sd-profile-info-icon">$svgTicketP</span><span class="sd-profile-info-label">Талоны</span><span class="sd-balance-badge">${user.balance}</span></div>
             </div>
@@ -7376,6 +7546,7 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                 el.setAttribute("aria-hidden", "true")
             }
             signOutAndClearPresence()
+            resetInstructorSessionSoundBaseline()
             return@addEventListener
         }
         if (target.id == "sd-signout-confirm-modal") {
@@ -8192,6 +8363,7 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                 if (appState.user?.role == "instructor" && idx != 0) {
                     instructorMyCadetsSectionOpen = myCadetsOpenVal
                     instructorHomeSubView = "main"
+                    instructorProfileWeekOffset = 0
                 }
                 if (appState.user?.role == "cadet" && idx != 0) {
                     cadetHomeSubView = "main"
@@ -9097,11 +9269,13 @@ private fun attachListeners(root: org.w3c.dom.Element) {
             })
             document.getElementById("sd-btn-signout-pending")?.addEventListener("click", {
                 signOutAndClearPresence()
+                resetInstructorSessionSoundBaseline()
             })
         }
         AppScreen.ProfileNotFound -> {
             document.getElementById("sd-btn-signout-profile-not-found")?.addEventListener("click", {
                 signOutAndClearPresence()
+                resetInstructorSessionSoundBaseline()
             })
         }
         AppScreen.Admin, AppScreen.Instructor, AppScreen.Cadet -> {
@@ -9165,6 +9339,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                         getOpenWindowsForInstructor(usr.id) { wins ->
                             getSessionsForInstructor(usr.id) { sess ->
                                 window.clearTimeout(tid)
+                                maybePlayInstructorSessionSounds(appState.recordingSessions, sess)
                                 updateState { recordingOpenWindows = wins; recordingSessions = sess; recordingLoading = false }
                                 getUsers { list -> updateState { instructorCadets = list.filter { usr.assignedCadets.contains(it.id) } } }
                             }
@@ -9184,6 +9359,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                                     val newSig = recordingPollSignature(wins, sess)
                                     val oldSig = recordingPollSignature(appState.recordingOpenWindows, appState.recordingSessions)
                                     if (newSig == oldSig) return@getSessionsForInstructor
+                                    maybePlayInstructorSessionSounds(appState.recordingSessions, sess)
                                     updateState { recordingOpenWindows = wins; recordingSessions = sess }
                                 }
                             }
@@ -9381,21 +9557,32 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     val uid = usr.id
                     resetInstructorProfileCalculatorCache()
                     if (appState.historyBalance.isNotEmpty()) {
-                        updateState { instructorHomeSubView = "profile" }
+                        updateState { instructorHomeSubView = "profile"; instructorProfileWeekOffset = 0 }
                     } else {
                         getBalanceHistory(uid) { hist ->
-                            updateState { historyBalance = hist; instructorHomeSubView = "profile" }
+                            updateState { historyBalance = hist; instructorHomeSubView = "profile"; instructorProfileWeekOffset = 0 }
                         }
                     }
                 })
                 document.getElementById("sd-instructor-profile-back")?.addEventListener("click", {
                     resetInstructorProfileCalculatorCache()
-                    updateState { instructorHomeSubView = "main" }
+                    updateState { instructorHomeSubView = "main"; instructorProfileWeekOffset = 0 }
                     // Сразу подтянуть сессии (курсант мог нажать «Начать», пока открыт профиль).
                     getOpenWindowsForInstructor(usr.id) { wins ->
                         getSessionsForInstructor(usr.id) { sess ->
+                            maybePlayInstructorSessionSounds(appState.recordingSessions, sess)
                             updateState { recordingOpenWindows = wins; recordingSessions = sess }
                         }
+                    }
+                })
+                document.getElementById("sd-instr-week-prev")?.addEventListener("click", {
+                    if (appState.instructorProfileWeekOffset < INSTRUCTOR_PROFILE_MAX_WEEK_OFFSET) {
+                        updateState { instructorProfileWeekOffset = instructorProfileWeekOffset + 1 }
+                    }
+                })
+                document.getElementById("sd-instr-week-next")?.addEventListener("click", {
+                    if (appState.instructorProfileWeekOffset > 0) {
+                        updateState { instructorProfileWeekOffset = instructorProfileWeekOffset - 1 }
                     }
                 })
                 val homeConfirmNodes = root.querySelectorAll(".sd-home-schedule-confirm")
@@ -9746,6 +9933,16 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 val btn = cancelSessionNodes.item(k) as? org.w3c.dom.Element ?: continue
                 val sessionId = btn.getAttribute("data-session-id") ?: continue
                 btn.addEventListener("click", {
+                    if (usr.role == "cadet") {
+                        val sess = appState.recordingSessions.find { it.id == sessionId }
+                        if (cadetCancelBlockedWithinSixHoursOfStart(sess?.startTimeMillis)) {
+                            document.getElementById("sd-cadet-cancel-six-hours-modal")?.let { m ->
+                                m.classList.remove("sd-hidden")
+                                m.setAttribute("aria-hidden", "false")
+                            }
+                            return@addEventListener
+                        }
+                    }
                     document.getElementById("sd-rec-cancel-session-confirm-modal")?.let { modal ->
                         modal.asDynamic().dataset["sessionId"] = sessionId
                         modal.classList.remove("sd-hidden")

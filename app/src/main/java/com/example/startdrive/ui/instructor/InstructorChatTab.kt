@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.item
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -45,6 +46,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -78,11 +80,18 @@ fun InstructorChatTab(
     val chatRepo = ChatRepository
     var cadets by remember { mutableStateOf<List<User>>(emptyList()) }
     val adminUsers by userRepo.usersByRole("admin").collectAsState(initial = emptyList())
+    val allInstructors by userRepo.usersByRole("instructor").collectAsState(initial = emptyList())
     LaunchedEffect(currentUserId) {
         val inst = userRepo.getUser(currentUserId)
         cadets = inst?.assignedCadets?.mapNotNull { userRepo.getUser(it) } ?: emptyList()
     }
-    val contacts = listOfNotNull(adminUsers.firstOrNull()) + cadets
+    val peerInstructors = remember(allInstructors, currentUserId) {
+        allInstructors.filter { it.id != currentUserId }.sortedBy { it.fullName }
+    }
+    val admin = adminUsers.firstOrNull()
+    val contacts = remember(admin, peerInstructors, cadets) {
+        (listOfNotNull(admin) + peerInstructors + cadets).distinctBy { it.id }
+    }
     var messageText by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -100,74 +109,40 @@ fun InstructorChatTab(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
-                items(contacts, key = { it.id }) { u ->
-                    val online by chatRepo.presence(u.id).collectAsState(initial = false)
-                    val unread by chatRepo.unreadCount(chatRepo.chatRoomId(currentUserId, u.id), currentUserId).collectAsState(0)
-                    val avatarColor = colorForContactId(u.id)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSelectedContactIdChange(u.id) }
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(56.dp)
-                                .clip(CircleShape)
-                                .then(
-                                    if (!u.chatAvatarUrl.isNullOrBlank()) Modifier
-                                    else Modifier.background(avatarColor)
-                                ),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            if (!u.chatAvatarUrl.isNullOrBlank()) {
-                                AsyncImage(
-                                    model = u.chatAvatarUrl,
-                                    contentDescription = null,
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Crop,
-                                )
-                            } else {
-                                Text(
-                                    u.initials(),
-                                    style = MaterialTheme.typography.titleLarge,
-                                    color = Color.White,
-                                )
-                            }
-                        }
-                        Column(
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(start = 16.dp),
-                        ) {
-                            Text(
-                                u.fullName,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                            )
-                            Text(
-                                if (online) "в сети" else "не в сети",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (online) OnlineGreen else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        if (unread > 0) {
-                            Box(
-                                modifier = Modifier
-                                    .size(24.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.error),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    if (unread > 99) "99+" else "$unread",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onError,
-                                )
-                            }
-                        }
+                if (peerInstructors.isNotEmpty()) {
+                    item(key = "section_instructors") {
+                        InstructorChatContactsSectionTitle("Инструкторы")
+                    }
+                    items(peerInstructors, key = { it.id }) { u ->
+                        InstructorChatContactRow(
+                            user = u,
+                            currentUserId = currentUserId,
+                            onSelectContact = onSelectedContactIdChange,
+                        )
+                    }
+                }
+                if (cadets.isNotEmpty()) {
+                    item(key = "section_cadets") {
+                        InstructorChatContactsSectionTitle("Курсанты")
+                    }
+                    items(cadets, key = { it.id }) { u ->
+                        InstructorChatContactRow(
+                            user = u,
+                            currentUserId = currentUserId,
+                            onSelectContact = onSelectedContactIdChange,
+                        )
+                    }
+                }
+                if (admin != null) {
+                    item(key = "section_other") {
+                        InstructorChatContactsSectionTitle("Другие")
+                    }
+                    item(key = admin.id) {
+                        InstructorChatContactRow(
+                            user = admin,
+                            currentUserId = currentUserId,
+                            onSelectContact = onSelectedContactIdChange,
+                        )
                     }
                 }
             }
@@ -367,6 +342,94 @@ fun InstructorChatTab(
                 )
             }
         }
+        }
+    }
+}
+
+@Composable
+private fun InstructorChatContactsSectionTitle(title: String) {
+    Text(
+        title,
+        modifier = Modifier.padding(horizontal = 16.dp, top = 12.dp, bottom = 4.dp),
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.primary,
+    )
+}
+
+@Composable
+private fun InstructorChatContactRow(
+    user: User,
+    currentUserId: String,
+    onSelectContact: (String?) -> Unit,
+) {
+    val chatRepo = ChatRepository
+    val online by chatRepo.presence(user.id).collectAsState(initial = false)
+    val unread by chatRepo.unreadCount(chatRepo.chatRoomId(currentUserId, user.id), currentUserId).collectAsState(0)
+    val avatarColor = colorForContactId(user.id)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onSelectContact(user.id) }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(CircleShape)
+                .then(
+                    if (!user.chatAvatarUrl.isNullOrBlank()) Modifier
+                    else Modifier.background(avatarColor),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (!user.chatAvatarUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = user.chatAvatarUrl,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Text(
+                    user.initials(),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Color.White,
+                )
+            }
+        }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 16.dp),
+        ) {
+            Text(
+                user.fullName,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+            )
+            Text(
+                if (online) "в сети" else "не в сети",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (online) OnlineGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (unread > 0) {
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.error),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (unread > 99) "99+" else "$unread",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onError,
+                )
+            }
         }
     }
 }

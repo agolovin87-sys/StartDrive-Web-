@@ -572,14 +572,14 @@ private fun CadetProfileCard(cadet: User, completedDrivingsCount: Int = 0, balan
             TopLeftCornerShimmer(
                 modifier = Modifier.align(Alignment.TopStart),
                 cornerSizeDp = 140.dp,
-                highlightAlpha = 0.32f,
-                durationMillis = 2200,
+                highlightAlpha = 0.24f,
+                durationMillis = 2400,
             )
         }
         AnimatedGlossOverlay(
             modifier = Modifier.matchParentSize(),
-            highlightAlpha = 0.18f,
-            durationMillis = 2600,
+            highlightAlpha = 0.12f,
+            durationMillis = 2800,
         )
         Card(
             modifier = Modifier.fillMaxWidth(),

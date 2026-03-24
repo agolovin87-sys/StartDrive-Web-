@@ -546,6 +546,22 @@ body {
     backface-visibility: hidden;
     animation: sd-profile-card-shine-x 14s linear infinite alternate;
 }
+/* Карточка профиля курсанта — тот же блик, но слабее перелив */
+.sd-profile-card.sd-profile-card-cadet::before {
+    width: 44%;
+    min-width: 150px;
+    background: linear-gradient(
+        100deg,
+        rgba(255, 255, 255, 0) 0%,
+        rgba(255, 255, 255, 0) 14%,
+        rgba(255, 255, 255, 0.14) 32%,
+        rgba(255, 255, 255, 0.42) 50%,
+        rgba(255, 255, 255, 0.14) 68%,
+        rgba(255, 255, 255, 0) 86%,
+        rgba(255, 255, 255, 0) 100%
+    );
+    animation: sd-profile-card-shine-x 18s linear infinite alternate;
+}
 @media (prefers-reduced-motion: reduce) {
     .sd-profile-card::before,
     .sd-cadet-card::before {
@@ -1171,6 +1187,100 @@ a.sd-cadet-icon-btn:active {
     font-weight: 700;
     color: var(--sd-text);
 }
+/* Переключатель недели у графика «Частота вождений» — компактная панель в стиле приложения */
+.sd-instr-week-nav {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0;
+    margin: 0 0 12px 0;
+    padding: 5px;
+    max-width: 100%;
+    background: linear-gradient(180deg, rgba(25, 118, 210, 0.09) 0%, rgba(25, 118, 210, 0.04) 100%);
+    border: 1px solid rgba(25, 118, 210, 0.22);
+    border-radius: 14px;
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.75),
+        0 1px 2px rgba(25, 118, 210, 0.06);
+}
+.sd-instr-week-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0 6px;
+    padding: 9px 12px;
+    text-align: center;
+    font-size: 0.875rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--sd-text);
+    line-height: 1.25;
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(25, 118, 210, 0.12);
+    border-radius: 10px;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+.sd-instr-week-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    margin: 0;
+    padding: 0;
+    font: inherit;
+    line-height: 0;
+    color: var(--sd-primary);
+    background: rgba(255, 255, 255, 0.65);
+    border: 1px solid rgba(25, 118, 210, 0.18);
+    border-radius: 11px;
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    transition:
+        background 0.18s ease,
+        color 0.18s ease,
+        border-color 0.18s ease,
+        box-shadow 0.18s ease,
+        transform 0.12s ease;
+}
+.sd-instr-week-btn .sd-instr-week-chevron {
+    display: block;
+    flex-shrink: 0;
+}
+.sd-instr-week-btn:hover:not(:disabled) {
+    color: var(--sd-primary-dark);
+    background: rgba(255, 255, 255, 0.95);
+    border-color: rgba(25, 118, 210, 0.35);
+    box-shadow: 0 2px 8px rgba(25, 118, 210, 0.12);
+}
+.sd-instr-week-btn:active:not(:disabled) {
+    transform: scale(0.96);
+}
+.sd-instr-week-btn:focus-visible {
+    outline: 2px solid var(--sd-primary-light);
+    outline-offset: 2px;
+}
+.sd-instr-week-btn:disabled {
+    opacity: 0.38;
+    cursor: not-allowed;
+    box-shadow: none;
+    transform: none;
+}
+@media (max-width: 360px) {
+    .sd-instr-week-nav {
+        flex-wrap: wrap;
+        justify-content: center;
+        row-gap: 8px;
+    }
+    .sd-instr-week-label {
+        order: -1;
+        flex: 1 1 100%;
+        margin: 0 0 2px 0;
+    }
+}
 .sd-instr-chart-hint,
 .sd-instr-chart-avg {
     margin: 0 0 10px 0;
@@ -1411,6 +1521,60 @@ a.sd-cadet-icon-btn:active {
     gap: 8px;
     width: 100%;
     max-width: 100%;
+}
+/* Инструктор — частота по дням: шкала 8…1 внутри SVG; подписи дней выровнены с полем графика */
+.sd-instr-dow-chart-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    gap: 6px 0;
+    width: 100%;
+    align-items: stretch;
+}
+.sd-instr-dow-x-labels {
+    padding: 0;
+    gap: 0;
+    padding-left: calc(100% * 22 / 560);
+    padding-right: calc(100% * 8 / 560);
+    box-sizing: border-box;
+}
+/* Число под графиком сверху — под точкой; колонки ровно 1/7 ширины */
+.sd-cadet-point-x-labels.sd-instr-dow-x-labels .sd-cadet-point-x-label {
+    min-width: 0;
+}
+.sd-instr-dow-x-label-col {
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 2px;
+}
+.sd-instr-dow-x-label-col .sd-cadet-point-x-cnt {
+    margin-top: 0;
+}
+.sd-instr-dow-x-day {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--sd-text-secondary);
+}
+.sd-cadet-point-svg-wrap {
+    width: 100%;
+    aspect-ratio: 560 / 130;
+    min-width: 0;
+}
+.sd-cadet-point-svg-wrap .sd-cadet-point-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+.sd-instr-dow-y-labels {
+    min-width: 1.25rem;
+    padding-bottom: 0;
+    min-height: 0 !important;
+    align-self: stretch;
+}
+.sd-cadet-dow-y-labels.sd-instr-dow-y-labels span {
+    font-size: 0.65rem;
+    line-height: 1;
 }
 .sd-cadet-point-chart {
     flex: 1;

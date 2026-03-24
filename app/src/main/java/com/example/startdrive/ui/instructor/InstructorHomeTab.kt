@@ -149,7 +149,7 @@ fun InstructorProfileTab(
             ProfileCard(instructor = instructor, balanceBadgeScale = balanceBadgeScale)
         }
         item {
-            InstructorTotalEarnedCard(balanceHistory = balanceHistory)
+            InstructorTotalEarnedCard(balanceHistory = balanceHistory, currentBalance = instructor.balance)
         }
         item {
             InstructorCompletedDrivingsCard(completedCount = completedCount)
@@ -960,22 +960,20 @@ private fun DrivingTimerBlock(
         val ratingButtonYellow = Color(0xFFFFEB3B)
         AlertDialog(
             onDismissRequest = { },
-            containerColor = ratingDialogLightBlue,
-            title = {
-                Text(
-                    "Поставьте оценку курсанту:",
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Center,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                )
-            },
+            confirmButton = { },
             text = {
                 Column(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
+                    Text(
+                        "Поставьте оценку курсанту:",
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly,
@@ -1020,7 +1018,7 @@ private fun DrivingTimerBlock(
                     }
                 }
             },
-            confirmButton = { },
+            containerColor = ratingDialogLightBlue,
         )
     }
 

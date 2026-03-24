@@ -589,11 +589,22 @@ fun cancelByInstructor(sessionId: String, reason: String, callback: (String?) ->
     }
 }
 
+private fun cadetCancelBlockedWithinSixHours(startTimeMillis: Long?): Boolean {
+    if (startTimeMillis == null) return false
+    val now = js("Date.now()").unsafeCast<Double>().toLong()
+    if (startTimeMillis <= now) return true
+    return (startTimeMillis - now) <= 6L * 60 * 60 * 1000
+}
+
 /** Отменить вождение курсантом: освободить окно (если было), поставить статус cancelledByCadet. */
 fun cancelByCadet(sessionId: String, callback: (String?) -> Unit) {
     getSession(sessionId) { session ->
         if (session == null) {
             callback("Сессия не найдена")
+            return@getSession
+        }
+        if (cadetCancelBlockedWithinSixHours(session.startTimeMillis)) {
+            callback("Нельзя отменить за 6 часов до вождения. Сообщите своему инструктору или администратору.")
             return@getSession
         }
         val firestore = getFirestore()

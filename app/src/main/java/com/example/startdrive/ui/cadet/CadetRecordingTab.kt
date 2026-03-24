@@ -53,6 +53,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
+import android.widget.Toast
 import com.example.startdrive.data.model.DrivingSession
 import com.example.startdrive.data.model.User
 import com.example.startdrive.data.repository.DrivingRepository
@@ -107,6 +109,7 @@ fun CadetRecordingTab(cadet: User) {
     val requests = sessions.filter { it.status == "scheduled" }
     val openWindows by drivingRepo.openWindowsForCadet(instructorId).collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var sessionIdToConfirmCancel by remember { mutableStateOf<String?>(null) }
     var showNightCancelBlockedDialog by remember { mutableStateOf(false) }
     var showSixHoursCancelBlockedDialog by remember { mutableStateOf(false) }
@@ -205,8 +208,19 @@ fun CadetRecordingTab(cadet: User) {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        scope.launch { drivingRepo.cancelByCadet(sessionId) }
-                        sessionIdToConfirmCancel = null
+                        scope.launch {
+                            try {
+                                drivingRepo.cancelByCadet(sessionId)
+                                sessionIdToConfirmCancel = null
+                            } catch (e: IllegalStateException) {
+                                Toast.makeText(
+                                    context,
+                                    e.message ?: "Отмена невозможна",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                                sessionIdToConfirmCancel = null
+                            }
+                        }
                     },
                 ) { Text("Да") }
             },
@@ -230,9 +244,9 @@ fun CadetRecordingTab(cadet: User) {
     if (showSixHoursCancelBlockedDialog) {
         AlertDialog(
             onDismissRequest = { showSixHoursCancelBlockedDialog = false },
-            title = { Text("Отмена вождения отклонена") },
+            title = { Text("Внимание") },
             text = {
-                Text("Отменить можно не позднее 6 часов до начала вождения. Свяжитесь с Вашим инструктором или обратитесь к Администратору.")
+                Text("Нельзя отменить за 6 часов до вождения. Сообщите своему инструктору или администратору.")
             },
             confirmButton = {
                 TextButton(onClick = { showSixHoursCancelBlockedDialog = false }) { Text("OK") }

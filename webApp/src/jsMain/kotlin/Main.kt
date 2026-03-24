@@ -79,6 +79,8 @@ private var groupChatAvatarRootListenersBound = false
 
 /** Сигнатура списка курсантов для блока форм: при частичном обновлении вкладки «Запись» пересобираем только стабильные поля, если изменился состав курсантов. */
 private var lastInstructorRecordingCadetSigForStable: String? = null
+/** Центр нажатой вкладки как % ширины карточки — используется в Genie-анимации (вход/выход из позиции вкладки). */
+private var genieOriginCx: Double = 50.0
 /** Держим состояние модалки «Начать раньше», чтобы она не закрывалась при render()/polling. */
 private var startEarlyModalSessionId: String? = null
 private var startEarlyModalMinutesLeft: Int = 0
@@ -276,6 +278,7 @@ fun main() {
                     (root.unsafeCast<dynamic>().querySelector("nav.sd-tabs") as? org.w3c.dom.Element)?.innerHTML = tabButtons
                     lastTabButtonsMarkup = tabButtons
                 }
+                val tabActuallyChanged = state.selectedTabIndex != lastRenderedTabIndex
                 lastRenderedTabIndex = state.selectedTabIndex
                 if (state.screen == AppScreen.Instructor || state.screen == AppScreen.Cadet || state.screen == AppScreen.Admin) {
                     val notifBtn = root.unsafeCast<dynamic>().querySelector("#sd-btn-notifications") as? org.w3c.dom.Element
@@ -327,6 +330,29 @@ fun main() {
                 if (!skipFullCardRedraw) {
                     detachInstructorProfileEarnedCalcMount()
                     sdCard.innerHTML = cardContent
+                    // Genie enter: разворачивание от позиции нажатой вкладки
+                    if (tabActuallyChanged) {
+                        // Вход: 8-точечный полигон — зеркальное обращение выхода
+                        val ecx = genieOriginCx
+                        val eK1r40 = minOf(100.0, ecx + 38.0); val eK1l40 = maxOf(0.0, ecx - 38.0)
+                        val eK1r75 = minOf(100.0, ecx + 20.0); val eK1l75 = maxOf(0.0, ecx - 20.0)
+                        val eK1rb  = minOf(100.0, ecx +  6.0); val eK1lb  = maxOf(0.0, ecx -  6.0)
+                        val eK2rt  = minOf(100.0, ecx + 26.0); val eK2lt  = maxOf(0.0, ecx - 26.0)
+                        val eK2r40 = minOf(100.0, ecx + 10.0); val eK2l40 = maxOf(0.0, ecx - 10.0)
+                        val eK2r75 = minOf(100.0, ecx +  4.0); val eK2l75 = maxOf(0.0, ecx -  4.0)
+                        val eK2rb  = minOf(100.0, ecx +  1.5); val eK2lb  = maxOf(0.0, ecx -  1.5)
+                        val eK3r   = minOf(100.0, ecx +  1.0); val eK3l   = maxOf(0.0, ecx -  1.0)
+                        val enterKfJson = """[
+                            {"opacity":0,"clipPath":"polygon(${eK3l}% 0%,${eK3r}% 0%,${eK3r}% 40%,${eK3r}% 75%,${eK3r}% 100%,${eK3l}% 100%,${eK3l}% 75%,${eK3l}% 40%)","transform":"translateY(20px)","easing":"cubic-bezier(0,0,0.1,1)"},
+                            {"opacity":1,"clipPath":"polygon(${eK2lt}% 0%,${eK2rt}% 0%,${eK2r40}% 40%,${eK2r75}% 75%,${eK2rb}% 100%,${eK2lb}% 100%,${eK2l75}% 75%,${eK2l40}% 40%)","transform":"translateY(13px)","offset":0.32,"easing":"cubic-bezier(0,0,0.25,1)"},
+                            {"opacity":1,"clipPath":"polygon(0% 0%,100% 0%,${eK1r40}% 40%,${eK1r75}% 75%,${eK1rb}% 100%,${eK1lb}% 100%,${eK1l75}% 75%,${eK1l40}% 40%)","transform":"translateY(3px)","offset":0.68,"easing":"cubic-bezier(0,0,0.3,1)"},
+                            {"opacity":1,"clipPath":"polygon(0% 0%,100% 0%,100% 40%,100% 75%,100% 100%,0% 100%,0% 75%,0% 40%)","transform":"translateY(0)"}
+                        ]"""
+                        sdCard.asDynamic().animate(
+                            JSON.parse<dynamic>(enterKfJson),
+                            js("{duration:520}")
+                        )
+                    }
                     reattachInstructorProfileEarnedCalcMount(root)
                 } else {
                     reattachInstructorProfileEarnedCalcMount(root)
@@ -8334,46 +8360,91 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             if (appState.user?.role == "instructor" && idx != 0) {
                 resetInstructorProfileCalculatorCache()
             }
-            updateState {
-                selectedTabIndex = idx
-                chatSettingsOpen = false
-                notificationsViewOpen = false
-                recordingLoading = false
-                historyLoading = false
-                balanceAdminLoading = false
-                chatContactsLoading = false
-                adminHomeLoading = false
-                adminScheduleLoading = false
-                if (appState.user?.role == "instructor" && idx != 1) {
-                    instructorRecordingBookCadetId = null
-                    instructorRecordingBookDatetimeLocal = ""
-                    instructorRecordingAddDatetimeLocal = ""
-                    instructorRecordingScrollToBookForm = false
+            // Genie exit: clone card as fixed overlay → animate out, switch content instantly underneath
+            val sdCardEl = document.getElementById("sd-card")
+            fun doTabSwitch() {
+                updateState {
+                    selectedTabIndex = idx
+                    chatSettingsOpen = false
+                    notificationsViewOpen = false
+                    recordingLoading = false
+                    historyLoading = false
+                    balanceAdminLoading = false
+                    chatContactsLoading = false
+                    adminHomeLoading = false
+                    adminScheduleLoading = false
+                    if (appState.user?.role == "instructor" && idx != 1) {
+                        instructorRecordingBookCadetId = null
+                        instructorRecordingBookDatetimeLocal = ""
+                        instructorRecordingAddDatetimeLocal = ""
+                        instructorRecordingScrollToBookForm = false
+                    }
+                    if (recordingBaseline != null) recordingTabBadgeBaseline = recordingBaseline
+                    if (appState.user?.role == "admin" && idx != 0) {
+                        adminAddGroupModalOpen = false
+                        adminEditingGroupId = null
+                        adminCadetGroupPickerCadetId = null
+                        adminTrainingVehiclePickerInstructorId = null
+                        adminNewbiesSectionOpen = nOpen
+                        adminInstructorsSectionOpen = iOpen
+                        adminCadetsSectionOpen = cOpen
+                    }
+                    if (appState.user?.role == "instructor" && idx != 0) {
+                        instructorMyCadetsSectionOpen = myCadetsOpenVal
+                        instructorHomeSubView = "main"
+                        instructorProfileWeekOffset = 0
+                    }
+                    if (appState.user?.role == "cadet" && idx != 0) {
+                        cadetHomeSubView = "main"
+                    }
+                    if (appState.user?.role == "admin" && idx != chatTabIdx) {
+                        clearGroupChatAvatarPending()
+                        adminChatGroupModalOpen = false
+                        adminChatGroupEditId = null
+                        adminChatGroupDeleteConfirmId = null
+                    }
                 }
-                if (recordingBaseline != null) recordingTabBadgeBaseline = recordingBaseline
-                if (appState.user?.role == "admin" && idx != 0) {
-                    adminAddGroupModalOpen = false
-                    adminEditingGroupId = null
-                    adminCadetGroupPickerCadetId = null
-                    adminTrainingVehiclePickerInstructorId = null
-                    adminNewbiesSectionOpen = nOpen
-                    adminInstructorsSectionOpen = iOpen
-                    adminCadetsSectionOpen = cOpen
+            }
+            if (sdCardEl != null) {
+                val rect = sdCardEl.getBoundingClientRect()
+                if (rect.width > 0 && rect.height > 0) {
+                    // Вычисляем центр нажатой вкладки как % ширины карточки
+                    val tabRect = tabBtn.getBoundingClientRect()
+                    val tabCx = ((tabRect.left + tabRect.width / 2 - rect.left) / rect.width * 100)
+                        .coerceIn(5.0, 95.0)
+                    genieOriginCx = tabCx
+                    // Выход: 8-точечный полигон — плавные изогнутые края, сужается к вкладке снизу
+                    val cx = tabCx
+                    val xK1r40 = minOf(100.0, cx + 38.0); val xK1l40 = maxOf(0.0, cx - 38.0)
+                    val xK1r75 = minOf(100.0, cx + 20.0); val xK1l75 = maxOf(0.0, cx - 20.0)
+                    val xK1rb  = minOf(100.0, cx +  6.0); val xK1lb  = maxOf(0.0, cx -  6.0)
+                    val xK2rt  = minOf(100.0, cx + 26.0); val xK2lt  = maxOf(0.0, cx - 26.0)
+                    val xK2r40 = minOf(100.0, cx + 10.0); val xK2l40 = maxOf(0.0, cx - 10.0)
+                    val xK2r75 = minOf(100.0, cx +  4.0); val xK2l75 = maxOf(0.0, cx -  4.0)
+                    val xK2rb  = minOf(100.0, cx +  1.5); val xK2lb  = maxOf(0.0, cx -  1.5)
+                    val xK3r   = minOf(100.0, cx +  1.0); val xK3l   = maxOf(0.0, cx -  1.0)
+                    val exitKfJson = """[
+                        {"opacity":1,"clipPath":"polygon(0% 0%,100% 0%,100% 40%,100% 75%,100% 100%,0% 100%,0% 75%,0% 40%)","transform":"translateY(0)","easing":"cubic-bezier(0.3,0,0.7,1)"},
+                        {"opacity":1,"clipPath":"polygon(0% 0%,100% 0%,${xK1r40}% 40%,${xK1r75}% 75%,${xK1rb}% 100%,${xK1lb}% 100%,${xK1l75}% 75%,${xK1l40}% 40%)","transform":"translateY(10px)","offset":0.30,"easing":"cubic-bezier(0.4,0,0.75,1)"},
+                        {"opacity":1,"clipPath":"polygon(${xK2lt}% 0%,${xK2rt}% 0%,${xK2r40}% 40%,${xK2r75}% 75%,${xK2rb}% 100%,${xK2lb}% 100%,${xK2l75}% 75%,${xK2l40}% 40%)","transform":"translateY(26px)","offset":0.68,"easing":"ease-in"},
+                        {"opacity":0,"clipPath":"polygon(${xK3l}% 0%,${xK3r}% 0%,${xK3r}% 40%,${xK3r}% 75%,${xK3r}% 100%,${xK3l}% 100%,${xK3l}% 75%,${xK3l}% 40%)","transform":"translateY(40px)"}
+                    ]"""
+                    // Клон карточки как оверлей для анимации выхода
+                    val clone = sdCardEl.cloneNode(true).asDynamic()
+                    clone.removeAttribute("id")
+                    clone.style.cssText = "position:fixed;top:${rect.top}px;left:${rect.left}px;" +
+                        "width:${rect.width}px;height:${rect.height}px;" +
+                        "margin:0;z-index:9999;pointer-events:none;box-sizing:border-box;" +
+                        "background:var(--sd-card);border-radius:12px;overflow:hidden;"
+                    document.body?.appendChild(clone)
+                    clone.animate(
+                        JSON.parse<dynamic>(exitKfJson),
+                        js("{duration:360, fill:'forwards'}")
+                    ).onfinish = { document.body?.removeChild(clone as org.w3c.dom.Node) }
                 }
-                if (appState.user?.role == "instructor" && idx != 0) {
-                    instructorMyCadetsSectionOpen = myCadetsOpenVal
-                    instructorHomeSubView = "main"
-                    instructorProfileWeekOffset = 0
-                }
-                if (appState.user?.role == "cadet" && idx != 0) {
-                    cadetHomeSubView = "main"
-                }
-                if (appState.user?.role == "admin" && idx != chatTabIdx) {
-                    clearGroupChatAvatarPending()
-                    adminChatGroupModalOpen = false
-                    adminChatGroupEditId = null
-                    adminChatGroupDeleteConfirmId = null
-                }
+                doTabSwitch()
+            } else {
+                doTabSwitch()
             }
             val user = appState.user ?: return@addEventListener
             val tabName = getTabsForUserRole(user.role).getOrNull(idx) ?: ""

@@ -37,6 +37,7 @@ private var storageInstance: dynamic = null
 private var functionsInstance: dynamic = null
 private var messagingInstance: dynamic = null
 private var foregroundMessageHandlerBound = false
+private var fcmTokenRefreshHandlerBound = false
 
 fun initFirebase() {
     if (authInstance != null) return
@@ -145,10 +146,14 @@ fun updateProfile(uid: String, fullName: String, phone: String, callback: (Strin
         .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
 }
 
-/** Сохранить FCM-токен веб-клиента в users/{uid}.fcmToken */
+/**
+ * Сохранить FCM-токен **веб**-клиента в users/{uid}.fcmTokenWeb.
+ * Поле fcmToken зарезервировано под нативный Android — иначе последний вход перезаписывает токен
+ * и push в браузере или в приложении перестаёт приходить.
+ */
 fun setWebFcmToken(uid: String, token: String?, callback: (String?) -> Unit = {}) {
     getFirestore().collection(FirebasePaths.USERS).doc(uid)
-        .update(kotlin.js.json("fcmToken" to (token ?: "")))
+        .update(kotlin.js.json("fcmTokenWeb" to (token ?: "")))
         .then { callback(null) }
         .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
 }
@@ -326,9 +331,16 @@ fun initWebPushForCurrentUser(
             }
         }
         val permission = notificationObj.permission as? String ?: "default"
+        // requestPermission() без жеста пользователя часто блокируется (Chrome/Safari) — токен не получаем.
+        // При входе (onStatus == null) не показываем системный диалог; пользователь жмёт «Включить push» в UI.
+        val userInitiatedPushSetup = onStatus != null
         when (permission) {
             "granted" -> startGetToken()
             "default" -> {
+                if (!userInitiatedPushSetup) {
+                    window.clearTimeout(timeoutId)
+                    finish(false, "")
+                } else {
                 stage = "request-permission"
                 val permissionWithTimeout = js(
                     """(function(n){
@@ -351,6 +363,7 @@ fun initWebPushForCurrentUser(
                     window.clearTimeout(timeoutId)
                     finish(false, msg)
                 }
+                }
             }
             else -> {
                 window.clearTimeout(timeoutId)
@@ -361,9 +374,21 @@ fun initWebPushForCurrentUser(
             foregroundMessageHandlerBound = true
             try {
                 messaging.onMessage { payload: dynamic ->
-                    val title = payload?.notification?.title as? String ?: "StartDrive"
+                    val title = payload?.notification?.title as? String ?: ""
                     val body = payload?.notification?.body as? String ?: ""
                     onForegroundMessage?.invoke(title, body)
+                }
+            } catch (_: Throwable) { }
+        }
+        if (!fcmTokenRefreshHandlerBound) {
+            fcmTokenRefreshHandlerBound = true
+            try {
+                messaging.onTokenRefresh { newToken: dynamic ->
+                    val tk = newToken as? String
+                    val cur = getCurrentUserId()
+                    if (!tk.isNullOrBlank() && cur != null) {
+                        setWebFcmToken(cur, tk) { }
+                    }
                 }
             } catch (_: Throwable) { }
         }
@@ -1261,6 +1286,35 @@ fun adminClearGroupAvatar(groupId: String, callback: (String?) -> Unit) {
         val msg = (e?.message as? String) ?: "Ошибка"
         js("if(typeof console!=='undefined'&&console.error)console.error('adminClearGroupAvatar:', code, msg, e)")
         callback(friendly("$code $msg".trim()))
+    }
+}
+
+/** Тестовый push на свои устройства (Callable sendTestPush). [callback]: ошибка или null, число успешных отправок. */
+fun sendTestPush(callback: (String?, Int) -> Unit) {
+    val functions = getFunctions()
+    val callable = if (functions != null) {
+        val httpsCallableFn = js("require('firebase/functions').httpsCallable")
+        (httpsCallableFn as (dynamic, String) -> dynamic)(functions, "sendTestPush")
+    } else null
+    if (callable == null) {
+        callback("Cloud Functions недоступны", 0)
+        return
+    }
+    (callable as (dynamic) -> dynamic)(js("{}")).then { res: dynamic ->
+        val data = res.data?.unsafeCast<dynamic>()
+        val ok = data?.ok as? Boolean ?: false
+        val sent = (data?.sent as? Number)?.toInt() ?: 0
+        val message = data?.message as? String
+        if (ok && sent > 0) {
+            callback(null, sent)
+        } else {
+            callback(message?.takeIf { it.isNotBlank() } ?: "Не удалось отправить тест", sent)
+        }
+    }.catch { e: dynamic ->
+        val code = (e?.code as? String) ?: ""
+        val msg = (e?.message as? String) ?: "Ошибка"
+        js("if(typeof console!=='undefined'&&console.error)console.error('sendTestPush:', code, msg, e)")
+        callback("$code $msg".trim(), 0)
     }
 }
 

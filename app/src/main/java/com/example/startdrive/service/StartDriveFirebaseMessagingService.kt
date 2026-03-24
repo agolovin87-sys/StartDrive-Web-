@@ -25,15 +25,19 @@ class StartDriveFirebaseMessagingService : FirebaseMessagingService() {
         val body: String
         val dataChannelId: String?
         if (message.notification != null) {
-            title = message.notification!!.title ?: "StartDrive"
+            title = message.notification!!.title.orEmpty()
             body = message.notification!!.body ?: ""
             dataChannelId = message.data["channelId"]
         } else if (message.data.isNotEmpty()) {
-            title = message.data["title"] ?: "StartDrive"
+            title = message.data["title"] ?: ""
             body = message.data["body"] ?: ""
             dataChannelId = message.data["channelId"]
         } else return
-        showNotification(title, body, dataChannelId ?: "startdrive_general")
+        val t = title.trim()
+        val b = body.trim()
+        val displayTitle = t.ifBlank { b }
+        val displayBody = if (t.isBlank()) "" else b
+        showNotification(displayTitle, displayBody, dataChannelId ?: "startdrive_general")
     }
 
     private fun showNotification(title: String, body: String, channelId: String) {

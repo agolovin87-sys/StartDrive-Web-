@@ -410,10 +410,14 @@ fun main() {
         val pushDelegatedHandler = { ev: Event ->
             val targetEl = ev.target as? Element
             if (targetEl != null) {
-                val hit = targetEl.asDynamic().closest?.invoke("#sd-notif-enable-push")
-                if (hit != null && hit != js("undefined")) {
+                val hitEnable = targetEl.asDynamic().closest?.invoke("#sd-notif-enable-push")
+                val hitTest = targetEl.asDynamic().closest?.invoke("#sd-notif-test-push")
+                if (hitEnable != null && hitEnable != js("undefined")) {
                     ev.preventDefault()
                     enableWebPushFromUi()
+                } else if (hitTest != null && hitTest != js("undefined")) {
+                    ev.preventDefault()
+                    testPushFromUi()
                 }
             }
         }
@@ -476,8 +480,14 @@ fun main() {
                 }
                 setPresence(user.id, true)
                 initWebPushForCurrentUser(user.id, onForegroundMessage = { title, body ->
-                    val txt = if (body.isNotBlank()) "$title: $body" else title
-                    showNotification(txt)
+                    val t = title.trim()
+                    val b = body.trim()
+                    val txt = when {
+                        t.isNotEmpty() && b.isNotEmpty() -> "$t\n$b"
+                        b.isNotEmpty() -> b
+                        else -> t
+                    }
+                    if (txt.isNotBlank()) showNotification(txt)
                 })
                 try {
                     userProfileFirestoreUnsubscribe?.invoke()
@@ -2610,6 +2620,33 @@ private fun enableWebPushFromUi() {
         showToast(if (ok) msg else "Push: $msg")
         (document.getElementById("sd-notif-enable-push") as? HTMLButtonElement)?.let { btn ->
             btn.textContent = "Включить push"
+            btn.disabled = false
+        }
+    }
+}
+
+/** Отправить тестовый FCM на свои токены (веб + приложение). */
+private fun testPushFromUi() {
+    val uid = appState.user?.id
+    (document.getElementById("sd-notif-test-push") as? HTMLButtonElement)?.let { btn ->
+        btn.textContent = "Отправка..."
+        btn.disabled = true
+    }
+    if (uid.isNullOrBlank()) {
+        showToast("Сначала войдите в аккаунт")
+        (document.getElementById("sd-notif-test-push") as? HTMLButtonElement)?.let { btn ->
+            btn.textContent = "Тест push"
+            btn.disabled = false
+        }
+        return
+    }
+    sendTestPush { err, sent ->
+        when {
+            err == null -> showToast("Тест отправлен ($sent)")
+            else -> showToast("Push: $err${if (sent > 0) " (частично: $sent)" else ""}")
+        }
+        (document.getElementById("sd-notif-test-push") as? HTMLButtonElement)?.let { btn ->
+            btn.textContent = "Тест push"
             btn.disabled = false
         }
     }
@@ -6374,8 +6411,9 @@ private fun renderNotificationsTabContent(user: User): String {
             <h2 class="sd-notif-title">Уведомления$countStr</h2>
             <button type="button" id="sd-notif-clear" class="sd-btn sd-btn-icon sd-notif-clear-btn" title="Очистить" aria-label="Очистить"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>
         </div>
-        <div style="margin: 8px 0 12px 0;">
+        <div style="margin: 8px 0 12px 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
             <button type="button" id="sd-notif-enable-push" class="sd-btn sd-btn-secondary">Включить push</button>
+            <button type="button" id="sd-notif-test-push" class="sd-btn sd-btn-secondary">Тест push</button>
         </div>
         <div class="sd-notif-list">$listHtml</div>
         <div class="sd-modal-overlay sd-hidden" id="sd-notif-clear-confirm-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вы уверены?</h3><p class="sd-notif-clear-text">Вся история уведомлений будет удалена.</p><p class="sd-modal-actions"><button type="button" id="sd-notif-clear-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-notif-clear-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>
@@ -6386,6 +6424,9 @@ private fun renderNotificationsTabContent(user: User): String {
 private fun attachNotifDropdownListeners(dropdownEl: org.w3c.dom.Element) {
     dropdownEl.querySelector("#sd-notif-enable-push")?.addEventListener("click", {
         enableWebPushFromUi()
+    })
+    dropdownEl.querySelector("#sd-notif-test-push")?.addEventListener("click", {
+        testPushFromUi()
     })
     dropdownEl.querySelector("#sd-notif-clear")?.addEventListener("click", {
         dropdownEl.querySelector("#sd-notif-clear-confirm-modal")?.unsafeCast<org.w3c.dom.HTMLElement>()?.classList?.remove("sd-hidden")

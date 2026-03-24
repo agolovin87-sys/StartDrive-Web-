@@ -165,27 +165,71 @@ function getDefaultStorageBucket() {
 
 const AUTO_START_WAIT_MS = 5 * 60 * 1000;
 
-function getInstructorFcmToken(firestore, instructorId) {
-  return firestore.collection("users").doc(instructorId).get()
-    .then((doc) => doc.data()?.fcmToken || null);
+/** Android пишет FCM в fcmToken, веб (PWA) — в fcmTokenWeb; шлём на все уникальные токены. */
+function collectUserFcmTokens(userData) {
+  const out = [];
+  const add = (t) => {
+    if (t && typeof t === "string") {
+      const s = t.trim();
+      if (s.length > 0 && !out.includes(s)) out.push(s);
+    }
+  };
+  if (!userData) return out;
+  add(userData.fcmToken);
+  add(userData.fcmTokenWeb);
+  return out;
+}
+
+/** Обрезка текста для поля уведомления (лимиты отображения в ОС). */
+function truncateForNotification(s, maxLen = 360) {
+  const t = String(s || "").trim();
+  if (t.length <= maxLen) return t;
+  return t.slice(0, maxLen - 1) + "…";
 }
 
 function sendFcmToInstructor(firestore, instructorId, title, body, data = {}) {
-  return getInstructorFcmToken(firestore, instructorId).then((fcmToken) => {
-    if (!fcmToken) return Promise.resolve();
-    const messaging = getMessaging();
-    return messaging.send(buildFcmMessage(fcmToken, title, body, data));
-  });
+  return firestore
+    .collection("users")
+    .doc(instructorId)
+    .get()
+    .then((doc) => {
+      const tokens = collectUserFcmTokens(doc.data());
+      if (!tokens.length) return Promise.resolve();
+      const messaging = getMessaging();
+      return Promise.all(
+        tokens.map((token) =>
+          messaging.send(buildFcmMessage(token, title, body, data)).catch((err) => {
+            console.error("sendFcmToInstructor", instructorId, err?.message || err);
+          }),
+        ),
+      );
+    });
 }
 
 function buildFcmMessage(token, title, body, data = {}) {
+  const dataFlat = {
+    title: String(title || ""),
+    body: String(body || ""),
+    ...data,
+  };
+  const dataStr = {};
+  for (const [k, v] of Object.entries(dataFlat)) {
+    if (v == null || v === undefined) continue;
+    dataStr[k] = typeof v === "string" ? v : String(v);
+  }
+  const channelId = data.channelId || "startdrive_general";
   return {
     token,
-    notification: { title, body },
-    data: { title, body, ...data },
+    // Не задаём общий notification: на Web он дублируется с webpush.notification (два push подряд).
+    data: dataStr,
     android: {
       priority: "high",
-      notification: { sound: "default", channelId: data.channelId || "startdrive_general" },
+      notification: {
+        title,
+        body,
+        sound: "default",
+        channelId,
+      },
     },
     webpush: {
       headers: { Urgency: "high" },
@@ -335,13 +379,14 @@ async function sendFcmToAllAdmins(firestore, title, body, data = {}, excludeUser
   for (const doc of snap.docs) {
     const uid = doc.id;
     if (exclude.has(uid)) continue;
-    const token = doc.data()?.fcmToken;
-    if (!token) continue;
-    tasks.push(
-      messaging.send(buildFcmMessage(token, title, body, data)).catch((err) => {
-        console.error("sendFcmToAllAdmins token", uid, err?.message || err);
-      }),
-    );
+    const tokens = collectUserFcmTokens(doc.data());
+    for (const token of tokens) {
+      tasks.push(
+        messaging.send(buildFcmMessage(token, title, body, data)).catch((err) => {
+          console.error("sendFcmToAllAdmins token", uid, err?.message || err);
+        }),
+      );
+    }
   }
   await Promise.all(tasks);
 }
@@ -418,12 +463,13 @@ exports.onNewChatMessage = onValueCreated(
       } catch (e) {
         console.error("onNewChatMessage group name", e);
       }
-      const label = roleLabelRu("instructor");
       const when = formatChatMessageDateTimeRu(msg);
+      const groupPushTitle = `Сообщение от: ${senderName}`;
+      const groupPushBody = truncateForNotification(`${when}: ${preview} · ${gName}`, 360);
       await notifyAdminsFcmAndFeed(
         firestore,
-        "Сообщение в группе",
-        `${gName}: ${label} ${senderName} — ${preview} (${when})`,
+        groupPushTitle,
+        groupPushBody,
         {
           type: "chat_group",
           channelId: "startdrive_chat",
@@ -441,52 +487,52 @@ exports.onNewChatMessage = onValueCreated(
     if (!recipientId) return;
 
     const recipientDoc = await firestore.collection("users").doc(recipientId).get();
-    const fcmToken = recipientDoc.data()?.fcmToken;
-    if (fcmToken) {
+    const senderDoc = await firestore.collection("users").doc(senderId).get();
+    const senderRole = (senderDoc.data()?.role && String(senderDoc.data().role).toLowerCase()) || "";
+    const senderShort = await getUserShortName(firestore, senderId);
+    const when = formatChatMessageDateTimeRu(msg);
+    const preview = chatPreviewForAdmin(msg);
+    const chatPushTitle = `Сообщение от: ${senderShort}`;
+    const chatPushBody = truncateForNotification(`${when}: ${preview}`, 360);
+
+    const recipientTokens = collectUserFcmTokens(recipientDoc.data());
+    if (recipientTokens.length > 0) {
       const messaging = getMessaging();
-      const bodyText = text.length > 80 ? text.slice(0, 77) + "…" : text;
-      await messaging.send(buildFcmMessage(
-        fcmToken,
-        "Новое сообщение в чате",
-        bodyText || chatPreviewForAdmin(msg),
-        {
-          title: "Новое сообщение в чате",
-          body: text || chatPreviewForAdmin(msg),
-          type: "chat",
-          channelId: "startdrive_chat",
-          roomId,
-        },
-      ));
+      const chatPayload = {
+        title: chatPushTitle,
+        body: chatPushBody,
+        type: "chat",
+        channelId: "startdrive_chat",
+        roomId: String(roomId),
+      };
+      await Promise.all(
+        recipientTokens.map((fcmToken) =>
+          messaging
+            .send(
+              buildFcmMessage(
+                fcmToken,
+                chatPushTitle,
+                chatPushBody,
+                chatPayload,
+              ),
+            )
+            .catch((err) => {
+              console.error("onNewChatMessage recipient token", recipientId, err?.message || err);
+            }),
+        ),
+      );
     }
 
     // Администраторам — только если сообщение от инструктора
-    const senderDoc = await firestore.collection("users").doc(senderId).get();
-    const senderRole = (senderDoc.data()?.role && String(senderDoc.data().role).toLowerCase()) || "";
     if (senderRole === "admin") return;
     if (senderRole !== "instructor") return;
 
-    const recipientRole = (recipientDoc.data()?.role && String(recipientDoc.data().role).toLowerCase()) || "";
-    const senderShort = await getUserShortName(firestore, senderId);
     const recipientShort = await getUserShortName(firestore, recipientId);
-    const when = formatChatMessageDateTimeRu(msg);
-    const preview = chatPreviewForAdmin(msg);
-    const previewSuffix =
-      preview && preview !== "[сообщение]"
-        ? preview.length > 100
-          ? ` — ${preview.slice(0, 97)}…`
-          : ` — ${preview}`
-        : "";
-    let adminBody;
-    if (recipientRole === "cadet") {
-      adminBody = `Инструктор ${senderShort} написал в чате курсанту ${recipientShort} ${when}${previewSuffix}`;
-    } else {
-      const whom = roleLabelRuDative(recipientRole);
-      adminBody = `Инструктор ${senderShort} написал в чате ${whom} ${recipientShort} ${when}${previewSuffix}`;
-    }
+    const adminPushBody = truncateForNotification(`${when}: ${preview} · ${recipientShort}`, 360);
     await notifyAdminsFcmAndFeed(
       firestore,
-      "Сообщение в чате",
-      adminBody,
+      chatPushTitle,
+      adminPushBody,
       {
         type: "chat",
         channelId: "startdrive_chat",
@@ -658,8 +704,8 @@ exports.onBalanceHistoryCreated = onDocumentCreated(
 
     const firestore = getFirestore();
     const userDoc = await firestore.collection("users").doc(userId).get();
-    const fcmToken = userDoc.data()?.fcmToken;
-    if (!fcmToken) return;
+    const balanceTokens = collectUserFcmTokens(userDoc.data());
+    if (!balanceTokens.length) return;
 
     let title; let body;
     if (type === "credit") {
@@ -671,12 +717,15 @@ exports.onBalanceHistoryCreated = onDocumentCreated(
     } else return;
 
     const messaging = getMessaging();
-    await messaging.send(buildFcmMessage(fcmToken, title, body, {
+    const balPayload = {
       title,
       body,
       type: type === "credit" ? "balance_credit" : "balance_debit",
       channelId: "startdrive_balance",
-    }));
+    };
+    for (const fcmToken of balanceTokens) {
+      await messaging.send(buildFcmMessage(fcmToken, title, body, balPayload));
+    }
   }
 );
 
@@ -702,6 +751,54 @@ exports.setStorageCors = onRequest(
       res.status(500).json({ ok: false, error: (err && err.message) || "Ошибка" });
     }
   }
+);
+
+/** Тест FCM: отправить уведомление на все токены текущего пользователя (fcmToken + fcmTokenWeb). */
+exports.sendTestPush = onCall(
+  { region: "europe-west1", cors: true },
+  async (request) => {
+    if (!request.auth || !request.auth.uid) {
+      throw new HttpsError("unauthenticated", "Войдите в аккаунт");
+    }
+    const uid = request.auth.uid;
+    const firestore = getFirestore();
+    const doc = await firestore.collection("users").doc(uid).get();
+    const tokens = collectUserFcmTokens(doc.data());
+    if (!tokens.length) {
+      return {
+        ok: false,
+        sent: 0,
+        message: "Нет FCM токенов. Сначала нажмите «Включить push» в браузере.",
+      };
+    }
+    const messaging = getMessaging();
+    const title = "Тест уведомления";
+    const body = "Если видите это сообщение, push работает.";
+    const data = { type: "test_push", channelId: "startdrive_general" };
+    let sent = 0;
+    const errors = [];
+    for (const token of tokens) {
+      try {
+        await messaging.send(buildFcmMessage(token, title, body, data));
+        sent++;
+      } catch (e) {
+        const m = (e && e.message) || String(e);
+        errors.push(m);
+        console.error("sendTestPush token", m);
+      }
+    }
+    return {
+      ok: sent > 0,
+      sent,
+      errors: errors.length ? errors : undefined,
+      message:
+        sent > 0
+          ? null
+          : errors.length
+            ? errors[0]
+            : "Не удалось отправить",
+    };
+  },
 );
 
 // Загрузка аватара через Callable — обходит CORS (браузер обращается к функции, не к Storage).

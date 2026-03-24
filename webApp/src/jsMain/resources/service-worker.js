@@ -9,10 +9,10 @@ const APP_SHELL = [
   "/app-icon.png"
 ];
 
-// FCM background notifications (compat SDK in service worker).
+// FCM в SW: только инициализация. Показ — из webpush в Cloud Functions (без общего notification + webpush).
 try {
-  importScripts("https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js");
-  importScripts("https://www.gstatic.com/firebasejs/10.12.5/firebase-messaging-compat.js");
+  importScripts("https://www.gstatic.com/firebasejs/10.14.0/firebase-app-compat.js");
+  importScripts("https://www.gstatic.com/firebasejs/10.14.0/firebase-messaging-compat.js");
   firebase.initializeApp({
     apiKey: "AIzaSyADZiLy7HaTedftl9e_4is-3TsmlnFA82Y",
     authDomain: "startdrive-573fa.firebaseapp.com",
@@ -21,20 +21,7 @@ try {
     messagingSenderId: "73391012476",
     appId: "1:73391012476:web:775bd2274627d25b9fa7f9"
   });
-  const messaging = firebase.messaging();
-  messaging.onBackgroundMessage((payload) => {
-    const title =
-      (payload && payload.notification && payload.notification.title) || "StartDrive";
-    const body =
-      (payload && payload.notification && payload.notification.body) || "";
-    const icon = "/app-icon.png";
-    self.registration.showNotification(title, {
-      body,
-      icon,
-      badge: icon,
-      data: payload && payload.data ? payload.data : {}
-    });
-  });
+  firebase.messaging();
 } catch (_) {}
 
 self.addEventListener("install", (event) => {

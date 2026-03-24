@@ -115,6 +115,7 @@ html {
 
 /* Все кнопки и кликабельные элементы — с первого нажатия, без задержки на тач-устройствах */
 button,
+a,
 .sd-btn,
 .sd-tab,
 .sd-btn-inline,
@@ -139,16 +140,38 @@ body {
     color: var(--sd-text);
     min-height: 100vh;
     min-height: 100dvh;
+    height: 100vh;
+    height: -webkit-fill-available;
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
     padding-bottom: env(safe-area-inset-bottom);
     overflow-x: hidden;
-    width: 100%;
+    overflow-y: auto;
+    width: 100vw;
+    touch-action: pan-x pan-y;
+}
+
+html {
+    width: 100vw;
+    height: 100vh;
+    height: -webkit-fill-available;
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+
+#root {
+    width: 100vw;
+    height: 100vh;
+    height: -webkit-fill-available;
+    overflow-x: hidden;
+    overflow-y: auto;
+    touch-action: pan-x pan-y;
 }
 
 @supports (overflow: clip) {
     body {
         overflow-x: clip;
+        overflow-y: auto;
     }
 }
 
@@ -168,8 +191,11 @@ body {
 .material-symbols-outlined.sd-icon-lg { font-size: 28px; }
 
 .sd-header {
-    position: sticky;
+    position: fixed;
     top: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
     z-index: 100;
     color: white;
     display: flex;
@@ -185,6 +211,12 @@ body {
         0 4px 20px rgba(0,0,0,0.45),
         0 1px 0 rgba(255,255,255,0.05) inset;
     overflow: visible;
+    box-sizing: border-box;
+}
+
+/* Компенсация фиксированной шапки для контента панели. */
+.sd-header + .sd-card {
+    margin-top: calc(78px + env(safe-area-inset-top));
 }
 
 .sd-header-text {
@@ -213,6 +245,31 @@ body {
     }
     .sd-header-actions {
         gap: 6px;
+    }
+}
+
+/* iPhone / touch: убираем "мигание" и дрожание кнопок на :active */
+@media (hover: none) and (pointer: coarse) {
+    .sd-tab:active,
+    .sd-btn:active,
+    .sd-sch-btn:active,
+    .sd-rec-confirm-btn:active,
+    .sd-rec-cancel-btn:active,
+    .sd-rec-submit:active,
+    .sd-rec-book-slot-btn:active,
+    .sd-instructor-cadet-book-btn:active,
+    .sd-instructor-profile-back:active,
+    .sd-instr-week-btn:active,
+    .sd-cadet-icon-btn:active,
+    .sd-ucard-icon-btn:active,
+    .sd-chat-create-group-btn:active,
+    .sd-auth-btn:active,
+    .sd-btn-signout:active {
+        transform: none !important;
+        animation: none !important;
+        transition: none !important;
+        box-shadow: inherit !important;
+        filter: none !important;
     }
 }
 .sd-notif-dropdown-wrap {
@@ -5662,7 +5719,7 @@ a.sd-cadet-icon-btn:active {
     pointer-events: none;
 }
 .sd-tab:active::after {
-    animation: sd-tab-ripple 0.38s ease-out forwards;
+    animation: none;
 }
 @keyframes sd-tab-ripple {
     0%   { opacity: 1; transform: scale(0.4); }
@@ -5718,7 +5775,7 @@ a.sd-cadet-icon-btn:active {
 /* Активная вкладка */
 .sd-tab.sd-active {
     color: #fff;
-    animation: sd-tab-activate 0.45s ease-out forwards;
+    animation: none;
 }
 .sd-tab.sd-active .sd-tab-icon {
     filter: drop-shadow(0 0 5px rgba(120,180,255,0.8));
@@ -5735,7 +5792,7 @@ a.sd-cadet-icon-btn:active {
     border-radius: 0 0 2px 2px;
     top: 0;
     left: 0; right: 0;
-    animation: sd-tab-shimmer 0.55s ease-out forwards;
+    animation: none;
 }
 @keyframes sd-tab-activate {
     0%   { transform: translateY(2px); }
@@ -6839,6 +6896,10 @@ a.sd-cadet-icon-btn:active {
     align-items: center;
     gap: 8px;
     padding: 10px 12px;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    flex-wrap: nowrap;
     background: rgba(13,31,62,0.88);
     backdrop-filter: blur(8px);
     border-top: 1px solid rgba(255,255,255,0.08);
@@ -6905,6 +6966,8 @@ a.sd-cadet-icon-btn:active {
 .sd-chat-msg-menu-item-danger { color: #b91c1c; }
 .sd-chat-input {
     flex: 1;
+    width: 0;
+    min-width: 0;
     padding: 9px 14px;
     border-radius: 22px;
     border: 1px solid rgba(0,0,0,0.12);
@@ -7145,6 +7208,8 @@ a.sd-cadet-icon-btn:active {
     justify-content: space-between;
     gap: 12px;
     width: 100%;
+    min-width: 0;
+    flex-wrap: nowrap;
 }
 .sd-chat-voice-review-actions-recording {
     justify-content: space-between;
@@ -7172,6 +7237,25 @@ a.sd-cadet-icon-btn:active {
     cursor: pointer;
     font-family: inherit;
     touch-action: manipulation;
+}
+
+@media (max-width: 420px) {
+    .sd-chat-input-row {
+        gap: 6px;
+        padding: 8px 8px max(8px, env(safe-area-inset-bottom)) 8px;
+    }
+    .sd-chat-send-btn,
+    .sd-chat-attach-btn,
+    .sd-chat-voice-mic-btn,
+    .sd-chat-voice-review-icon-btn,
+    .sd-chat-voice-review-play-btn,
+    .sd-chat-voice-stop-btn {
+        width: 40px;
+        height: 40px;
+    }
+    .sd-chat-voice-review-actions {
+        gap: 8px;
+    }
 }
 .sd-chat-voice-review-icon-btn:hover { background: #1d4ed8; }
 .sd-chat-voice-review-icon-btn.sd-chat-voice-review-send-btn {

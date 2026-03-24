@@ -35,6 +35,8 @@ fun getFirebaseConfig(): dynamic {
 private var databaseInstance: dynamic = null
 private var storageInstance: dynamic = null
 private var functionsInstance: dynamic = null
+private var messagingInstance: dynamic = null
+private var foregroundMessageHandlerBound = false
 
 fun initFirebase() {
     if (authInstance != null) return
@@ -44,6 +46,7 @@ fun initFirebase() {
     js("require('firebase/compat/database')")
     js("require('firebase/compat/storage')")
     js("require('firebase/compat/functions')")
+    try { js("require('firebase/compat/messaging')") } catch (_: Throwable) { }
     firebaseCompat = firebase
     val config = getFirebaseConfig()
     val app = firebase.initializeApp(config)
@@ -57,6 +60,11 @@ fun initFirebase() {
         (getFunctionsModular as (dynamic, String) -> dynamic)(app, "europe-west1")
     } catch (_: Throwable) {
         (app.asDynamic()).functions("europe-west1")
+    }
+    messagingInstance = try {
+        firebase.messaging(app)
+    } catch (_: Throwable) {
+        null
     }
 }
 
@@ -79,6 +87,7 @@ fun getFirestore(): dynamic = firestoreInstance
 fun getDatabase(): dynamic = databaseInstance
 fun getStorage(): dynamic = storageInstance
 fun getFunctions(): dynamic? = functionsInstance
+fun getMessagingCompat(): dynamic? = messagingInstance
 
 /** Плейсхолдер времени сервера для Realtime Database (подставить в timestamp при записи). */
 fun getDatabaseServerTimestamp(): dynamic =
@@ -134,6 +143,235 @@ fun updateProfile(uid: String, fullName: String, phone: String, callback: (Strin
         .update(kotlin.js.json("fullName" to fullName, "phone" to phone))
         .then { callback(null) }
         .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
+}
+
+/** Сохранить FCM-токен веб-клиента в users/{uid}.fcmToken */
+fun setWebFcmToken(uid: String, token: String?, callback: (String?) -> Unit = {}) {
+    getFirestore().collection(FirebasePaths.USERS).doc(uid)
+        .update(kotlin.js.json("fcmToken" to (token ?: "")))
+        .then { callback(null) }
+        .catch { e: Throwable -> callback((e.asDynamic().message as? String) ?: "Ошибка") }
+}
+
+/** Включить Web Push (FCM): получить токен и привязать к пользователю. */
+fun initWebPushForCurrentUser(
+    uid: String,
+    onForegroundMessage: ((title: String, body: String) -> Unit)? = null,
+    onStatus: ((ok: Boolean, message: String) -> Unit)? = null
+) {
+    val messaging = getMessagingCompat() ?: return
+    var finished = false
+    var stage = "start"
+    val finish = { ok: Boolean, message: String ->
+        if (!finished) {
+            finished = true
+            onStatus?.invoke(ok, message)
+        }
+    }
+    val timeoutId = window.setTimeout({
+        finish(false, "Таймаут включения push (этап: $stage). Проверьте интернет и разрешение уведомлений в браузере")
+    }, 15000)
+    try {
+        stage = "secure-context-check"
+        if (window.asDynamic().isSecureContext != true) {
+            window.clearTimeout(timeoutId)
+            finish(false, "Push работает только в HTTPS (secure context)")
+            return
+        }
+        stage = "notification-api-check"
+        val notificationObj = window.asDynamic().Notification
+        if (notificationObj == null || notificationObj == js("undefined")) {
+            window.clearTimeout(timeoutId)
+            finish(false, "Браузер не поддерживает уведомления")
+            return
+        }
+        stage = "push-manager-check"
+        val pushManagerObj = window.asDynamic().PushManager
+        if (pushManagerObj == null || pushManagerObj == js("undefined")) {
+            window.clearTimeout(timeoutId)
+            finish(false, "Браузер не поддерживает Web Push (PushManager)")
+            return
+        }
+        stage = "vapid-key-check"
+        val vapidKey = (
+            (window.asDynamic().__FIREBASE_WEB_PUSH_VAPID_KEY as? String)
+                ?: (window.asDynamic().__FIREBASE_WEB_PUSH_VAPID_KEY__ as? String)
+            )?.trim().orEmpty()
+        if (vapidKey.isBlank()) {
+            window.clearTimeout(timeoutId)
+            finish(false, "Не задан Web Push VAPID key")
+            return
+        }
+        val startGetToken = {
+            try {
+                stage = "service-worker-resolve"
+                val swApi = window.navigator.asDynamic().serviceWorker
+                if (swApi != null && swApi != js("undefined")) {
+                    val resolveActiveSwRegistration = js(
+                        """(function(sw){
+                            function withTimeout(p, ms, label){
+                                return Promise.race([
+                                    p,
+                                    new Promise(function(_, reject){
+                                        setTimeout(function(){ reject(new Error(label)); }, ms);
+                                    })
+                                ]);
+                            }
+                            function forceResetAndRegister(swObj){
+                                var regsPromise;
+                                try { regsPromise = swObj.getRegistrations(); } catch (e) { regsPromise = Promise.resolve([]); }
+                                return Promise.resolve(regsPromise)
+                                    .catch(function(){ return []; })
+                                    .then(function(regs){
+                                        if (!regs || !regs.length) return null;
+                                        return Promise.all(regs.map(function(r){
+                                            try { return r.unregister(); } catch (e) { return Promise.resolve(false); }
+                                        }));
+                                    })
+                                    .then(function(){
+                                        return withTimeout(swObj.register('/service-worker.js'), 10000, 'Таймаут повторной регистрации Service Worker');
+                                    })
+                                    .then(function(){
+                                        return withTimeout(Promise.resolve(swObj.ready), 15000, 'Таймаут ожидания активного Service Worker');
+                                    });
+                            }
+                            function waitForRegistrationActive(reg){
+                                if (!reg) return Promise.reject(new Error('Service Worker registration не найден'));
+                                if (reg.active && reg.active.state === 'activated') return Promise.resolve(reg);
+                                var worker = reg.installing || reg.waiting || reg.active;
+                                if (!worker) {
+                                    // Иногда у регистрации временно нет worker instance; fallback через global ready.
+                                    return withTimeout(Promise.resolve(sw.ready), 12000, 'Таймаут ожидания активного Service Worker');
+                                }
+                                return withTimeout(new Promise(function(resolve, reject){
+                                    function doneOk(){ resolve(reg); }
+                                    function doneErr(msg){ reject(new Error(msg)); }
+                                    function onState(){
+                                        var st = worker.state;
+                                        if (st === 'activated') doneOk();
+                                        else if (st === 'redundant') doneErr('Service Worker стал redundant');
+                                    }
+                                    try { worker.addEventListener('statechange', onState); } catch (e) {}
+                                    // На случай, если state уже сменился до подписки.
+                                    onState();
+                                }), 12000, 'Таймаут ожидания активного Service Worker');
+                            }
+                            var regPromise;
+                            try {
+                                regPromise = sw.getRegistration('/service-worker.js');
+                            } catch (e) {
+                                regPromise = Promise.resolve(null);
+                            }
+                            return withTimeout(Promise.resolve(regPromise), 4000, 'Таймаут получения регистрации Service Worker')
+                                .catch(function(){ return null; })
+                                .then(function(existing){
+                                    if (existing) return waitForRegistrationActive(existing);
+                                    return withTimeout(sw.register('/service-worker.js'), 8000, 'Таймаут регистрации Service Worker')
+                                        .then(function(reg){ return waitForRegistrationActive(reg); });
+                                })
+                                .catch(function(err){
+                                    // Recovery path: stale/broken SW registrations.
+                                    return forceResetAndRegister(sw).catch(function(){
+                                        throw err;
+                                    });
+                                });
+                        })"""
+                    ).unsafeCast<(dynamic) -> Promise<dynamic>>()
+                    resolveActiveSwRegistration(swApi).then { reg: dynamic ->
+                        stage = "fcm-get-token"
+                        val opts = kotlin.js.json("vapidKey" to vapidKey, "serviceWorkerRegistration" to reg)
+                        val tokenWithTimeout = js(
+                            """(function(m, o){
+                                return Promise.race([
+                                    m.getToken(o),
+                                    new Promise(function(_, reject){
+                                        setTimeout(function(){ reject(new Error('Таймаут получения FCM токена')); }, 10000);
+                                    })
+                                ]);
+                            })"""
+                        ).unsafeCast<(dynamic, dynamic) -> Promise<dynamic>>()
+                        tokenWithTimeout(messaging, opts)
+                            .then { token: dynamic ->
+                                stage = "save-token"
+                                val tk = token as? String
+                                if (!tk.isNullOrBlank()) {
+                                    setWebFcmToken(uid, tk) { err ->
+                                        window.clearTimeout(timeoutId)
+                                        if (err != null) finish(false, "Токен получен, но не сохранен: $err")
+                                        else finish(true, "Push включен, токен сохранен")
+                                    }
+                                } else {
+                                    window.clearTimeout(timeoutId)
+                                    finish(false, "FCM вернул пустой токен")
+                                }
+                            }
+                            .catch { e: Throwable ->
+                                val msg = (e.asDynamic().message as? String) ?: "Не удалось получить FCM токен"
+                                window.clearTimeout(timeoutId)
+                                finish(false, msg)
+                            }
+                    }.catch { e: Throwable ->
+                        val msg = (e.asDynamic().message as? String) ?: "Не удалось зарегистрировать Service Worker"
+                        window.clearTimeout(timeoutId)
+                        finish(false, msg)
+                    }
+                } else {
+                    window.clearTimeout(timeoutId)
+                    finish(false, "Браузер не поддерживает Service Worker")
+                }
+            } catch (e: Throwable) {
+                val msg = (e.asDynamic().message as? String) ?: "Ошибка инициализации Service Worker"
+                window.clearTimeout(timeoutId)
+                finish(false, msg)
+            }
+        }
+        val permission = notificationObj.permission as? String ?: "default"
+        when (permission) {
+            "granted" -> startGetToken()
+            "default" -> {
+                stage = "request-permission"
+                val permissionWithTimeout = js(
+                    """(function(n){
+                        return Promise.race([
+                            n.requestPermission(),
+                            new Promise(function(_, reject){
+                                setTimeout(function(){ reject(new Error('Таймаут запроса разрешения уведомлений')); }, 10000);
+                            })
+                        ]);
+                    })"""
+                ).unsafeCast<(dynamic) -> Promise<dynamic>>()
+                permissionWithTimeout(notificationObj).then { perm: dynamic ->
+                    if (perm == "granted") startGetToken()
+                    else {
+                        window.clearTimeout(timeoutId)
+                        finish(false, "Разрешение на уведомления не выдано")
+                    }
+                }.catch { e: Throwable ->
+                    val msg = (e.asDynamic().message as? String) ?: "Не удалось запросить разрешение уведомлений"
+                    window.clearTimeout(timeoutId)
+                    finish(false, msg)
+                }
+            }
+            else -> {
+                window.clearTimeout(timeoutId)
+                finish(false, "Уведомления заблокированы в браузере")
+            }
+        }
+        if (!foregroundMessageHandlerBound) {
+            foregroundMessageHandlerBound = true
+            try {
+                messaging.onMessage { payload: dynamic ->
+                    val title = payload?.notification?.title as? String ?: "StartDrive"
+                    val body = payload?.notification?.body as? String ?: ""
+                    onForegroundMessage?.invoke(title, body)
+                }
+            } catch (_: Throwable) { }
+        }
+    } catch (e: Throwable) {
+        val msg = (e.asDynamic().message as? String) ?: "Ошибка инициализации push"
+        window.clearTimeout(timeoutId)
+        finish(false, msg)
+    }
 }
 
 fun changePassword(newPassword: String): Promise<Unit> {

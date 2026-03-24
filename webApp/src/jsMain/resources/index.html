@@ -2,8 +2,9 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-visual">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-visual">
     <title>StartDrive</title>
+    <meta name="description" content="StartDrive — автошкола: админ, инструктор, курсант">
     <!-- CSP: скрипты и стили со своего origin, запросы к Firebase и себе, шрифты Google -->
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' https://*.firebasedatabase.app; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; media-src 'self' blob: data: https://firebasestorage.googleapis.com https://*.firebasestorage.app; connect-src 'self' https://*.firebaseapp.com https://*.googleapis.com https://*.firebasedatabase.app https://*.europe-west1.firebasedatabase.app wss://*.firebasedatabase.app wss://*.europe-west1.firebasedatabase.app https://*.firebasestorage.app https://firestore.googleapis.com wss://*.firebaseio.com https://*.firebaseio.com https://*.cloudfunctions.net https://*.run.app; frame-src 'self' https://*.firebaseapp.com https://*.google.com https://*.googleapis.com https://firebasestorage.googleapis.com https://*.firebasestorage.app https://*.firebasedatabase.app https://*.europe-west1.firebasedatabase.app;">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -11,8 +12,39 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" rel="stylesheet">
     <meta name="theme-color" content="#0b1c38">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="StartDrive">
+    <meta property="og:description" content="StartDrive — автошкола: админ, инструктор, курсант">
+    <meta property="og:url" content="https://startdrive-573fa.web.app/">
+    <meta property="og:image" content="https://startdrive-573fa.web.app/app-icon.png">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="StartDrive">
+    <meta name="twitter:description" content="StartDrive — автошкола: админ, инструктор, курсант">
+    <meta name="twitter:image" content="https://startdrive-573fa.web.app/app-icon.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="StartDrive">
+    <link rel="icon" type="image/png" sizes="512x512" href="app-icon.png">
+    <link rel="shortcut icon" href="app-icon.png" type="image/png">
+    <link rel="apple-touch-icon" href="app-icon.png">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="stylesheet" href="style.css?v=16">
+    <style>
+        .sd-install-btn {
+            position: fixed;
+            right: 16px;
+            bottom: 16px;
+            z-index: 9999;
+            border: 0;
+            border-radius: 12px;
+            padding: 10px 14px;
+            color: #fff;
+            background: #1565c0;
+            font: 600 14px/1.2 Inter, sans-serif;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+            cursor: pointer;
+        }
+        .sd-install-btn[hidden] { display: none; }
+    </style>
 </head>
 <body>
     <div id="root">
@@ -25,8 +57,46 @@
             <div class="sd-boot-loader-dots"><span></span><span></span><span></span></div>
         </div>
     </div>
+    <button id="sd-install-app-btn" class="sd-install-btn" hidden>Установить приложение</button>
     <script src="firebase-config.js"></script>
     <script src="pdd-tickets-bundle.js"></script>
     <script src="webApp.js"></script>
+    <script>
+        (function () {
+            var installBtn = document.getElementById("sd-install-app-btn");
+            var deferredPrompt = null;
+            var isStandalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+
+            // Оставляем только viewport-ограничение масштаба (meta viewport),
+            // без глобальных touch/gesture preventDefault, чтобы не ломать tap на iPhone.
+
+            if ("serviceWorker" in navigator) {
+                window.addEventListener("load", function () {
+                    navigator.serviceWorker.register("/service-worker.js").catch(function () {});
+                });
+            }
+
+            window.addEventListener("beforeinstallprompt", function (e) {
+                e.preventDefault();
+                deferredPrompt = e;
+                if (!isStandalone && installBtn) installBtn.hidden = false;
+            });
+
+            window.addEventListener("appinstalled", function () {
+                deferredPrompt = null;
+                if (installBtn) installBtn.hidden = true;
+            });
+
+            if (installBtn) {
+                installBtn.addEventListener("click", async function () {
+                    if (!deferredPrompt) return;
+                    deferredPrompt.prompt();
+                    try { await deferredPrompt.userChoice; } catch (_) {}
+                    deferredPrompt = null;
+                    installBtn.hidden = true;
+                });
+            }
+        })();
+    </script>
 </body>
 </html>

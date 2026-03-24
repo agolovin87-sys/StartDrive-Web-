@@ -10,8 +10,14 @@
     "rules": "storage.rules"
   },
   "hosting": {
-    "public": "webApp/build/kotlin-webpack/js/productionExecutable",
-    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
+    "public": "webApp/build/processedResources/js/main",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
   },
   "functions": {
     "source": "functions",

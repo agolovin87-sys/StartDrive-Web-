@@ -174,16 +174,33 @@ function sendFcmToInstructor(firestore, instructorId, title, body, data = {}) {
   return getInstructorFcmToken(firestore, instructorId).then((fcmToken) => {
     if (!fcmToken) return Promise.resolve();
     const messaging = getMessaging();
-    return messaging.send({
-      token: fcmToken,
-      notification: { title, body },
-      data: { title, body, ...data },
-      android: {
-        priority: "high",
-        notification: { sound: "default", channelId: data.channelId || "startdrive_general" },
-      },
-    });
+    return messaging.send(buildFcmMessage(fcmToken, title, body, data));
   });
+}
+
+function buildFcmMessage(token, title, body, data = {}) {
+  return {
+    token,
+    notification: { title, body },
+    data: { title, body, ...data },
+    android: {
+      priority: "high",
+      notification: { sound: "default", channelId: data.channelId || "startdrive_general" },
+    },
+    webpush: {
+      headers: { Urgency: "high" },
+      notification: {
+        title,
+        body,
+        icon: "/app-icon.png",
+        badge: "/app-icon.png",
+        tag: data.type || "startdrive_general",
+      },
+      fcmOptions: {
+        link: "https://startdrive-573fa.web.app",
+      },
+    },
+  };
 }
 
 /** Короткое ФИО / email для текста уведомлений. */
@@ -321,15 +338,7 @@ async function sendFcmToAllAdmins(firestore, title, body, data = {}, excludeUser
     const token = doc.data()?.fcmToken;
     if (!token) continue;
     tasks.push(
-      messaging.send({
-        token,
-        notification: { title, body },
-        data: { title, body, ...data },
-        android: {
-          priority: "high",
-          notification: { sound: "default", channelId: data.channelId || "startdrive_general" },
-        },
-      }).catch((err) => {
+      messaging.send(buildFcmMessage(token, title, body, data)).catch((err) => {
         console.error("sendFcmToAllAdmins token", uid, err?.message || err);
       }),
     );
@@ -436,24 +445,18 @@ exports.onNewChatMessage = onValueCreated(
     if (fcmToken) {
       const messaging = getMessaging();
       const bodyText = text.length > 80 ? text.slice(0, 77) + "…" : text;
-      await messaging.send({
-        token: fcmToken,
-        notification: {
-          title: "Новое сообщение в чате",
-          body: bodyText || chatPreviewForAdmin(msg),
-        },
-        data: {
+      await messaging.send(buildFcmMessage(
+        fcmToken,
+        "Новое сообщение в чате",
+        bodyText || chatPreviewForAdmin(msg),
+        {
           title: "Новое сообщение в чате",
           body: text || chatPreviewForAdmin(msg),
           type: "chat",
           channelId: "startdrive_chat",
           roomId,
         },
-        android: {
-          priority: "high",
-          notification: { sound: "default", channelId: "startdrive_chat" },
-        },
-      });
+      ));
     }
 
     // Администраторам — только если сообщение от инструктора
@@ -668,20 +671,12 @@ exports.onBalanceHistoryCreated = onDocumentCreated(
     } else return;
 
     const messaging = getMessaging();
-    await messaging.send({
-      token: fcmToken,
-      notification: { title, body },
-      data: {
-        title,
-        body,
-        type: type === "credit" ? "balance_credit" : "balance_debit",
-        channelId: "startdrive_balance",
-      },
-      android: {
-        priority: "high",
-        notification: { sound: "default", channelId: "startdrive_balance" },
-      },
-    });
+    await messaging.send(buildFcmMessage(fcmToken, title, body, {
+      title,
+      body,
+      type: type === "credit" ? "balance_credit" : "balance_debit",
+      channelId: "startdrive_balance",
+    }));
   }
 );
 

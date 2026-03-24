@@ -79,8 +79,6 @@ private var groupChatAvatarRootListenersBound = false
 
 /** Сигнатура списка курсантов для блока форм: при частичном обновлении вкладки «Запись» пересобираем только стабильные поля, если изменился состав курсантов. */
 private var lastInstructorRecordingCadetSigForStable: String? = null
-/** Центр нажатой вкладки как % ширины карточки — используется в Genie-анимации (вход/выход из позиции вкладки). */
-private var genieOriginCx: Double = 50.0
 /** Держим состояние модалки «Начать раньше», чтобы она не закрывалась при render()/polling. */
 private var startEarlyModalSessionId: String? = null
 private var startEarlyModalMinutesLeft: Int = 0
@@ -238,6 +236,14 @@ fun friendlyNetworkError(raw: String?): String {
     }
 }
 
+/** Красную плашку сверху показываем только для реальных сетевых ошибок. */
+private fun shouldShowTopNetworkBanner(raw: String?): Boolean {
+    if (raw.isNullOrBlank()) return false
+    return raw.contains("Failed to fetch", ignoreCase = true) ||
+        raw.contains("NetworkError", ignoreCase = true) ||
+        raw.contains("Нет соединения с интернетом", ignoreCase = true)
+}
+
 fun main() {
     window.onload = onload@ { _: Event ->
         val root = document.getElementById("root") ?: return@onload
@@ -249,7 +255,7 @@ fun main() {
 
         fun render() {
             val state = appState
-            val networkBanner = state.networkError?.let { msg ->
+            val networkBanner = state.networkError?.takeIf { shouldShowTopNetworkBanner(it) }?.let { msg ->
                 val friendly = friendlyNetworkError(msg)
                 """<div class="sd-network-error" id="sd-network-error"><span>$friendly</span> <button type="button" id="sd-network-retry" class="sd-btn-inline sd-btn-inline-primary">Повторить</button> <button type="button" id="sd-dismiss-network-error" class="sd-btn-inline">Закрыть</button></div>"""
             } ?: ""
@@ -278,7 +284,6 @@ fun main() {
                     (root.unsafeCast<dynamic>().querySelector("nav.sd-tabs") as? org.w3c.dom.Element)?.innerHTML = tabButtons
                     lastTabButtonsMarkup = tabButtons
                 }
-                val tabActuallyChanged = state.selectedTabIndex != lastRenderedTabIndex
                 lastRenderedTabIndex = state.selectedTabIndex
                 if (state.screen == AppScreen.Instructor || state.screen == AppScreen.Cadet || state.screen == AppScreen.Admin) {
                     val notifBtn = root.unsafeCast<dynamic>().querySelector("#sd-btn-notifications") as? org.w3c.dom.Element
@@ -330,29 +335,7 @@ fun main() {
                 if (!skipFullCardRedraw) {
                     detachInstructorProfileEarnedCalcMount()
                     sdCard.innerHTML = cardContent
-                    // Genie enter: разворачивание от позиции нажатой вкладки
-                    if (tabActuallyChanged) {
-                        // Вход: 8-точечный полигон — зеркальное обращение выхода
-                        val ecx = genieOriginCx
-                        val eK1r40 = minOf(100.0, ecx + 38.0); val eK1l40 = maxOf(0.0, ecx - 38.0)
-                        val eK1r75 = minOf(100.0, ecx + 20.0); val eK1l75 = maxOf(0.0, ecx - 20.0)
-                        val eK1rb  = minOf(100.0, ecx +  6.0); val eK1lb  = maxOf(0.0, ecx -  6.0)
-                        val eK2rt  = minOf(100.0, ecx + 26.0); val eK2lt  = maxOf(0.0, ecx - 26.0)
-                        val eK2r40 = minOf(100.0, ecx + 10.0); val eK2l40 = maxOf(0.0, ecx - 10.0)
-                        val eK2r75 = minOf(100.0, ecx +  4.0); val eK2l75 = maxOf(0.0, ecx -  4.0)
-                        val eK2rb  = minOf(100.0, ecx +  1.5); val eK2lb  = maxOf(0.0, ecx -  1.5)
-                        val eK3r   = minOf(100.0, ecx +  1.0); val eK3l   = maxOf(0.0, ecx -  1.0)
-                        val enterKfJson = """[
-                            {"opacity":0,"clipPath":"polygon(${eK3l}% 0%,${eK3r}% 0%,${eK3r}% 40%,${eK3r}% 75%,${eK3r}% 100%,${eK3l}% 100%,${eK3l}% 75%,${eK3l}% 40%)","transform":"translateY(20px)","easing":"cubic-bezier(0,0,0.1,1)"},
-                            {"opacity":1,"clipPath":"polygon(${eK2lt}% 0%,${eK2rt}% 0%,${eK2r40}% 40%,${eK2r75}% 75%,${eK2rb}% 100%,${eK2lb}% 100%,${eK2l75}% 75%,${eK2l40}% 40%)","transform":"translateY(13px)","offset":0.32,"easing":"cubic-bezier(0,0,0.25,1)"},
-                            {"opacity":1,"clipPath":"polygon(0% 0%,100% 0%,${eK1r40}% 40%,${eK1r75}% 75%,${eK1rb}% 100%,${eK1lb}% 100%,${eK1l75}% 75%,${eK1l40}% 40%)","transform":"translateY(3px)","offset":0.68,"easing":"cubic-bezier(0,0,0.3,1)"},
-                            {"opacity":1,"clipPath":"polygon(0% 0%,100% 0%,100% 40%,100% 75%,100% 100%,0% 100%,0% 75%,0% 40%)","transform":"translateY(0)"}
-                        ]"""
-                        sdCard.asDynamic().animate(
-                            JSON.parse<dynamic>(enterKfJson),
-                            js("{duration:520}")
-                        )
-                    }
+                    // Эффект "джина" между вкладками отключен: мгновенная смена контента.
                     reattachInstructorProfileEarnedCalcMount(root)
                 } else {
                     reattachInstructorProfileEarnedCalcMount(root)
@@ -423,6 +406,19 @@ fun main() {
         onStateChanged = { scheduleRender() }
 
         setupPanelClickDelegation(root)
+        // Делегируем клик/тап по кнопке push на root, чтобы работало даже после перерисовок.
+        val pushDelegatedHandler = { ev: Event ->
+            val targetEl = ev.target as? Element
+            if (targetEl != null) {
+                val hit = targetEl.asDynamic().closest?.invoke("#sd-notif-enable-push")
+                if (hit != null && hit != js("undefined")) {
+                    ev.preventDefault()
+                    enableWebPushFromUi()
+                }
+            }
+        }
+        root.addEventListener("click", pushDelegatedHandler)
+        root.addEventListener("touchend", pushDelegatedHandler)
 
         onAuthStateChanged { uid ->
             if (uid == null) {
@@ -479,6 +475,10 @@ fun main() {
                     showSoundSettingsModal = (user.role == "cadet" && user.isActive && isFirstRunSoundSetting())
                 }
                 setPresence(user.id, true)
+                initWebPushForCurrentUser(user.id, onForegroundMessage = { title, body ->
+                    val txt = if (body.isNotBlank()) "$title: $body" else title
+                    showNotification(txt)
+                })
                 try {
                     userProfileFirestoreUnsubscribe?.invoke()
                 } catch (_: Throwable) { }
@@ -2147,20 +2147,6 @@ private fun computeAdminScheduleSignature(map: Map<String, List<DrivingSession>>
     }
 }
 
-/** Клик по полям формы «Запись» (select / datetime-local / внутри .sd-rec-picker-wrap) — не вызывать unlockCadetNotificationAudio: первый вызов делает updateState и перерисовывает #sd-card, из-за чего закрывается нативный список и календарь. */
-private fun shouldSkipAudioUnlockForRecordingFormClick(target: org.w3c.dom.Element, closestSel: (String) -> org.w3c.dom.Element?): Boolean {
-    // Вся вкладка «Запись» — любой клик здесь не должен дергать unlock (и любые вложенные SVG/span).
-    if (closestSel(".sd-rec-wrap") != null) return true
-    val tag = target.tagName.uppercase()
-    if (tag == "SELECT" || tag == "OPTION") return true
-    if (tag == "INPUT") {
-        val t = (target as? HTMLInputElement)?.type?.lowercase() ?: ""
-        if (t == "datetime-local" || t == "date" || t == "time") return true
-    }
-    if (closestSel(".sd-rec-picker-wrap") != null) return true
-    return false
-}
-
 /** Проверка: занято ли время (сессии и окна по 1.5 ч). Возвращает сообщение об ошибке или null. */
 private fun findOccupiedMessage(
     selectedMs: Long,
@@ -2605,6 +2591,30 @@ private fun showNotification(text: String, sourceId: String? = null) {
     if (!duplicateTextOnly) showToast(text)
 }
 
+/** Явный запуск включения web push из UI вкладки уведомлений. */
+private fun enableWebPushFromUi() {
+    val uid = appState.user?.id
+    (document.getElementById("sd-notif-enable-push") as? HTMLButtonElement)?.let { btn ->
+        btn.textContent = "Проверка..."
+        btn.disabled = true
+    }
+    if (uid.isNullOrBlank()) {
+        showToast("Сначала войдите в аккаунт")
+        (document.getElementById("sd-notif-enable-push") as? HTMLButtonElement)?.let { btn ->
+            btn.textContent = "Включить push"
+            btn.disabled = false
+        }
+        return
+    }
+    initWebPushForCurrentUser(uid, { _, _ -> Unit }) { ok, msg ->
+        showToast(if (ok) msg else "Push: $msg")
+        (document.getElementById("sd-notif-enable-push") as? HTMLButtonElement)?.let { btn ->
+            btn.textContent = "Включить push"
+            btn.disabled = false
+        }
+    }
+}
+
 /** Базовый URL для ресурсов (звуки) — от origin, чтобы всегда грузить ваш MP3. */
 private fun getResourceBaseUrl(): String {
     val origin = kotlinx.browser.window.location.origin
@@ -2655,10 +2665,6 @@ private fun getOrCreateCadetNotificationAudio(): dynamic {
 private fun unlockCadetNotificationAudio() {
     if (cadetNotificationAudioUnlocked) return
     cadetNotificationAudioUnlocked = true
-    // Не вызываем updateState, если флаг уже true — иначе лишняя перерисовка #sd-card.
-    if (!appState.soundAudioUnlocked) {
-        updateState { soundAudioUnlocked = true }
-    }
     try {
         val audio = getOrCreateCadetNotificationAudio()
         audio.currentTime = 0.0
@@ -6368,6 +6374,9 @@ private fun renderNotificationsTabContent(user: User): String {
             <h2 class="sd-notif-title">Уведомления$countStr</h2>
             <button type="button" id="sd-notif-clear" class="sd-btn sd-btn-icon sd-notif-clear-btn" title="Очистить" aria-label="Очистить"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>
         </div>
+        <div style="margin: 8px 0 12px 0;">
+            <button type="button" id="sd-notif-enable-push" class="sd-btn sd-btn-secondary">Включить push</button>
+        </div>
         <div class="sd-notif-list">$listHtml</div>
         <div class="sd-modal-overlay sd-hidden" id="sd-notif-clear-confirm-modal"><div class="sd-modal"><h3 class="sd-modal-title">Вы уверены?</h3><p class="sd-notif-clear-text">Вся история уведомлений будет удалена.</p><p class="sd-modal-actions"><button type="button" id="sd-notif-clear-yes" class="sd-btn sd-btn-primary">Да</button><button type="button" id="sd-notif-clear-no" class="sd-btn sd-btn-secondary">Нет</button></p></div></div>
         </div>"""
@@ -6375,6 +6384,9 @@ private fun renderNotificationsTabContent(user: User): String {
 
 /** Вешает обработчики «Очистить» и модалки подтверждения внутри выпадающего блока уведомлений. */
 private fun attachNotifDropdownListeners(dropdownEl: org.w3c.dom.Element) {
+    dropdownEl.querySelector("#sd-notif-enable-push")?.addEventListener("click", {
+        enableWebPushFromUi()
+    })
     dropdownEl.querySelector("#sd-notif-clear")?.addEventListener("click", {
         dropdownEl.querySelector("#sd-notif-clear-confirm-modal")?.unsafeCast<org.w3c.dom.HTMLElement>()?.classList?.remove("sd-hidden")
     })
@@ -7472,7 +7484,7 @@ private fun runPddExam(examCat: String, root: org.w3c.dom.Element) {
 /** Полная перерисовка панели. useExamContent = true — принудительно подставить экран экзамена в карточку. */
 private fun forceFullPanelRender(root: org.w3c.dom.Element, useExamContent: Boolean = false) {
     val user = appState.user ?: return
-    val networkBanner = appState.networkError?.let { msg ->
+    val networkBanner = appState.networkError?.takeIf { shouldShowTopNetworkBanner(it) }?.let { msg ->
         val friendly = friendlyNetworkError(msg)
         """<div class="sd-network-error" id="sd-network-error"><span>$friendly</span> <button type="button" id="sd-network-retry" class="sd-btn-inline sd-btn-inline-primary">Повторить</button> <button type="button" id="sd-dismiss-network-error" class="sd-btn-inline">Закрыть</button></div>"""
     } ?: ""
@@ -7660,9 +7672,6 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             } catch (_: Throwable) { null }
         }
         if (appState.user?.role == "instructor" || appState.user?.role == "cadet") {
-            if (!shouldSkipAudioUnlockForRecordingFormClick(target, closest)) {
-                unlockCadetNotificationAudio()
-            }
             val pddExamBack = closest(".sd-pdd-exam-back")
             if (pddExamBack != null) {
                 val examStartMs = appState.pddExamStartTimeMs ?: 0.0
@@ -8311,7 +8320,6 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
         }
         val tabBtn = closest(".sd-tab")
         if (tabBtn != null) {
-            if (appState.user?.role == "instructor" || appState.user?.role == "cadet") unlockCadetNotificationAudio()
             val idx = tabBtn.getAttribute("data-tab")?.toIntOrNull() ?: return@addEventListener
             var newbiesOpen = appState.adminNewbiesSectionOpen
             var instOpen = appState.adminInstructorsSectionOpen
@@ -8405,47 +8413,7 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                     }
                 }
             }
-            if (sdCardEl != null) {
-                val rect = sdCardEl.getBoundingClientRect()
-                if (rect.width > 0 && rect.height > 0) {
-                    // Вычисляем центр нажатой вкладки как % ширины карточки
-                    val tabRect = tabBtn.getBoundingClientRect()
-                    val tabCx = ((tabRect.left + tabRect.width / 2 - rect.left) / rect.width * 100)
-                        .coerceIn(5.0, 95.0)
-                    genieOriginCx = tabCx
-                    // Выход: 8-точечный полигон — плавные изогнутые края, сужается к вкладке снизу
-                    val cx = tabCx
-                    val xK1r40 = minOf(100.0, cx + 38.0); val xK1l40 = maxOf(0.0, cx - 38.0)
-                    val xK1r75 = minOf(100.0, cx + 20.0); val xK1l75 = maxOf(0.0, cx - 20.0)
-                    val xK1rb  = minOf(100.0, cx +  6.0); val xK1lb  = maxOf(0.0, cx -  6.0)
-                    val xK2rt  = minOf(100.0, cx + 26.0); val xK2lt  = maxOf(0.0, cx - 26.0)
-                    val xK2r40 = minOf(100.0, cx + 10.0); val xK2l40 = maxOf(0.0, cx - 10.0)
-                    val xK2r75 = minOf(100.0, cx +  4.0); val xK2l75 = maxOf(0.0, cx -  4.0)
-                    val xK2rb  = minOf(100.0, cx +  1.5); val xK2lb  = maxOf(0.0, cx -  1.5)
-                    val xK3r   = minOf(100.0, cx +  1.0); val xK3l   = maxOf(0.0, cx -  1.0)
-                    val exitKfJson = """[
-                        {"opacity":1,"clipPath":"polygon(0% 0%,100% 0%,100% 40%,100% 75%,100% 100%,0% 100%,0% 75%,0% 40%)","transform":"translateY(0)","easing":"cubic-bezier(0.3,0,0.7,1)"},
-                        {"opacity":1,"clipPath":"polygon(0% 0%,100% 0%,${xK1r40}% 40%,${xK1r75}% 75%,${xK1rb}% 100%,${xK1lb}% 100%,${xK1l75}% 75%,${xK1l40}% 40%)","transform":"translateY(10px)","offset":0.30,"easing":"cubic-bezier(0.4,0,0.75,1)"},
-                        {"opacity":1,"clipPath":"polygon(${xK2lt}% 0%,${xK2rt}% 0%,${xK2r40}% 40%,${xK2r75}% 75%,${xK2rb}% 100%,${xK2lb}% 100%,${xK2l75}% 75%,${xK2l40}% 40%)","transform":"translateY(26px)","offset":0.68,"easing":"ease-in"},
-                        {"opacity":0,"clipPath":"polygon(${xK3l}% 0%,${xK3r}% 0%,${xK3r}% 40%,${xK3r}% 75%,${xK3r}% 100%,${xK3l}% 100%,${xK3l}% 75%,${xK3l}% 40%)","transform":"translateY(40px)"}
-                    ]"""
-                    // Клон карточки как оверлей для анимации выхода
-                    val clone = sdCardEl.cloneNode(true).asDynamic()
-                    clone.removeAttribute("id")
-                    clone.style.cssText = "position:fixed;top:${rect.top}px;left:${rect.left}px;" +
-                        "width:${rect.width}px;height:${rect.height}px;" +
-                        "margin:0;z-index:9999;pointer-events:none;box-sizing:border-box;" +
-                        "background:var(--sd-card);border-radius:12px;overflow:hidden;"
-                    document.body?.appendChild(clone)
-                    clone.animate(
-                        JSON.parse<dynamic>(exitKfJson),
-                        js("{duration:360, fill:'forwards'}")
-                    ).onfinish = { document.body?.removeChild(clone as org.w3c.dom.Node) }
-                }
-                doTabSwitch()
-            } else {
-                doTabSwitch()
-            }
+            doTabSwitch()
             val user = appState.user ?: return@addEventListener
             val tabName = getTabsForUserRole(user.role).getOrNull(idx) ?: ""
             when (tabName) {
@@ -9364,7 +9332,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
             }
             root.asDynamic().onclick = null
             root.asDynamic().ontouchstart = null
-            if (appState.user?.role == "cadet") {
+            if (appState.user?.role == "instructor" || appState.user?.role == "cadet") {
                 try {
                     if (js("(function(){ return typeof Notification !== 'undefined' && Notification.permission === 'default'; })").unsafeCast<() -> Boolean>().invoke()) {
                         js("(function(){ try { Notification.requestPermission(); } catch(e) {} })").unsafeCast<() -> Unit>().invoke()

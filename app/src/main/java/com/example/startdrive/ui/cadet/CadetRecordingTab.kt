@@ -298,12 +298,6 @@ private fun BookedSessionCard(
     cancelDisabledAppearance: Boolean = false,
 ) {
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(1000)
-            now = System.currentTimeMillis()
-        }
-    }
     val scheduledStartTimeMillis = session.startTime?.toDate()?.time
     val confirmActiveFrom = scheduledStartTimeMillis?.minus(CADET_CONFIRM_ACTIVE_MINUTES_BEFORE * 60 * 1000) ?: 0L
     val autoStartAt = scheduledStartTimeMillis?.plus(AUTO_START_WAIT_MINUTES * 60 * 1000) ?: 0L
@@ -316,6 +310,25 @@ private fun BookedSessionCard(
     var autoStartTriggered by remember(session.id) { mutableStateOf(false) }
     val canAutoStart = session.status == "scheduled" && session.instructorConfirmed &&
         (session.startRequestedByInstructor && session.session?.cadetConfirmed != true || !session.startRequestedByInstructor)
+
+    // Обновляем "now" только при необходимости (таймер/порог доступности подтверждения).
+    LaunchedEffect(session.id, session.status, session.instructorConfirmed, session.startRequestedByInstructor, session.session?.cadetConfirmed, scheduledStartTimeMillis, cadetAlreadyConfirmed) {
+        while (true) {
+            val t = System.currentTimeMillis()
+            now = t
+            val start = scheduledStartTimeMillis
+            if (start == null) break
+            val nextWakeAt = when {
+                t < confirmActiveFrom -> confirmActiveFrom
+                t < start -> start
+                t in start until autoStartAt && !cadetAlreadyConfirmed -> t + 1000L
+                else -> Long.MAX_VALUE
+            }
+            if (nextWakeAt == Long.MAX_VALUE) break
+            val delayMs = (nextWakeAt - t).coerceIn(250L, 1000L)
+            delay(delayMs)
+        }
+    }
     LaunchedEffect(session.id, session.status, session.startRequestedByInstructor, session.instructorConfirmed, session.session?.cadetConfirmed, scheduledStartTimeMillis, now) {
         if (scheduledStartTimeMillis == null) return@LaunchedEffect
         if (!canAutoStart) return@LaunchedEffect

@@ -491,10 +491,14 @@ fun InstructorHomeTab(
     }
     startDrivingConfirm?.let { (sessionId, scheduledStartTimeMillis) ->
         var now by remember { mutableStateOf(System.currentTimeMillis()) }
-        LaunchedEffect(Unit) {
+        // Тут достаточно обновления раз в минуту (текст "ещё N минут").
+        LaunchedEffect(sessionId, scheduledStartTimeMillis) {
             while (true) {
-                delay(1000)
-                now = System.currentTimeMillis()
+                val t = System.currentTimeMillis()
+                now = t
+                val diff = (scheduledStartTimeMillis - t).coerceAtLeast(0L)
+                val next = if (diff <= 60_000L) t + 1000L else t + 60_000L
+                delay((next - t).coerceIn(1000L, 60_000L))
             }
         }
         val minutesRemaining = ((scheduledStartTimeMillis - now) / 60_000).toInt().coerceAtLeast(0)

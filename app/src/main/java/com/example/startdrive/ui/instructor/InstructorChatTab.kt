@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.item
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -30,6 +29,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -93,6 +93,9 @@ fun InstructorChatTab(
         (listOfNotNull(admin) + peerInstructors + cadets).distinctBy { it.id }
     }
     var messageText by remember { mutableStateOf("") }
+    LaunchedEffect(selectedContactId) {
+        messageText = ""
+    }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val selectedContact = remember(selectedContactId, contacts) { selectedContactId?.let { id -> contacts.find { it.id == id } } }
@@ -110,7 +113,7 @@ fun InstructorChatTab(
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 if (peerInstructors.isNotEmpty()) {
-                    item(key = "section_instructors") {
+                    items(listOf("section_instructors"), key = { it }) {
                         InstructorChatContactsSectionTitle("Инструкторы")
                     }
                     items(peerInstructors, key = { it.id }) { u ->
@@ -122,7 +125,7 @@ fun InstructorChatTab(
                     }
                 }
                 if (cadets.isNotEmpty()) {
-                    item(key = "section_cadets") {
+                    items(listOf("section_cadets"), key = { it }) {
                         InstructorChatContactsSectionTitle("Курсанты")
                     }
                     items(cadets, key = { it.id }) { u ->
@@ -134,12 +137,12 @@ fun InstructorChatTab(
                     }
                 }
                 if (admin != null) {
-                    item(key = "section_other") {
+                    items(listOf("section_other"), key = { it }) {
                         InstructorChatContactsSectionTitle("Другие")
                     }
-                    item(key = admin.id) {
+                    items(listOf(admin), key = { it.id }) { u ->
                         InstructorChatContactRow(
-                            user = admin,
+                            user = u,
                             currentUserId = currentUserId,
                             onSelectContact = onSelectedContactIdChange,
                         )
@@ -210,6 +213,10 @@ fun InstructorChatTab(
                 var menuMessage by remember { mutableStateOf<ChatMessage?>(null) }
                 var replyingTo by remember { mutableStateOf<ChatMessage?>(null) }
                 var hiddenKey by remember { mutableStateOf(0) }
+                LaunchedEffect(selectedContactId) {
+                    menuMessage = null
+                    replyingTo = null
+                }
                 val hiddenIds = remember(chatRoomId, currentUserId, hiddenKey) {
                     HiddenChatMessages.getSet(context, currentUserId, chatRoomId)
                 }
@@ -296,42 +303,44 @@ fun InstructorChatTab(
                                 }
                             }
                         }
-                        ChatVoiceInput(
-                            messageText = messageText,
-                            onMessageTextChange = { messageText = it },
-                            onSendText = {
-                                if (messageText.isNotBlank()) {
-                                    val text = messageText
-                                    val replyTo = replyingTo
-                                    messageText = ""
-                                    replyingTo = null
-                                    val optMsg = ChatMessage(senderId = currentUserId, text = text, timestamp = System.currentTimeMillis(), status = "sent", replyToMessageId = replyTo?.id, replyToText = replyTo?.text?.take(100))
+                        key(selectedContactId) {
+                            ChatVoiceInput(
+                                messageText = messageText,
+                                onMessageTextChange = { messageText = it },
+                                onSendText = {
+                                    if (messageText.isNotBlank()) {
+                                        val text = messageText
+                                        val replyTo = replyingTo
+                                        messageText = ""
+                                        replyingTo = null
+                                        val optMsg = ChatMessage(senderId = currentUserId, text = text, timestamp = System.currentTimeMillis(), status = "sent", replyToMessageId = replyTo?.id, replyToText = replyTo?.text?.take(100))
+                                        chatRepo.addOptimisticMessage(chatRoomId, optMsg)
+                                        scope.launch {
+                                            try {
+                                                chatRepo.sendMessage(chatRoomId, currentUserId, text, replyTo?.id, replyTo?.text?.take(100))
+                                            } catch (e: Exception) {
+                                                messageText = text
+                                                replyingTo = replyTo
+                                                chatRepo.removeOptimisticMessage(chatRoomId, optMsg)
+                                                Toast.makeText(context, "Не удалось отправить: ${e.message ?: "ошибка сети или доступа"}", Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    }
+                                },
+                                onSendVoice = { file, durationSec ->
+                                    val optMsg = ChatMessage(senderId = currentUserId, text = "", timestamp = System.currentTimeMillis(), status = "sent", voiceUrl = null, voiceDurationSec = durationSec)
                                     chatRepo.addOptimisticMessage(chatRoomId, optMsg)
                                     scope.launch {
                                         try {
-                                            chatRepo.sendMessage(chatRoomId, currentUserId, text, replyTo?.id, replyTo?.text?.take(100))
+                                            chatRepo.sendVoiceMessage(chatRoomId, currentUserId, file, durationSec)
                                         } catch (e: Exception) {
-                                            messageText = text
-                                            replyingTo = replyTo
                                             chatRepo.removeOptimisticMessage(chatRoomId, optMsg)
-                                            Toast.makeText(context, "Не удалось отправить: ${e.message ?: "ошибка сети или доступа"}", Toast.LENGTH_LONG).show()
+                                            Toast.makeText(context, "Не удалось отправить голосовое: ${e.message ?: "ошибка"}", Toast.LENGTH_LONG).show()
                                         }
                                     }
-                                }
-                            },
-                            onSendVoice = { file, durationSec ->
-                                val optMsg = ChatMessage(senderId = currentUserId, text = "", timestamp = System.currentTimeMillis(), status = "sent", voiceUrl = null, voiceDurationSec = durationSec)
-                                chatRepo.addOptimisticMessage(chatRoomId, optMsg)
-                                scope.launch {
-                                    try {
-                                        chatRepo.sendVoiceMessage(chatRoomId, currentUserId, file, durationSec)
-                                    } catch (e: Exception) {
-                                        chatRepo.removeOptimisticMessage(chatRoomId, optMsg)
-                                        Toast.makeText(context, "Не удалось отправить голосовое: ${e.message ?: "ошибка"}", Toast.LENGTH_LONG).show()
-                                    }
-                                }
-                            },
-                        )
+                                },
+                            )
+                        }
                     }
                 }
             } else {
@@ -350,7 +359,7 @@ fun InstructorChatTab(
 private fun InstructorChatContactsSectionTitle(title: String) {
     Text(
         title,
-        modifier = Modifier.padding(horizontal = 16.dp, top = 12.dp, bottom = 4.dp),
+        modifier = Modifier.padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 4.dp),
         style = MaterialTheme.typography.labelLarge,
         fontWeight = FontWeight.SemiBold,
         color = MaterialTheme.colorScheme.primary,

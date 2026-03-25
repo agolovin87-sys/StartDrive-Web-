@@ -160,11 +160,9 @@ data class AppState(
     var cadetInstructor: User? = null,
     var instructorCadets: List<User> = emptyList(),
     var chatVoiceRecording: Boolean = false,
-    /** Если true — отправляем голосовое сразу при остановке/отпускании (режим "удерживай"). */
-    var chatVoiceRecordingAutoSend: Boolean = false,
     var chatVoiceRecordStartMs: Double = 0.0,
     var chatVoiceRecordElapsedSec: Int = 0,
-    /** Если true — запись готова к просмотру/отправке (режим "однократный клик"). */
+    /** Готовое голосовое (превью перед отправкой). */
     var chatVoiceReviewReady: Boolean = false,
     /** Local object URL (blob) для проигрывания готовой записи. */
     var chatVoiceReviewLocalUrl: String? = null,

@@ -14,26 +14,7 @@ import org.w3c.dom.events.EventListener
 import org.w3c.dom.events.KeyboardEvent
 
 private var presenceUnsubscribes: MutableList<() -> Unit> = mutableListOf()
-private var voiceRecorderChunks: dynamic = null
-private var voiceRecorderStream: dynamic = null
-private var voiceRecorder: dynamic = null
-private var voiceRecorderMimeType: String = "audio/webm"
-/** Если true — после остановки отправляем голосовое сразу (режим "удерживай"). */
-private var voiceAutoSendOnStop: Boolean = false
-/** Если true — после остановки просто выкидываем запись (удалить во время записи). */
-private var voiceDiscardOnStop: Boolean = false
-/** Blob готовой записи (для режима "однократный клик"). */
-private var voiceReviewBlob: dynamic = null
-/** Объектный URL (URL.createObjectURL) для локального проигрывания. */
-private var voiceReviewObjectUrl: String? = null
-/** Если true — таймер долгого нажатия сработал (режим "удерживай"). */
-private var voiceMicHoldTriggered: Boolean = false
-/** Таймер для определения "удержания" микрофона. */
-private var voiceMicLongPressTimerId: Int = 0
-private var voiceRecordInterval: Int = 0
 private var voicePlayInterval: Int = 0
-/** Токен/флаг, чтобы не навешивать слушатели на аудио повторно при каждом рендере. */
-private var voiceReviewAudioBoundForUrl: String? = null
 private var chatMsgLongPressTimerId: Int = 0
 /** Поля калькулятора «талоны × руб» на экране профиля: null = подставить текущий баланс талонов. */
 private var instructorProfileCalcTokensOverride: String? = null
@@ -160,7 +141,7 @@ private fun applyScrollForChat(contactId: String) {
 }
 
 /** Прокручивает окно чата к последнему сообщению мгновенно (без анимации). */
-private fun scrollChatToBottom() {
+internal fun scrollChatToBottom() {
     val c = document.getElementById("sd-chat-messages")?.asDynamic()
     if (c != null) {
         val maxScroll = ((c.scrollHeight as Number).toDouble() - (c.clientHeight as Number).toDouble()).toInt().coerceAtLeast(0)
@@ -246,6 +227,15 @@ private fun shouldShowTopNetworkBanner(raw: String?): Boolean {
 
 fun main() {
     window.onload = onload@ { _: Event ->
+        run {
+            val ua = js("navigator.userAgent").unsafeCast<String>()
+            val androidLike = ua.contains("Android", ignoreCase = true) ||
+                (ua.contains("Linux", ignoreCase = true) && ua.contains("Mobile", ignoreCase = true)) ||
+                ua.contains("SamsungBrowser", ignoreCase = true)
+            if (androidLike) {
+                document.documentElement?.classList?.add("sd-android")
+            }
+        }
         val root = document.getElementById("root") ?: return@onload
         initFirebase()
 
@@ -321,6 +311,8 @@ fun main() {
                         appendInstructorRateCadetModalIfNeeded(root)
                         appendRecCancelSessionConfirmModalIfNeeded(root)
                         appendAllowSoundBarIfNeeded(root)
+                        syncChatVoiceHostOverlay()
+                        window.requestAnimationFrame { syncChatVoiceHostOverlay() }
                         return
                     }
                 }
@@ -340,6 +332,8 @@ fun main() {
                 } else {
                     reattachInstructorProfileEarnedCalcMount(root)
                 }
+                syncChatVoiceHostOverlay()
+                window.requestAnimationFrame { syncChatVoiceHostOverlay() }
                 if (canPatchInstructorRecording && sdCard.querySelector("#sd-instructor-rec-forms-stable") != null) {
                     lastInstructorRecordingCadetSigForStable = instructorCadetsSignature(state.instructorCadets)
                 }
@@ -379,6 +373,8 @@ fun main() {
                 AppScreen.Cadet -> renderPanel(state.user!!, "Курсант", listOf("Главная", "Запись", "Чат", "Билеты", "История"))
             }
             root.innerHTML = networkBanner + loadingOverlay + html
+            syncChatVoiceHostOverlay()
+            window.requestAnimationFrame { syncChatVoiceHostOverlay() }
             attachListeners(root)
             appendSoundSettingsModalIfNeeded(root)
             appendAdminCadetGroupModalsIfNeeded(root)
@@ -441,8 +437,23 @@ fun main() {
                     instructorHomeSubView = "main"
                     instructorProfileWeekOffset = 0
                     cadetHomeSubView = "main"
+                    // Сбрасываем данные, чтобы не было "утечек" между пользователями при смене аккаунта.
+                    historySessions = emptyList()
+                    historyBalance = emptyList()
+                    historyUsers = emptyList()
+                    historyLoading = false
                 }
                 return@onAuthStateChanged
+            }
+            // Если пользователь сменился в той же вкладке — очистить историю/кэш до загрузки новых данных.
+            val prevUid = appState.user?.id
+            if (prevUid != null && prevUid != uid) {
+                updateState {
+                    historySessions = emptyList()
+                    historyBalance = emptyList()
+                    historyUsers = emptyList()
+                    historyLoading = true
+                }
             }
             updateState { loading = true; error = null }
             getCurrentUser { user, errorMsg ->
@@ -618,7 +629,7 @@ private fun renderRegister(error: String?, loading: Boolean): String {
                     <p class="sd-auth-panel-desc">Всего несколько шагов — и личный кабинет уже готов к работе.</p>
                     <ul class="sd-auth-features">
                         <li><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>Быстрая регистрация</li>
-                        <li><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>Три роли: курсант, инструктор, администратор</li>
+                        <li><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>Две роли: курсант, инструктор</li>
                         <li><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>Безопасный вход через Firebase</li>
                     </ul>
                 </div>
@@ -657,7 +668,6 @@ private fun renderRegister(error: String?, loading: Boolean): String {
                                 <select id="sd-role" class="sd-auth-input sd-auth-select">
                                     <option value="cadet">Курсант</option>
                                     <option value="instructor">Инструктор</option>
-                                    <option value="admin">Администратор</option>
                                 </select>
                             </div>
                         </div>
@@ -930,55 +940,13 @@ private fun renderChatTabContent(currentUser: User): String {
             }
         }
         val recording = appState.chatVoiceRecording
-        val autoSend = appState.chatVoiceRecordingAutoSend
         val reviewReady = appState.chatVoiceReviewReady
-        val elapsed = appState.chatVoiceRecordElapsedSec
-        val recordTimeStr = "${elapsed / 60}:${(elapsed % 60).toString().padStart(2, '0')}"
         val chatFileAttachHtml = """<input type="file" id="sd-chat-file-input" class="sd-hidden" aria-hidden="true" />
                     <button type="button" id="sd-chat-file-btn" class="sd-chat-attach-btn" title="Прикрепить файл" aria-label="Прикрепить файл">$iconAttachSvg</button>"""
+        val voiceRowHtml = buildChatVoiceInputRowInnerHtml()
         val inputRowHtml = when {
-            reviewReady -> {
-                val dur = appState.chatVoiceReviewDurationSec
-                val totalStr = formatVoiceDuration(dur).escapeHtml()
-                val localUrl = appState.chatVoiceReviewLocalUrl?.takeIf { it.isNotBlank() }?.escapeHtml() ?: ""
-                """<div class="sd-chat-input-row sd-chat-voice-record-review-ready" id="sd-chat-voice-record-review-ready">
-                    <div class="sd-chat-voice-review-player">
-                        <button type="button" id="sd-chat-voice-review-play-btn" class="sd-chat-voice-review-play-btn" title="Воспроизвести">$iconPlaySvg</button>
-                        <input id="sd-chat-voice-review-range" class="sd-chat-voice-review-range" type="range" min="0" max="1000" value="0" />
-                        <div class="sd-chat-voice-review-times">
-                            <span id="sd-chat-voice-review-current" class="sd-chat-voice-review-current">0:00</span>
-                            <span class="sd-chat-voice-review-sep">/</span>
-                            <span class="sd-chat-voice-review-total">$totalStr</span>
-                        </div>
-                        <audio id="sd-chat-voice-review-audio" class="sd-chat-voice-review-audio" preload="metadata" src="$localUrl"></audio>
-                    </div>
-                    <div class="sd-chat-voice-review-actions">
-                        <button type="button" id="sd-chat-voice-review-delete" class="sd-chat-voice-review-icon-btn" title="Удалить">$iconTrashSvg</button>
-                        <button type="button" id="sd-chat-voice-review-mic" class="sd-chat-voice-review-icon-btn" title="Записать заново">$iconMicSvg</button>
-                        <button type="button" id="sd-chat-voice-review-send" class="sd-chat-voice-review-icon-btn sd-chat-voice-review-send-btn" title="Отправить">$iconSendSvg</button>
-                    </div>
-                </div>"""
-            }
-            recording && autoSend -> {
-                """<div class="sd-chat-input-row sd-chat-voice-recording" id="sd-chat-voice-recording">
-                    <span class="sd-chat-recording-text">Запись… $recordTimeStr</span>
-                    <span class="sd-chat-voice-hold-hint" aria-hidden="true">Отпустите, чтобы отправить</span>
-                </div>"""
-            }
-            recording && !autoSend -> {
-                val progressPct = ((elapsed.toDouble() / 30.0) * 100.0).coerceIn(0.0, 100.0).toInt()
-                """<div class="sd-chat-input-row sd-chat-voice-recording sd-chat-voice-recording-review" id="sd-chat-voice-recording-review">
-                    <div class="sd-chat-voice-review-track">
-                        <div class="sd-chat-voice-review-track-bar"><div class="sd-chat-voice-review-track-fill" style="width:${progressPct}%"></div></div>
-                        <div class="sd-chat-voice-review-track-time">Запись… $recordTimeStr</div>
-                    </div>
-                    <div class="sd-chat-voice-review-actions sd-chat-voice-review-actions-recording">
-                        <button type="button" id="sd-chat-voice-review-delete" class="sd-chat-voice-review-icon-btn" title="Удалить">$iconTrashSvg</button>
-                        <button type="button" id="sd-chat-voice-review-pause" class="sd-chat-voice-review-icon-btn" title="Пауза (остановить запись)">$iconPauseSvg</button>
-                        <button type="button" id="sd-chat-voice-review-send" class="sd-chat-voice-review-icon-btn sd-chat-voice-review-send-btn" title="Отправить">$iconSendSvg</button>
-                    </div>
-                </div>"""
-            }
+            voiceRowHtml != null && chatVoiceIsWebAndroidLike() -> chatVoicePlaceholderRowHtml()
+            voiceRowHtml != null -> voiceRowHtml
             else -> {
                 val replyComposerHtml = appState.chatReplyToText?.takeIf { it.isNotBlank() }?.let { txt ->
                     """<div class="sd-chat-reply-preview" id="sd-chat-reply-preview">
@@ -991,11 +959,16 @@ private fun renderChatTabContent(currentUser: User): String {
                     $chatFileAttachHtml
                     <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="" maxlength="2000" aria-label="Сообщение" />
                     <button type="button" id="sd-chat-send" class="sd-chat-send-btn" title="Отправить">$iconSendSvg</button>
-                    <button type="button" id="sd-chat-voice-mic" class="sd-chat-voice-mic-btn" title="Голосовое сообщение">$iconMicSvg</button>
+                    <button type="button" id="sd-chat-voice-mic" class="sd-chat-voice-mic-btn" title="Запись голосового сообщения" aria-label="Запись голоса">$iconMicSvg</button>
                 </div>"""
             }
         }
         val adminGroupBtns = if (currentUser.role == "admin") """<span class="sd-chat-group-actions"><button type="button" id="sd-chat-group-edit" class="sd-chat-create-group-btn">Редактировать</button><button type="button" id="sd-chat-group-delete" class="sd-chat-create-group-btn sd-chat-create-group-btn--danger">Удалить группу</button></span>""" else ""
+        val conversationClass = when {
+            recording -> "sd-chat-conversation sd-chat-conversation--voice-recording"
+            reviewReady -> "sd-chat-conversation sd-chat-conversation--voice-preview"
+            else -> "sd-chat-conversation"
+        }
         val grpAvatarBg = avatarColorForId(grp.id).escapeHtml()
         val grpInitials = groupChatNameInitials(grp.name).escapeHtml()
         val grpHeaderAvatarHtml = grp.chatAvatarUrl?.takeIf { it.isNotBlank() }?.let { url ->
@@ -1003,7 +976,7 @@ private fun renderChatTabContent(currentUser: User): String {
         } ?: """<div class="sd-chat-header-avatar" style="background:$grpAvatarBg">$grpInitials</div>"""
         return """
             <div class="sd-chat-tab">
-            <div class="sd-chat-conversation">
+            <div class="$conversationClass">
                 <div class="sd-chat-header sd-chat-header-group">
                     <button type="button" id="sd-chat-back" class="sd-chat-back-btn" title="Назад" aria-label="Назад">$iconBackSvg</button>
                     $grpHeaderAvatarHtml
@@ -1017,7 +990,9 @@ private fun renderChatTabContent(currentUser: User): String {
         """.trimIndent()
     }
     if (contactId != null) {
-        val contact = contacts.find { it.id == contactId } ?: return """<p class="sd-error">Контакт не найден.</p>"""
+        /* Список контактов может прийти позже выбранного id — иначе рендер обрывался без поля ввода/микрофона. */
+        val contact = contacts.find { it.id == contactId }
+            ?: User(id = contactId, fullName = "Контакт", role = "", isActive = true)
         val iconCheck = """<svg class="sd-msg-check" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>"""
         val iconSendSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>"""
         val iconBackSvg = SD_ICON_BACK_CHEVRON_SVG
@@ -1089,61 +1064,13 @@ private fun renderChatTabContent(currentUser: User): String {
             }
         }
         val recording = appState.chatVoiceRecording
-        val autoSend = appState.chatVoiceRecordingAutoSend
         val reviewReady = appState.chatVoiceReviewReady
-        val elapsed = appState.chatVoiceRecordElapsedSec
-        val recordTimeStr = "${elapsed / 60}:${(elapsed % 60).toString().padStart(2, '0')}"
         val chatFileAttachHtml = """<input type="file" id="sd-chat-file-input" class="sd-hidden" aria-hidden="true" />
                     <button type="button" id="sd-chat-file-btn" class="sd-chat-attach-btn" title="Прикрепить файл" aria-label="Прикрепить файл">$iconAttachSvg</button>"""
-
+        val voiceRowHtml = buildChatVoiceInputRowInnerHtml()
         val inputRowHtml = when {
-            reviewReady -> {
-                val dur = appState.chatVoiceReviewDurationSec
-                val totalStr = formatVoiceDuration(dur).escapeHtml()
-                val localUrl = appState.chatVoiceReviewLocalUrl?.takeIf { it.isNotBlank() }?.escapeHtml() ?: ""
-                """<div class="sd-chat-input-row sd-chat-voice-record-review-ready" id="sd-chat-voice-record-review-ready">
-                    <div class="sd-chat-voice-review-player">
-                        <button type="button" id="sd-chat-voice-review-play-btn" class="sd-chat-voice-review-play-btn" title="Воспроизвести">$iconPlaySvg</button>
-                        <input id="sd-chat-voice-review-range" class="sd-chat-voice-review-range" type="range" min="0" max="1000" value="0" />
-                        <div class="sd-chat-voice-review-times">
-                            <span id="sd-chat-voice-review-current" class="sd-chat-voice-review-current">0:00</span>
-                            <span class="sd-chat-voice-review-sep">/</span>
-                            <span class="sd-chat-voice-review-total">$totalStr</span>
-                        </div>
-                        <audio id="sd-chat-voice-review-audio" class="sd-chat-voice-review-audio" preload="metadata" src="$localUrl"></audio>
-                    </div>
-                    <div class="sd-chat-voice-review-actions">
-                        <button type="button" id="sd-chat-voice-review-delete" class="sd-chat-voice-review-icon-btn" title="Удалить">$iconTrashSvg</button>
-                        <button type="button" id="sd-chat-voice-review-mic" class="sd-chat-voice-review-icon-btn" title="Записать заново">$iconMicSvg</button>
-                        <button type="button" id="sd-chat-voice-review-send" class="sd-chat-voice-review-icon-btn sd-chat-voice-review-send-btn" title="Отправить">$iconSendSvg</button>
-                    </div>
-                </div>"""
-            }
-
-            recording && autoSend -> {
-                // режим "удерживай": на отпускание отправляем автоматически
-                """<div class="sd-chat-input-row sd-chat-voice-recording" id="sd-chat-voice-recording">
-                    <span class="sd-chat-recording-text">Запись… $recordTimeStr</span>
-                    <span class="sd-chat-voice-hold-hint" aria-hidden="true">Отпустите, чтобы отправить</span>
-                </div>"""
-            }
-
-            recording && !autoSend -> {
-                // режим "однократный клик": показываем дорожку + пауза/удаление
-                val progressPct = ((elapsed.toDouble() / 30.0) * 100.0).coerceIn(0.0, 100.0).toInt()
-                """<div class="sd-chat-input-row sd-chat-voice-recording sd-chat-voice-recording-review" id="sd-chat-voice-recording-review">
-                    <div class="sd-chat-voice-review-track">
-                        <div class="sd-chat-voice-review-track-bar"><div class="sd-chat-voice-review-track-fill" style="width:${progressPct}%"></div></div>
-                        <div class="sd-chat-voice-review-track-time">Запись… $recordTimeStr</div>
-                    </div>
-                    <div class="sd-chat-voice-review-actions sd-chat-voice-review-actions-recording">
-                        <button type="button" id="sd-chat-voice-review-delete" class="sd-chat-voice-review-icon-btn" title="Удалить">$iconTrashSvg</button>
-                        <button type="button" id="sd-chat-voice-review-pause" class="sd-chat-voice-review-icon-btn" title="Пауза (остановить запись)">$iconPauseSvg</button>
-                        <button type="button" id="sd-chat-voice-review-send" class="sd-chat-voice-review-icon-btn sd-chat-voice-review-send-btn" title="Отправить">$iconSendSvg</button>
-                    </div>
-                </div>"""
-            }
-
+            voiceRowHtml != null && chatVoiceIsWebAndroidLike() -> chatVoicePlaceholderRowHtml()
+            voiceRowHtml != null -> voiceRowHtml
             else -> {
                 val replyComposerHtml = appState.chatReplyToText?.takeIf { it.isNotBlank() }?.let { txt ->
                     """<div class="sd-chat-reply-preview" id="sd-chat-reply-preview">
@@ -1156,13 +1083,18 @@ private fun renderChatTabContent(currentUser: User): String {
                     $chatFileAttachHtml
                     <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="" maxlength="2000" aria-label="Сообщение" />
                     <button type="button" id="sd-chat-send" class="sd-chat-send-btn" title="Отправить">$iconSendSvg</button>
-                    <button type="button" id="sd-chat-voice-mic" class="sd-chat-voice-mic-btn" title="Голосовое сообщение">$iconMicSvg</button>
+                    <button type="button" id="sd-chat-voice-mic" class="sd-chat-voice-mic-btn" title="Запись голосового сообщения" aria-label="Запись голоса">$iconMicSvg</button>
                 </div>"""
             }
         }
+        val conversationClass = when {
+            recording -> "sd-chat-conversation sd-chat-conversation--voice-recording"
+            reviewReady -> "sd-chat-conversation sd-chat-conversation--voice-preview"
+            else -> "sd-chat-conversation"
+        }
         return """
             <div class="sd-chat-tab">
-            <div class="sd-chat-conversation">
+            <div class="$conversationClass">
                 <div class="sd-chat-header">
                     <button type="button" id="sd-chat-back" class="sd-chat-back-btn" title="Назад" aria-label="Назад">$iconBackSvg</button>
                     ${contact.chatAvatarUrl?.takeIf { it.isNotBlank() }?.let { url -> """<div class="sd-chat-header-avatar sd-avatar-wrap" data-initials="$contactInitials" data-bg="${contactAvatarBg}"><img src="${url.escapeHtml()}" alt="" class="sd-avatar-img" decoding="async" data-user-id="${contact.id.escapeHtml()}" /></div>""" } ?: """<div class="sd-chat-header-avatar" style="background:$contactAvatarBg">$contactInitials</div>"""}
@@ -3913,7 +3845,13 @@ private fun wireRecCancelSessionConfirmModalListeners() {
                 val instId = usr.assignedInstructorId ?: ""
                 getOpenWindowsForCadet(instId) { wins ->
                     getSessionsForCadet(usr.id) { sess ->
-                        updateState { recordingOpenWindows = wins; recordingSessions = sess }
+                        val safeSess = sess.filter { it.cadetId == usr.id }
+                        updateState {
+                            recordingOpenWindows = wins
+                            recordingSessions = safeSess
+                            // История курсанта должна показывать только его сессии; обновим её сразу после отмены.
+                            historySessions = safeSess
+                        }
                     }
                 }
             } else {
@@ -5742,8 +5680,10 @@ private fun renderRecordingTabContent(user: User): String {
 
 private fun renderHistoryTabContent(user: User): String {
     val loadingLine = if (appState.historyLoading) """<p class="sd-loading-text">Загрузка…</p>""" else ""
-    val sessions = appState.historySessions
-    val balance = appState.historyBalance.take(50)
+    // Safety: не показываем "чужие" записи даже если в state попал общий список.
+    val sessions = if (user.role == "cadet") appState.historySessions.filter { it.cadetId == user.id } else appState.historySessions
+    val balanceAll = if (user.role == "cadet") appState.historyBalance.filter { it.userId == user.id } else appState.historyBalance
+    val balance = balanceAll.take(50)
 
     fun sessionStatusLabel(s: String) = when (s) {
         "scheduled" -> "Запланировано"; "completed" -> "Завершено"; "cancelled" -> "Отменено"; else -> s
@@ -8127,6 +8067,7 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             if (appState.user?.role != "instructor") return@addEventListener
             val recordingBaseline = appState.recordingSessions.count { it.status == "scheduled" || it.status == "inProgress" }
             saveChatScrollForCurrentContact()
+            abortChatVoiceMediaBeforeRoomSwitch()
             var instructorMyCadetsOpen = appState.instructorMyCadetsSectionOpen
             val cardEl = document.getElementById("sd-card") as? org.w3c.dom.Element
             if (cardEl != null) {
@@ -8146,6 +8087,10 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                 chatSettingsOpen = false
                 notificationsViewOpen = false
                 instructorMyCadetsSectionOpen = instructorMyCadetsOpen
+                resetChatVoiceFieldsForNewRoom()
+                chatPlayingVoiceId = null
+                chatVoicePlaybackPaused = false
+                chatPlayingVoiceCurrentMs = 0
             }
             unsubscribeChat()
             val usrBook = appState.user ?: return@addEventListener
@@ -8387,9 +8332,14 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             val chatTabIdx = getTabsForUserRole(appState.user?.role ?: "").indexOf("Чат").takeIf { it >= 0 } ?: 2
             if (idx != chatTabIdx) {
                 saveChatScrollForCurrentContact()
+                abortChatVoiceMediaBeforeRoomSwitch()
                 updateState {
                     selectedChatContactId = null; selectedChatGroupId = null; chatMessages = emptyList(); chatReplyToMessageId = null; chatReplyToText = null
                     chatAdminCorrespondenceMode = false; chatAdminCorrespondenceSubjectId = null; chatAdminCorrespondencePeerId = null
+                    resetChatVoiceFieldsForNewRoom()
+                    chatPlayingVoiceId = null
+                    chatVoicePlaybackPaused = false
+                    chatPlayingVoiceCurrentMs = 0
                 }
                 unsubscribeChat()
             } else {
@@ -8635,11 +8585,16 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             val pid = corrPeerPick.getAttribute("data-admin-corr-peer-id") ?: return@addEventListener
             val subj = appState.chatAdminCorrespondenceSubjectId ?: return@addEventListener
             saveChatScrollForCurrentContact()
+            abortChatVoiceMediaBeforeRoomSwitch()
             updateState {
                 chatAdminCorrespondencePeerId = pid
                 chatMessages = emptyList()
                 chatReplyToMessageId = null
                 chatReplyToText = null
+                resetChatVoiceFieldsForNewRoom()
+                chatPlayingVoiceId = null
+                chatVoicePlaybackPaused = false
+                chatPlayingVoiceCurrentMs = 0
             }
             unsubscribeChat()
             subscribeMessages(chatRoomId(subj, pid)) { list ->
@@ -8653,12 +8608,17 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
         if (corrSubjectPick != null && appState.user?.role == "admin") {
             val sid = corrSubjectPick.getAttribute("data-admin-corr-subject-id") ?: return@addEventListener
             saveChatScrollForCurrentContact()
+            abortChatVoiceMediaBeforeRoomSwitch()
             updateState {
                 chatAdminCorrespondenceSubjectId = sid
                 chatAdminCorrespondencePeerId = null
                 chatMessages = emptyList()
                 chatReplyToMessageId = null
                 chatReplyToText = null
+                resetChatVoiceFieldsForNewRoom()
+                chatPlayingVoiceId = null
+                chatVoicePlaybackPaused = false
+                chatPlayingVoiceCurrentMs = 0
             }
             unsubscribeChat()
             e.preventDefault(); e.stopPropagation()
@@ -8669,7 +8629,21 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             val gid = chatGroupRow.getAttribute("data-chat-group-id") ?: return@addEventListener
             val uid = appState.user?.id ?: return@addEventListener
             saveChatScrollForCurrentContact()
-            updateState { selectedChatGroupId = gid; selectedChatContactId = null; chatMessages = emptyList(); chatReplyToMessageId = null; chatReplyToText = null; chatAdminCorrespondenceMode = false; chatAdminCorrespondenceSubjectId = null; chatAdminCorrespondencePeerId = null }
+            abortChatVoiceMediaBeforeRoomSwitch()
+            updateState {
+                selectedChatGroupId = gid
+                selectedChatContactId = null
+                chatMessages = emptyList()
+                chatReplyToMessageId = null
+                chatReplyToText = null
+                chatAdminCorrespondenceMode = false
+                chatAdminCorrespondenceSubjectId = null
+                chatAdminCorrespondencePeerId = null
+                resetChatVoiceFieldsForNewRoom()
+                chatPlayingVoiceId = null
+                chatVoicePlaybackPaused = false
+                chatPlayingVoiceCurrentMs = 0
+            }
             clearChatUnreadForGroup(uid, gid)
             unsubscribeChat()
             val roomId = groupChatRoomId(gid)
@@ -8692,7 +8666,21 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             val contactId = chatContact.getAttribute("data-contact-id") ?: return@addEventListener
             val uid = appState.user?.id ?: return@addEventListener
             saveChatScrollForCurrentContact()
-            updateState { selectedChatContactId = contactId; selectedChatGroupId = null; chatMessages = emptyList(); chatReplyToMessageId = null; chatReplyToText = null; chatAdminCorrespondenceMode = false; chatAdminCorrespondenceSubjectId = null; chatAdminCorrespondencePeerId = null }
+            abortChatVoiceMediaBeforeRoomSwitch()
+            updateState {
+                selectedChatContactId = contactId
+                selectedChatGroupId = null
+                chatMessages = emptyList()
+                chatReplyToMessageId = null
+                chatReplyToText = null
+                chatAdminCorrespondenceMode = false
+                chatAdminCorrespondenceSubjectId = null
+                chatAdminCorrespondencePeerId = null
+                resetChatVoiceFieldsForNewRoom()
+                chatPlayingVoiceId = null
+                chatVoicePlaybackPaused = false
+                chatPlayingVoiceCurrentMs = 0
+            }
             clearChatUnread(uid, contactId)
             unsubscribeChat()
             subscribeMessages(chatRoomId(uid, contactId)) { list ->
@@ -8713,7 +8701,23 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             val contactId = adminOpenChat.getAttribute("data-contact-id") ?: return@addEventListener
             val uid = appState.user?.id ?: return@addEventListener
             saveChatScrollForCurrentContact()
-            updateState { selectedTabIndex = chatTabIndexForRole(appState.user?.role); chatSettingsOpen = false; selectedChatContactId = contactId; selectedChatGroupId = null; chatMessages = emptyList(); chatReplyToMessageId = null; chatReplyToText = null; chatAdminCorrespondenceMode = false; chatAdminCorrespondenceSubjectId = null; chatAdminCorrespondencePeerId = null }
+            abortChatVoiceMediaBeforeRoomSwitch()
+            updateState {
+                selectedTabIndex = chatTabIndexForRole(appState.user?.role)
+                chatSettingsOpen = false
+                selectedChatContactId = contactId
+                selectedChatGroupId = null
+                chatMessages = emptyList()
+                chatReplyToMessageId = null
+                chatReplyToText = null
+                chatAdminCorrespondenceMode = false
+                chatAdminCorrespondenceSubjectId = null
+                chatAdminCorrespondencePeerId = null
+                resetChatVoiceFieldsForNewRoom()
+                chatPlayingVoiceId = null
+                chatVoicePlaybackPaused = false
+                chatPlayingVoiceCurrentMs = 0
+            }
             clearChatUnread(uid, contactId)
             unsubscribeChat()
             subscribeMessages(chatRoomId(uid, contactId)) { list ->
@@ -8734,7 +8738,23 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             val contactId = cadetChatBtn.getAttribute("data-contact-id") ?: return@addEventListener
             val uid = appState.user?.id ?: return@addEventListener
             saveChatScrollForCurrentContact()
-            updateState { selectedTabIndex = chatTabIndexForRole(appState.user?.role); chatSettingsOpen = false; selectedChatContactId = contactId; selectedChatGroupId = null; chatMessages = emptyList(); chatReplyToMessageId = null; chatReplyToText = null; chatAdminCorrespondenceMode = false; chatAdminCorrespondenceSubjectId = null; chatAdminCorrespondencePeerId = null }
+            abortChatVoiceMediaBeforeRoomSwitch()
+            updateState {
+                selectedTabIndex = chatTabIndexForRole(appState.user?.role)
+                chatSettingsOpen = false
+                selectedChatContactId = contactId
+                selectedChatGroupId = null
+                chatMessages = emptyList()
+                chatReplyToMessageId = null
+                chatReplyToText = null
+                chatAdminCorrespondenceMode = false
+                chatAdminCorrespondenceSubjectId = null
+                chatAdminCorrespondencePeerId = null
+                resetChatVoiceFieldsForNewRoom()
+                chatPlayingVoiceId = null
+                chatVoicePlaybackPaused = false
+                chatPlayingVoiceCurrentMs = 0
+            }
             clearChatUnread(uid, contactId)
             unsubscribeChat()
             subscribeMessages(chatRoomId(uid, contactId)) { list ->
@@ -8914,124 +8934,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
         }, true)
     }
 
-    // Один раз: делегирование управления голосовыми сообщениями (WhatsApp-like UX)
-    if (window.asDynamic().__sdChatVoiceControlsDelegation != true) {
-        window.asDynamic().__sdChatVoiceControlsDelegation = true
-
-        // 1) Удержание микрофона: record -> отпускание => отправка
-        // target часто — svg/path внутри кнопки, поэтому ищем кнопку через closest
-        document.body?.addEventListener("pointerdown", { e: dynamic ->
-            val raw = e?.target as? org.w3c.dom.Element ?: return@addEventListener
-            val micBtn = raw.closest("#sd-chat-voice-mic") as? org.w3c.dom.Element ?: return@addEventListener
-            if (appState.chatVoiceRecording || appState.chatVoiceReviewReady) return@addEventListener
-
-            voiceMicHoldTriggered = false
-            if (voiceMicLongPressTimerId != 0) {
-                window.clearTimeout(voiceMicLongPressTimerId)
-                voiceMicLongPressTimerId = 0
-            }
-            val uid = appState.user?.id ?: return@addEventListener
-            val tid = window.setTimeout({
-                voiceMicHoldTriggered = true
-                // Режим "удерживай": после stop/отпускания отправим автоматически
-                startVoiceRecording(uid, autoSendOnStop = true)
-            }, 250).unsafeCast<Int>()
-            voiceMicLongPressTimerId = tid
-            try {
-                val pid = e.asDynamic().pointerId
-                if (pid != null) micBtn.asDynamic().setPointerCapture(pid)
-            } catch (_: Throwable) { }
-            (e as? org.w3c.dom.events.Event)?.preventDefault()
-        }, true)
-
-        document.body?.addEventListener("pointerup", { e: dynamic ->
-            val raw = e?.target as? org.w3c.dom.Element ?: return@addEventListener
-            if (appState.chatVoiceReviewReady) return@addEventListener
-
-            // Долгое удержание: отпускание в любом месте — остановить запись (раньше срывалось, если target не кнопка)
-            if (voiceMicHoldTriggered) {
-                voiceMicHoldTriggered = false
-                if (voiceMicLongPressTimerId != 0) {
-                    window.clearTimeout(voiceMicLongPressTimerId)
-                    voiceMicLongPressTimerId = 0
-                }
-                stopVoiceRecording()
-                (e as? org.w3c.dom.events.Event)?.preventDefault()
-                return@addEventListener
-            }
-
-            val onMic = raw.closest("#sd-chat-voice-mic") as? org.w3c.dom.Element != null
-            if (!onMic) {
-                if (voiceMicLongPressTimerId != 0) {
-                    window.clearTimeout(voiceMicLongPressTimerId)
-                    voiceMicLongPressTimerId = 0
-                }
-                return@addEventListener
-            }
-
-            // Короткий клик по микрофону (в т.ч. по иконке): режим превью
-            if (voiceMicLongPressTimerId != 0) {
-                window.clearTimeout(voiceMicLongPressTimerId)
-                voiceMicLongPressTimerId = 0
-            }
-            val uid = appState.user?.id ?: return@addEventListener
-            if (!appState.chatVoiceRecording && !appState.chatVoiceReviewReady) {
-                startVoiceRecording(uid, autoSendOnStop = false)
-            }
-            (e as? org.w3c.dom.events.Event)?.preventDefault()
-        }, true)
-
-        // 2) Кнопки превью/управления записью и отправкой
-        document.body?.addEventListener("click", { e: dynamic ->
-            val target = e?.target as? org.w3c.dom.Element ?: return@addEventListener
-            val ctrl = target.asDynamic().closest(
-                "#sd-chat-voice-review-delete, #sd-chat-voice-review-pause, #sd-chat-voice-review-mic, #sd-chat-voice-review-send, #sd-chat-voice-review-play-btn"
-            ) as? org.w3c.dom.Element ?: return@addEventListener
-            val uid = appState.user?.id ?: return@addEventListener
-
-            when (ctrl.id) {
-                "sd-chat-voice-review-delete" -> {
-                    if (appState.chatVoiceRecording) {
-                        voiceDiscardOnStop = true
-                        stopVoiceRecording()
-                    } else if (appState.chatVoiceReviewReady) {
-                        discardVoiceReview()
-                    }
-                }
-                "sd-chat-voice-review-pause" -> {
-                    // Пауза во время записи превью => остановить, показать плей/отправку
-                    stopVoiceRecording()
-                }
-                "sd-chat-voice-review-mic" -> {
-                    // Перезапись заново (из превью)
-                    discardVoiceReview()
-                    startVoiceRecording(uid, autoSendOnStop = false)
-                }
-                "sd-chat-voice-review-send" -> {
-                    if (appState.chatVoiceRecording) {
-                        // Отправить прямо во время записи: останавливаем и в onstop уйдём в sendVoiceMessage.
-                        voiceAutoSendOnStop = true
-                        updateState { chatVoiceRecordingAutoSend = true }
-                        stopVoiceRecording()
-                    } else {
-                        sendVoiceReviewMessage()
-                    }
-                }
-                "sd-chat-voice-review-play-btn" -> {
-                    toggleVoiceReviewPlay()
-                }
-            }
-            (e as? org.w3c.dom.events.Event)?.preventDefault()
-            (e as? org.w3c.dom.events.Event)?.stopPropagation()
-        }, true)
-
-        // 3) Ползунок превью
-        document.body?.addEventListener("input", { e: dynamic ->
-            val target = e?.target as? org.w3c.dom.Element ?: return@addEventListener
-            if (target.id != "sd-chat-voice-review-range") return@addEventListener
-            setVoiceReviewPlaybackPositionFromRange()
-        }, true)
-    }
+    installChatVoiceControlsOnce()
 
     // Один раз: long-press меню на исходящих сообщениях (текст и голосовые)
     if (window.asDynamic().__sdChatMsgMenuDelegation != true) {
@@ -9136,6 +9039,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
     document.getElementById("sd-chat-admin-correspondence")?.addEventListener("click", {
         if (appState.user?.role != "admin") return@addEventListener
         saveChatScrollForCurrentContact()
+        abortChatVoiceMediaBeforeRoomSwitch()
         if (appState.chatAdminCorrespondenceMode) {
             updateState {
                 chatAdminCorrespondenceMode = false
@@ -9144,6 +9048,10 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 chatMessages = emptyList()
                 chatReplyToMessageId = null
                 chatReplyToText = null
+                resetChatVoiceFieldsForNewRoom()
+                chatPlayingVoiceId = null
+                chatVoicePlaybackPaused = false
+                chatPlayingVoiceCurrentMs = 0
             }
             unsubscribeChat()
         } else {
@@ -9156,6 +9064,10 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 chatMessages = emptyList()
                 chatReplyToMessageId = null
                 chatReplyToText = null
+                resetChatVoiceFieldsForNewRoom()
+                chatPlayingVoiceId = null
+                chatVoicePlaybackPaused = false
+                chatPlayingVoiceCurrentMs = 0
             }
             unsubscribeChat()
         }
@@ -9863,25 +9775,16 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 startDrivingTimers()
             }
             document.getElementById("sd-chat-back")?.addEventListener("click", {
-                try { (voiceRecorder.asDynamic()).stop() } catch (_: Throwable) { }
-                val stream = voiceRecorderStream
-                if (stream != null) {
-                    js("(function(s){ if(s&&s.getTracks) s.getTracks().forEach(function(t){ t.stop(); }); })").unsafeCast<(dynamic) -> Unit>().invoke(stream)
+                abortChatVoiceMediaBeforeRoomSwitch()
+                chatVoiceResetDiscardOnStop()
+                if (chatVoiceRecordTickInterval != 0) {
+                    window.clearInterval(chatVoiceRecordTickInterval)
+                    chatVoiceRecordTickInterval = 0
                 }
-                if (voiceRecordInterval != 0) { window.clearInterval(voiceRecordInterval); voiceRecordInterval = 0 }
                 if (voicePlayInterval != 0) { window.clearInterval(voicePlayInterval); voicePlayInterval = 0 }
-
-                // Сбрасываем превью локального аудио (если оно было)
-                val reviewAudio = document.getElementById("sd-chat-voice-review-audio")?.asDynamic()
-                try { reviewAudio?.pause?.invoke() } catch (_: Throwable) { }
-                voiceReviewBlob = null
-                voiceReviewObjectUrl?.let { old ->
-                    js("(function(u){ try { URL.revokeObjectURL(u); } catch(e) {} })").unsafeCast<(String) -> Unit>()(old)
-                }
-                voiceReviewObjectUrl = null
-                voiceReviewAudioBoundForUrl = null
-                voiceDiscardOnStop = false
-                voiceAutoSendOnStop = false
+                try {
+                    document.getElementById("sd-chat-voice-review-audio")?.asDynamic()?.pause?.invoke()
+                } catch (_: Throwable) { }
 
                 saveChatScrollForCurrentContact()
                 if (appState.chatAdminCorrespondenceMode) {
@@ -9893,11 +9796,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                             chatMessages = emptyList()
                             chatReplyToMessageId = null
                             chatReplyToText = null
-                            chatVoiceRecording = false
-                            chatVoiceRecordingAutoSend = false
-                            chatVoiceReviewReady = false
-                            chatVoiceReviewLocalUrl = null
-                            chatVoiceReviewDurationSec = 0
+                            resetChatVoiceFieldsForNewRoom()
                             chatPlayingVoiceId = null
                             chatVoicePlaybackPaused = false
                             chatPlayingVoiceCurrentMs = 0
@@ -9911,6 +9810,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                             chatMessages = emptyList()
                             chatReplyToMessageId = null
                             chatReplyToText = null
+                            resetChatVoiceFieldsForNewRoom()
                             chatPlayingVoiceId = null
                             chatVoicePlaybackPaused = false
                             chatPlayingVoiceCurrentMs = 0
@@ -9923,6 +9823,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                         chatMessages = emptyList()
                         chatReplyToMessageId = null
                         chatReplyToText = null
+                        resetChatVoiceFieldsForNewRoom()
                         chatPlayingVoiceId = null
                         chatVoicePlaybackPaused = false
                         chatPlayingVoiceCurrentMs = 0
@@ -9937,11 +9838,7 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                     chatMessages = emptyList()
                     chatReplyToMessageId = null
                     chatReplyToText = null
-                    chatVoiceRecording = false
-                    chatVoiceRecordingAutoSend = false
-                    chatVoiceReviewReady = false
-                    chatVoiceReviewLocalUrl = null
-                    chatVoiceReviewDurationSec = 0
+                    resetChatVoiceFieldsForNewRoom()
                     chatPlayingVoiceId = null
                     chatVoicePlaybackPaused = false
                     chatPlayingVoiceCurrentMs = 0
@@ -9963,8 +9860,8 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 if (e?.key == "Enter") sendChatMessage(chatInput, uid)
             })
             if (document.getElementById("sd-chat-voice-recording") != null || document.getElementById("sd-chat-voice-recording-review") != null) {
-                if (voiceRecordInterval != 0) window.clearInterval(voiceRecordInterval)
-                voiceRecordInterval = window.setInterval({
+                if (chatVoiceRecordTickInterval != 0) window.clearInterval(chatVoiceRecordTickInterval)
+                chatVoiceRecordTickInterval = window.setInterval({
                     val start = appState.chatVoiceRecordStartMs
                     if (start > 0) updateState { chatVoiceRecordElapsedSec = ((js("Date.now()").unsafeCast<Double>() - start) / 1000.0).toInt().coerceAtLeast(0) }
                 }, 1000).unsafeCast<Int>()
@@ -10629,280 +10526,16 @@ private fun sendChatMessage(chatInput: HTMLInputElement?, uid: String?) {
         }
 }
 
-private fun startVoiceRecording(uid: String?, autoSendOnStop: Boolean) {
-    if (uid == null) return
-    if (appState.selectedChatGroupId == null && appState.selectedChatContactId == null) return
-    val roomId = when {
-        appState.selectedChatGroupId != null -> groupChatRoomId(appState.selectedChatGroupId!!)
-        else -> chatRoomId(uid, appState.selectedChatContactId!!)
+/** Запись/превью голоса — [ChatVoiceWeb]; здесь только остановка проигрывания сообщений в ленте. */
+private fun abortChatVoiceMediaBeforeRoomSwitch() {
+    abortChatVoiceRecordingAndPreview()
+    if (voicePlayInterval != 0) {
+        window.clearInterval(voicePlayInterval)
+        voicePlayInterval = 0
     }
-
-    // Если была готовая запись — очищаем превью и локальные ресурсы.
-    if (appState.chatVoiceReviewReady) discardVoiceReview()
-    voiceDiscardOnStop = false
-    voiceAutoSendOnStop = autoSendOnStop
-    voiceReviewBlob = null
-
-    // Очищаем local object URL (если был)
-    voiceReviewObjectUrl?.let { old ->
-        js("(function(u){ try { URL.revokeObjectURL(u); } catch(e) {} })").unsafeCast<(String) -> Unit>()(old)
-    }
-    voiceReviewObjectUrl = null
-
-    updateState {
-        chatVoiceRecording = true
-        chatVoiceRecordingAutoSend = autoSendOnStop
-        chatVoiceReviewReady = false
-        chatVoiceReviewLocalUrl = null
-        chatVoiceReviewDurationSec = 0
-        chatVoiceRecordStartMs = js("Date.now()").unsafeCast<Double>()
-        chatVoiceRecordElapsedSec = 0
-    }
-
-    val nav = js("navigator").unsafeCast<dynamic>()
-    val mediaDevices = nav.mediaDevices
-    if (mediaDevices == null || mediaDevices.getUserMedia == null) {
-        updateState { networkError = "Нужен доступ к микрофону для голосовых сообщений." }
-        return
-    }
-
-    voiceRecorderChunks = js("[]")
-    val constraints = js("({ audio: true })")
-    mediaDevices.getUserMedia(constraints).then { stream: dynamic ->
-        voiceRecorderStream = stream
-        val Recorder = js("window.MediaRecorder")
-        if (Recorder == undefined) {
-            updateState { networkError = "MediaRecorder не поддерживается в этом браузере." }
-            js("(function(s){ if(s&&s.getTracks) s.getTracks().forEach(function(t){ t.stop(); }); })").unsafeCast<(dynamic) -> Unit>().invoke(stream)
-            return@then
-        }
-        val mime = js("(function(){ if(typeof MediaRecorder!=='undefined'&&MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) return 'audio/webm;codecs=opus'; if(typeof MediaRecorder!=='undefined'&&MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported('audio/webm')) return 'audio/webm'; return 'audio/webm'; })()").unsafeCast<String>()
-        voiceRecorderMimeType = mime
-        val opts = js("({ mimeType: mime })")
-        val recorder = js("new MediaRecorder(stream, opts)").unsafeCast<dynamic>()
-        window.asDynamic().__sdVoiceChunks = voiceRecorderChunks
-        recorder.ondataavailable = { e: dynamic ->
-            val data = e?.data
-            if (data != null) {
-                window.asDynamic().__sdVoiceChunkData = data
-                js("(function(){ var a=window.__sdVoiceChunks,d=window.__sdVoiceChunkData; if(a&&d){ a.push(d); } })()")
-            }
-        }
-
-        recorder.onstop = onStop@{ _: dynamic ->
-            val chunks = voiceRecorderChunks
-            val mimeType = voiceRecorderMimeType
-            val stopStream = voiceRecorderStream
-
-            js("(function(s){ if(s&&s.getTracks) s.getTracks().forEach(function(t){ t.stop(); }); })").unsafeCast<(dynamic) -> Unit>().invoke(stopStream)
-
-            voiceRecorderStream = null
-            voiceRecorder = null
-            voiceRecorderChunks = null
-            if (voiceRecordInterval != 0) { window.clearInterval(voiceRecordInterval); voiceRecordInterval = 0 }
-
-            val startMs = appState.chatVoiceRecordStartMs
-            val durationSec = ((js("Date.now()").unsafeCast<Double>() - startMs) / 1000.0).toInt().coerceAtLeast(1)
-
-            // Сбрасываем текущий режим записи
-            updateState {
-                chatVoiceRecording = false
-                chatVoiceRecordElapsedSec = 0
-                chatVoiceRecordingAutoSend = false
-            }
-
-            if (chunks == null) return@onStop
-            if (voiceDiscardOnStop) {
-                voiceDiscardOnStop = false
-                return@onStop
-            }
-
-            val blob = js("(function(c,t){ return new Blob(c, { type: t || 'audio/webm' }); })").unsafeCast<(dynamic, String) -> dynamic>().invoke(chunks, mimeType)
-
-            if (voiceAutoSendOnStop) {
-                voiceAutoSendOnStop = false
-                sendVoiceMessage(roomId, uid, blob, durationSec)
-                    .then {
-                        subscribeMessages(roomId) { list -> updateState { chatMessages = list } }
-                        window.setTimeout({ scrollChatToBottom() }, 50)
-                    }
-                    .catch { e: dynamic ->
-                        updateState { networkError = "Не удалось отправить голосовое: ${(e?.message as? String) ?: "ошибка"}" }
-                    }
-            } else {
-                // Режим превью: сохраняем Blob в память и показываем плеер
-                voiceReviewBlob = blob
-                val objUrl = js("(function(b){ return URL.createObjectURL(b); })").unsafeCast<(dynamic) -> String>()(blob)
-                voiceReviewObjectUrl = objUrl
-                updateState {
-                    chatVoiceReviewReady = true
-                    chatVoiceReviewLocalUrl = objUrl
-                    chatVoiceReviewDurationSec = durationSec
-                }
-            }
-        }
-
-        recorder.start(1000)
-        voiceRecorder = recorder
-    }.catch { _: dynamic ->
-        updateState { networkError = "Нужен доступ к микрофону для голосовых сообщений." }
-        updateState {
-            chatVoiceRecording = false
-            chatVoiceRecordingAutoSend = false
-            chatVoiceReviewReady = false
-            chatVoiceReviewLocalUrl = null
-            chatVoiceReviewDurationSec = 0
-        }
-    }
-}
-
-private fun stopVoiceRecording() {
-    val rec = voiceRecorder
-    if (rec == null) return
     try {
-        rec.stop()
+        document.getElementById("sd-global-voice-audio")?.asDynamic()?.pause?.invoke()
     } catch (_: Throwable) { }
-}
-
-/** Удаляет готовое превью (без отправки). */
-private fun discardVoiceReview() {
-    // Остановить проигрывание, если играет
-    val audio = document.getElementById("sd-chat-voice-review-audio")?.asDynamic()
-    try { audio?.pause?.invoke() } catch (_: Throwable) { }
-
-    voiceReviewBlob = null
-    voiceReviewObjectUrl?.let { old ->
-        js("(function(u){ try { URL.revokeObjectURL(u); } catch(e) {} })").unsafeCast<(String) -> Unit>()(old)
-    }
-    voiceReviewObjectUrl = null
-    voiceReviewAudioBoundForUrl = null
-    updateState {
-        chatVoiceRecording = false
-        chatVoiceRecordElapsedSec = 0
-        chatVoiceRecordingAutoSend = false
-        chatVoiceReviewReady = false
-        chatVoiceReviewLocalUrl = null
-        chatVoiceReviewDurationSec = 0
-    }
-}
-
-/** Отправить голосовое из режима превью (после паузы). */
-private fun sendVoiceReviewMessage() {
-    if (!appState.chatVoiceReviewReady) return
-    val uid = appState.user?.id ?: return
-    if (voiceReviewBlob == null) return
-    val roomId = when {
-        appState.selectedChatGroupId != null -> groupChatRoomId(appState.selectedChatGroupId!!)
-        else -> {
-            val contactId = appState.selectedChatContactId ?: return
-            chatRoomId(uid, contactId)
-        }
-    }
-    val durationSec = appState.chatVoiceReviewDurationSec
-
-    val blob = voiceReviewBlob
-    val objUrlToRevoke = voiceReviewObjectUrl
-
-    // Скрываем превью, чтобы пользователь не отправил повторно
-    updateState {
-        chatVoiceRecording = false
-        chatVoiceRecordElapsedSec = 0
-        chatVoiceRecordingAutoSend = false
-        chatVoiceReviewReady = false
-        chatVoiceReviewLocalUrl = null
-        chatVoiceReviewDurationSec = 0
-    }
-
-    // Затем отправляем
-    fun cleanup() {
-        voiceReviewBlob = null
-        if (objUrlToRevoke != null) {
-            js("(function(u){ try { URL.revokeObjectURL(u); } catch(e) {} })").unsafeCast<(String) -> Unit>()(objUrlToRevoke)
-        }
-        voiceReviewObjectUrl = null
-        voiceReviewAudioBoundForUrl = null
-    }
-
-    sendVoiceMessage(roomId, uid, blob, durationSec)
-        .then {
-            subscribeMessages(roomId) { list -> updateState { chatMessages = list } }
-            window.setTimeout({ scrollChatToBottom() }, 50)
-            cleanup()
-        }
-        .catch { e: dynamic ->
-            updateState { networkError = "Не удалось отправить голосовое: ${(e?.message as? String) ?: "ошибка"}" }
-            cleanup()
-        }
-}
-
-private fun ensureVoiceReviewAudioBound() {
-    val localUrl = appState.chatVoiceReviewLocalUrl ?: return
-    if (localUrl.isBlank()) return
-    if (voiceReviewAudioBoundForUrl == localUrl) return
-    voiceReviewAudioBoundForUrl = localUrl
-
-    val audio = document.getElementById("sd-chat-voice-review-audio")?.asDynamic() ?: return
-    val range = document.getElementById("sd-chat-voice-review-range") as? org.w3c.dom.HTMLInputElement
-    val currentEl = document.getElementById("sd-chat-voice-review-current")
-    val durationSec = appState.chatVoiceReviewDurationSec
-    val playBtn = document.getElementById("sd-chat-voice-review-play-btn") as? org.w3c.dom.HTMLButtonElement
-
-    fun patchFromAudio() {
-        if (audio == null || range == null) return
-        val curMs = ((audio.currentTime as Double) * 1000).toInt()
-        val curSec = (curMs / 1000).coerceAtLeast(0)
-        range.value = ((curSec.toDouble() / durationSec.toDouble()) * 1000.0).toInt().coerceIn(0, 1000).toString()
-        currentEl?.textContent = formatVoiceDurationSec(curSec)
-        if (playBtn != null) {
-            playBtn.innerHTML = if (audio.paused == false) SD_ICON_PAUSE_SVG else SD_ICON_PLAY_SVG
-            playBtn.setAttribute("title", if (audio.paused == false) "Пауза" else "Воспроизвести")
-            playBtn.setAttribute("aria-label", if (audio.paused == false) "Пауза" else "Воспроизвести")
-        }
-    }
-
-    audio.ontimeupdate = { _: dynamic -> patchFromAudio() }
-    audio.onended = { _: dynamic ->
-        if (range != null) range.value = "1000"
-        currentEl?.textContent = formatVoiceDurationSec(durationSec)
-        if (playBtn != null) {
-            playBtn.innerHTML = SD_ICON_PLAY_SVG
-            playBtn.setAttribute("title", "Воспроизвести")
-            playBtn.setAttribute("aria-label", "Воспроизвести")
-        }
-    }
-    // Инициализируем сразу
-    js("(function(a){ try { a.currentTime = 0; } catch(e){} })").unsafeCast<(dynamic) -> Unit>().invoke(audio)
-}
-
-private fun toggleVoiceReviewPlay() {
-    if (!appState.chatVoiceReviewReady) return
-    ensureVoiceReviewAudioBound()
-    val audio = document.getElementById("sd-chat-voice-review-audio")?.asDynamic() ?: return
-    val playBtn = document.getElementById("sd-chat-voice-review-play-btn") as? org.w3c.dom.HTMLButtonElement
-    if (audio.paused == false) {
-        audio.pause()
-        if (playBtn != null) playBtn.innerHTML = SD_ICON_PLAY_SVG
-        return
-    }
-    audio.play()?.catch { _: dynamic -> Unit }
-    if (playBtn != null) playBtn.innerHTML = SD_ICON_PAUSE_SVG
-}
-
-private fun setVoiceReviewPlaybackPositionFromRange() {
-    if (!appState.chatVoiceReviewReady) return
-    val audio = document.getElementById("sd-chat-voice-review-audio")?.asDynamic() ?: return
-    val range = document.getElementById("sd-chat-voice-review-range") as? org.w3c.dom.HTMLInputElement ?: return
-    val durationSec = appState.chatVoiceReviewDurationSec
-    if (durationSec <= 0) return
-    val ratio = (range.value.toIntOrNull()?.toDouble() ?: 0.0) / 1000.0
-    audio.currentTime = ratio * durationSec.toDouble()
-    val curSec = (ratio * durationSec.toDouble()).toInt().coerceAtLeast(0)
-    val currentEl = document.getElementById("sd-chat-voice-review-current")
-    currentEl?.textContent = formatVoiceDurationSec(curSec)
-    val playBtn = document.getElementById("sd-chat-voice-review-play-btn") as? org.w3c.dom.HTMLButtonElement
-    if (playBtn != null) {
-        playBtn.innerHTML = if (audio.paused == false) SD_ICON_PAUSE_SVG else SD_ICON_PLAY_SVG
-    }
 }
 
 private fun getOrCreateGlobalVoiceAudio(): dynamic {

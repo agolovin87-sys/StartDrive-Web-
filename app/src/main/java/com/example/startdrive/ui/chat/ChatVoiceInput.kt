@@ -3,17 +3,21 @@ package com.example.startdrive.ui.chat
 import android.Manifest
 import android.content.pm.PackageManager
 import android.media.MediaRecorder
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import java.io.File
@@ -45,7 +50,7 @@ fun ChatVoiceInput(
 ) {
     val context = LocalContext.current
     var isRecording by remember { mutableStateOf(false) }
-    var recordStartMs by remember { mutableStateOf(0L) }
+    var isPaused by remember { mutableStateOf(false) }
     var recordElapsedSec by remember { mutableStateOf(0) }
     var mediaRecorder by remember { mutableStateOf<MediaRecorder?>(null) }
     var voiceFile by remember { mutableStateOf<File?>(null) }
@@ -57,8 +62,8 @@ fun ChatVoiceInput(
             startRecording(context) { mr, file ->
                 mediaRecorder = mr
                 voiceFile = file
-                recordStartMs = System.currentTimeMillis()
                 recordElapsedSec = 0
+                isPaused = false
                 isRecording = true
             }
         } else {
@@ -66,12 +71,12 @@ fun ChatVoiceInput(
         }
     }
 
-    LaunchedEffect(isRecording) {
-        if (!isRecording) return@LaunchedEffect
+    LaunchedEffect(isRecording, isPaused) {
+        if (!isRecording || isPaused) return@LaunchedEffect
         while (true) {
-            kotlinx.coroutines.delay(1000)
-            if (!isRecording) break
-            recordElapsedSec = ((System.currentTimeMillis() - recordStartMs) / 1000).toInt().coerceAtLeast(0)
+            delay(1000)
+            if (!isRecording || isPaused) break
+            recordElapsedSec += 1
         }
     }
 
@@ -79,14 +84,11 @@ fun ChatVoiceInput(
         Row(
             modifier = modifier
                 .fillMaxWidth()
+                .background(Color.White)
                 .padding(8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(
-                "Запись… %d:%02d".format(recordElapsedSec / 60, recordElapsedSec % 60),
-                style = MaterialTheme.typography.bodyLarge,
-            )
             IconButton(
                 onClick = {
                     mediaRecorder?.apply {
@@ -97,15 +99,64 @@ fun ChatVoiceInput(
                     }
                     mediaRecorder = null
                     isRecording = false
-                    voiceFile?.let { file ->
-                        val durationSec = ((System.currentTimeMillis() - recordStartMs) / 1000).toInt().coerceAtLeast(1)
-                        onSendVoice(file, durationSec)
-                    }
+                    isPaused = false
+                    voiceFile?.delete()
                     voiceFile = null
                 },
                 modifier = Modifier.size(44.dp),
             ) {
-                Icon(Icons.Default.Stop, contentDescription = "Остановить", tint = Color.Red, modifier = Modifier.size(28.dp))
+                Icon(Icons.Default.Delete, contentDescription = "Удалить запись", tint = Color(0xFF212121), modifier = Modifier.size(26.dp))
+            }
+            Text(
+                "Запись… %d:%02d".format(recordElapsedSec / 60, recordElapsedSec % 60),
+                style = MaterialTheme.typography.bodyLarge,
+                color = Color(0xFF212121),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                IconButton(
+                    onClick = {
+                        val mr = mediaRecorder ?: return@IconButton
+                        try {
+                            if (isPaused) {
+                                mr.resume()
+                                isPaused = false
+                            } else {
+                                mr.pause()
+                                isPaused = true
+                            }
+                        } catch (_: Exception) { }
+                    },
+                    modifier = Modifier.size(44.dp),
+                ) {
+                    Icon(
+                        imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                        contentDescription = if (isPaused) "Продолжить" else "Пауза",
+                        tint = Color(0xFF212121),
+                        modifier = Modifier.size(26.dp),
+                    )
+                }
+            }
+            IconButton(
+                onClick = {
+                    mediaRecorder?.apply {
+                        try {
+                            stop()
+                            release()
+                        } catch (_: Exception) { }
+                    }
+                    mediaRecorder = null
+                    isRecording = false
+                    isPaused = false
+                    val sec = recordElapsedSec.coerceAtLeast(1)
+                    voiceFile?.let { file -> onSendVoice(file, sec) }
+                    voiceFile = null
+                },
+                modifier = Modifier.size(44.dp),
+            ) {
+                Icon(Icons.Default.Send, contentDescription = "Отправить", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(26.dp))
             }
         }
         return
@@ -143,8 +194,8 @@ fun ChatVoiceInput(
                     startRecording(context) { mr, file ->
                         mediaRecorder = mr
                         voiceFile = file
-                        recordStartMs = System.currentTimeMillis()
                         recordElapsedSec = 0
+                        isPaused = false
                         isRecording = true
                     }
                 } else {
@@ -161,7 +212,7 @@ fun ChatVoiceInput(
 private fun startRecording(context: android.content.Context, onReady: (MediaRecorder, File) -> Unit) {
     val file = File(context.cacheDir, "voice_${System.currentTimeMillis()}.m4a")
     try {
-        val recorder = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+        val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             MediaRecorder(context)
         } else {
             @Suppress("DEPRECATION")

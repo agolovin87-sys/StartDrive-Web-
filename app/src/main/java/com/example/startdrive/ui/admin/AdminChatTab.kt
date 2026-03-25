@@ -30,6 +30,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -82,6 +83,9 @@ fun AdminChatTab(
     val chatRepo = ChatRepository
     val contacts by userRepo.allNonAdminUsers().collectAsState(initial = emptyList())
     var messageText by remember { mutableStateOf("") }
+    LaunchedEffect(selectedContactId) {
+        messageText = ""
+    }
     val scope = rememberCoroutineScope()
     val selectedContact = remember(selectedContactId, contacts) { selectedContactId?.let { id -> contacts.find { it.id == id } } }
 
@@ -235,6 +239,10 @@ fun AdminChatTab(
                 var menuMessage by remember { mutableStateOf<ChatMessage?>(null) }
                 var replyingTo by remember { mutableStateOf<ChatMessage?>(null) }
                 var hiddenKey by remember { mutableStateOf(0) }
+                LaunchedEffect(selectedContactId) {
+                    menuMessage = null
+                    replyingTo = null
+                }
                 val hiddenIds = remember(chatRoomId, currentUserId, hiddenKey) {
                     HiddenChatMessages.getSet(context, currentUserId, chatRoomId)
                 }
@@ -321,46 +329,48 @@ fun AdminChatTab(
                                 }
                             }
                         }
-                        ChatVoiceInput(
-                            messageText = messageText,
-                            onMessageTextChange = { messageText = it },
-                            onSendText = {
-                                if (messageText.isNotBlank()) {
-                                    val text = messageText
-                                    val replyTo = replyingTo
-                                    messageText = ""
-                                    replyingTo = null
-                                    val optMsg = ChatMessage(senderId = currentUserId, text = text, timestamp = System.currentTimeMillis(), status = "sent", replyToMessageId = replyTo?.id, replyToText = replyTo?.text?.take(100))
+                        key(selectedContactId) {
+                            ChatVoiceInput(
+                                messageText = messageText,
+                                onMessageTextChange = { messageText = it },
+                                onSendText = {
+                                    if (messageText.isNotBlank()) {
+                                        val text = messageText
+                                        val replyTo = replyingTo
+                                        messageText = ""
+                                        replyingTo = null
+                                        val optMsg = ChatMessage(senderId = currentUserId, text = text, timestamp = System.currentTimeMillis(), status = "sent", replyToMessageId = replyTo?.id, replyToText = replyTo?.text?.take(100))
+                                        chatRepo.addOptimisticMessage(chatRoomId, optMsg)
+                                        scope.launch {
+                                            try {
+                                                chatRepo.sendMessage(chatRoomId, currentUserId, text, replyTo?.id, replyTo?.text?.take(100))
+                                            } catch (e: Exception) {
+                                                messageText = text
+                                                replyingTo = replyTo
+                                                chatRepo.removeOptimisticMessage(chatRoomId, optMsg)
+                                                val errMsg = "Не удалось отправить: ${e.message ?: "ошибка сети или доступа"}"
+                                                snackbarHostState.showSnackbar(errMsg)
+                                                onNotification(errMsg)
+                                            }
+                                        }
+                                    }
+                                },
+                                onSendVoice = { file, durationSec ->
+                                    val optMsg = ChatMessage(senderId = currentUserId, text = "", timestamp = System.currentTimeMillis(), status = "sent", voiceUrl = null, voiceDurationSec = durationSec)
                                     chatRepo.addOptimisticMessage(chatRoomId, optMsg)
                                     scope.launch {
                                         try {
-                                            chatRepo.sendMessage(chatRoomId, currentUserId, text, replyTo?.id, replyTo?.text?.take(100))
+                                            chatRepo.sendVoiceMessage(chatRoomId, currentUserId, file, durationSec)
                                         } catch (e: Exception) {
-                                            messageText = text
-                                            replyingTo = replyTo
                                             chatRepo.removeOptimisticMessage(chatRoomId, optMsg)
-                                            val errMsg = "Не удалось отправить: ${e.message ?: "ошибка сети или доступа"}"
+                                            val errMsg = "Не удалось отправить голосовое: ${e.message ?: "ошибка"}"
                                             snackbarHostState.showSnackbar(errMsg)
                                             onNotification(errMsg)
                                         }
                                     }
-                                }
-                            },
-                            onSendVoice = { file, durationSec ->
-                                val optMsg = ChatMessage(senderId = currentUserId, text = "", timestamp = System.currentTimeMillis(), status = "sent", voiceUrl = null, voiceDurationSec = durationSec)
-                                chatRepo.addOptimisticMessage(chatRoomId, optMsg)
-                                scope.launch {
-                                    try {
-                                        chatRepo.sendVoiceMessage(chatRoomId, currentUserId, file, durationSec)
-                                    } catch (e: Exception) {
-                                        chatRepo.removeOptimisticMessage(chatRoomId, optMsg)
-                                        val errMsg = "Не удалось отправить голосовое: ${e.message ?: "ошибка"}"
-                                        snackbarHostState.showSnackbar(errMsg)
-                                        onNotification(errMsg)
-                                    }
-                                }
-                            },
-                        )
+                                },
+                            )
+                        }
                     }
                 }
             } else {

@@ -376,12 +376,6 @@ private fun CadetScheduleCard(
     onAutoStart: () -> Unit = {},
 ) {
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(1000)
-            now = System.currentTimeMillis()
-        }
-    }
     val scheduledStartTimeMillis = session.startTime?.toDate()?.time
     val confirmActiveFrom = scheduledStartTimeMillis?.minus(CADET_CONFIRM_ACTIVE_MINUTES_BEFORE * 60 * 1000) ?: 0L
     val autoStartAt = scheduledStartTimeMillis?.plus(AUTO_START_WAIT_MINUTES * 60 * 1000) ?: 0L
@@ -397,6 +391,28 @@ private fun CadetScheduleCard(
     var autoStartTriggered by remember(session.id) { mutableStateOf(false) }
     val canAutoStart = session.status == "scheduled" && session.instructorConfirmed &&
         (session.startRequestedByInstructor && session.session?.cadetConfirmed != true || !session.startRequestedByInstructor)
+
+    // Обновляем "now" только когда это действительно нужно, чтобы не дергать весь UI каждую секунду.
+    LaunchedEffect(session.id, session.status, session.instructorConfirmed, session.startRequestedByInstructor, session.session?.cadetConfirmed, scheduledStartTimeMillis) {
+        while (true) {
+            val t = System.currentTimeMillis()
+            now = t
+            val start = scheduledStartTimeMillis
+            if (start == null) break
+            val nextWakeAt = when {
+                // До момента доступности кнопки "Подтвердить" — проснуться ровно в confirmActiveFrom.
+                t < confirmActiveFrom -> confirmActiveFrom
+                // До начала занятия — достаточно проснуться в момент start.
+                t < start -> start
+                // В окне автозапуска нужен секундный отсчет.
+                t in start until autoStartAt -> t + 1000L
+                else -> Long.MAX_VALUE
+            }
+            if (nextWakeAt == Long.MAX_VALUE) break
+            val delayMs = (nextWakeAt - t).coerceIn(250L, 1000L)
+            delay(delayMs)
+        }
+    }
     LaunchedEffect(session.id, session.status, session.startRequestedByInstructor, session.instructorConfirmed, session.session?.cadetConfirmed, scheduledStartTimeMillis, now) {
         if (scheduledStartTimeMillis == null) return@LaunchedEffect
         if (!canAutoStart) return@LaunchedEffect

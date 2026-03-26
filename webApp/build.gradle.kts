@@ -1,5 +1,7 @@
 import org.gradle.api.tasks.Copy
 import org.gradle.api.tasks.Exec
+import org.gradle.api.tasks.Sync
+import org.gradle.api.file.DuplicatesStrategy
 import java.io.File
 
 plugins {
@@ -134,4 +136,10 @@ copyPddToDevOutput.configure {
         val dest = rootProject.layout.buildDirectory.dir("js/packages/${rootProject.name}-${project.name}/pdd").get().asFile
         dest.mkdirs()
     }
+}
+
+// Kotlin/JS distribution can include the same file from multiple sources (e.g. webApp.js).
+// Avoid failing the build on duplicates.
+tasks.named<Sync>("jsBrowserDistribution") {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }

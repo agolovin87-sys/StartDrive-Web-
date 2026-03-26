@@ -95,6 +95,7 @@ private fun parseMessage(key: String, m: dynamic): ChatMessage {
 }
 
 private var currentUnsubscribe: (() -> Unit)? = null
+private var currentTypingUnsubscribe: (() -> Unit)? = null
 
 fun subscribeMessages(roomId: String, callback: (List<ChatMessage>) -> Unit) {
     currentUnsubscribe?.invoke()
@@ -128,6 +129,52 @@ fun subscribeMessages(roomId: String, callback: (List<ChatMessage>) -> Unit) {
 fun unsubscribeChat() {
     currentUnsubscribe?.invoke()
     currentUnsubscribe = null
+    currentTypingUnsubscribe?.invoke()
+    currentTypingUnsubscribe = null
+}
+
+/** Поставить/снять индикатор «печатает» для пользователя [uid] в комнате [roomId]. */
+fun setTyping(roomId: String, uid: String, isTyping: Boolean): kotlin.js.Promise<Unit> {
+    val db = getDatabase() ?: return kotlin.js.Promise.reject(js("Error('Database not initialized')"))
+    val ref = db.ref("${FirebasePaths.CHATS}/$roomId/typing/$uid")
+    return if (isTyping) {
+        ref.set(getDatabaseServerTimestamp()).then { js("undefined") }
+    } else {
+        ref.remove().then { js("undefined") }
+    }
+}
+
+/** Подписка на индикатор «печатает» (map uid -> timestamp). */
+fun subscribeTyping(roomId: String, callback: (Map<String, Long>) -> Unit) {
+    currentTypingUnsubscribe?.invoke()
+    val db = getDatabase()
+    if (db == null) {
+        callback(emptyMap())
+        return
+    }
+    val ref = db.ref("${FirebasePaths.CHATS}/$roomId/typing")
+    val listener: (dynamic) -> Unit = { snap: dynamic ->
+        val out = mutableMapOf<String, Long>()
+        val v = snap?.`val`()
+        if (v != null && v != undefined) {
+            val obj = v.unsafeCast<dynamic>()
+            val keys = js("Object.keys(obj)").unsafeCast<Array<String>>()
+            keys.forEach { k ->
+                val tsAny = obj[k]
+                val ts = when (tsAny) {
+                    is Number -> tsAny.toLong()
+                    else -> (tsAny?.unsafeCast<Double>())?.toLong() ?: 0L
+                }
+                if (ts > 0L) out[k] = ts
+            }
+        }
+        callback(out)
+    }
+    ref.on("value", listener)
+    currentTypingUnsubscribe = {
+        try { ref.off("value", listener) } catch (_: Throwable) { }
+        currentTypingUnsubscribe = null
+    }
 }
 
 fun sendMessage(

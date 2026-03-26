@@ -1,4 +1,4 @@
-const CACHE_NAME = "startdrive-cache-v3";
+const CACHE_NAME = "startdrive-cache-v4";
 const APP_SHELL = [
   "/",
   "/index.html",

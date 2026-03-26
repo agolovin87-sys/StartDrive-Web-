@@ -6791,6 +6791,72 @@ a.sd-cadet-icon-btn:active {
     text-overflow: ellipsis;
 }
 
+.sd-chat-header-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.sd-chat-header-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.15;
+}
+.sd-chat-header-status-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.78rem;
+    color: rgba(255,255,255,0.45);
+    min-width: 0;
+}
+.sd-chat-contact-dot-wrap {
+    position: relative;
+    width: 11px;
+    height: 11px;
+    flex: 0 0 auto;
+}
+.sd-chat-contact-dot-wrap .sd-chat-contact-dot {
+    position: static;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    border: 2px solid rgba(13,31,62,0.92);
+    display: block;
+}
+
+.sd-chat-header-typing {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: rgba(255,255,255,0.6);
+    white-space: nowrap;
+}
+.sd-chat-typing-dots {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+.sd-chat-typing-dots span {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.75);
+    opacity: 0.25;
+    animation: sd-typing-dot 1.05s ease-in-out infinite;
+}
+.sd-chat-typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+.sd-chat-typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes sd-typing-dot {
+    0%, 100% { transform: translateY(0); opacity: 0.25; }
+    50% { transform: translateY(-2px); opacity: 1; }
+}
+
 /* ── Лента сообщений ── */
 .sd-chat-messages {
     flex: 1;
@@ -7041,6 +7107,7 @@ a.sd-cadet-icon-btn:active {
     background: rgba(13,31,62,0.88);
     backdrop-filter: blur(8px);
     border-top: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px 14px 0 0;
 }
 .sd-chat-reply-preview {
     width: 100%;

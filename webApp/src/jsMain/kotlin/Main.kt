@@ -41,6 +41,7 @@ private var cadetNotificationAudio: dynamic = null
 private var cadetNotificationAudioUnlocked: Boolean = false
 private var cadetNotificationAudioContext: dynamic = null
 private var chatMessageAudio: dynamic = null
+private var chatOutgoingMessageAudio: dynamic = null
 /** Отписка от onSnapshot документа users/{uid} (баланс в профиле в реальном времени). */
 private var userProfileFirestoreUnsubscribe: (() -> Unit)? = null
 /** Лента admin_events для веб-админа (уведомления без FCM). */
@@ -52,6 +53,14 @@ private const val SESSION_RELOAD_OK_KEY = "sd_reload_ok_v1"
 /** Черновик аватара группы до «Сохранить»/«Создать» (загрузка в Storage после записи в Firestore). */
 private var groupChatAvatarPendingDataUrl: String? = null
 private var groupChatAvatarPendingRemove: Boolean = false
+
+/** Черновики текста сообщений по roomId (сохраняем между входящими/перерендером и между контактами). */
+private val chatDraftTextByRoomId = mutableMapOf<String, String>()
+
+/** «Печатает»: антиспам отправки и авто-остановка по таймауту. */
+private val chatTypingEmitLastSentMsByRoomId = mutableMapOf<String, Long>()
+private val chatTypingEmitStopTimerByRoomId = mutableMapOf<String, Int>()
+private val chatTypingPruneTimerByRoomId = mutableMapOf<String, Int>()
 
 /** Состояние кропа аватара группы (общее, чтобы не дублировать слушатели на root). */
 private val groupModalCropState = doubleArrayOf(0.0, 0.0, 1.0)
@@ -259,10 +268,17 @@ fun main() {
         var lastRenderedTabIndex: Int? = null
         /** Чтобы не пересоздавать DOM вкладок при каждом updateState — иначе «дергается» иконка Главная. */
         var lastTabButtonsMarkup: String? = null
+        var chatInputFocusRestoreToken = 0
 
         fun render() {
             ensureDocumentTitleForWebApp()
             val state = appState
+            val activeEl = document.activeElement
+            val activeChatInput = if (activeEl is HTMLInputElement && activeEl.id == "sd-chat-input") activeEl else null
+            val wasChatInputFocused = activeChatInput != null
+            val selStart = activeChatInput?.selectionStart
+            val selEnd = activeChatInput?.selectionEnd
+            val focusedRoomId = activeChatInput?.getAttribute("data-room-id")?.takeIf { it.isNotBlank() }
             val networkBanner = state.networkError?.takeIf { shouldShowTopNetworkBanner(it) }?.let { msg ->
                 val friendly = friendlyNetworkError(msg)
                 """<div class="sd-network-error" id="sd-network-error"><span>$friendly</span> <button type="button" id="sd-network-retry" class="sd-btn-inline sd-btn-inline-primary">Повторить</button> <button type="button" id="sd-dismiss-network-error" class="sd-btn-inline">Закрыть</button></div>"""
@@ -402,6 +418,23 @@ fun main() {
             appendInstructorRateCadetModalIfNeeded(root)
             appendRecCancelSessionConfirmModalIfNeeded(root)
             appendAllowSoundBarIfNeeded(root)
+
+            // В чате при входящих/перерендере не закрываем клавиатуру: возвращаем фокус и курсор.
+            if (wasChatInputFocused && focusedRoomId != null) {
+                val myToken = ++chatInputFocusRestoreToken
+                window.requestAnimationFrame {
+                    if (myToken != chatInputFocusRestoreToken) return@requestAnimationFrame
+                    val newInput = document.getElementById("sd-chat-input") as? HTMLInputElement ?: return@requestAnimationFrame
+                    val newRoomId = newInput.getAttribute("data-room-id")?.takeIf { it.isNotBlank() } ?: return@requestAnimationFrame
+                    if (newRoomId != focusedRoomId) return@requestAnimationFrame
+                    try {
+                        newInput.focus()
+                        if (selStart != null && selEnd != null) {
+                            newInput.setSelectionRange(selStart, selEnd)
+                        }
+                    } catch (_: Throwable) { }
+                }
+            }
         }
 
         var renderScheduled = false
@@ -1294,6 +1327,8 @@ private fun renderChatTabContent(currentUser: User): String {
         }
         val recording = appState.chatVoiceRecording
         val reviewReady = appState.chatVoiceReviewReady
+        val roomIdForDraft = groupChatRoomId(grp.id)
+        val draftValueAttr = chatDraftTextByRoomId[roomIdForDraft]?.let { escapeHtmlAttrValue(it) } ?: ""
         val chatFileAttachHtml = """<input type="file" id="sd-chat-file-input" class="sd-hidden" aria-hidden="true" />
                     <button type="button" id="sd-chat-file-btn" class="sd-chat-attach-btn" title="Прикрепить файл" aria-label="Прикрепить файл">$iconAttachSvg</button>"""
         val voiceRowHtml = buildChatVoiceInputRowInnerHtml()
@@ -1311,7 +1346,7 @@ private fun renderChatTabContent(currentUser: User): String {
                     $replyComposerHtml
                     <div class="sd-chat-input-row">
                         $chatFileAttachHtml
-                        <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="" maxlength="2000" aria-label="Сообщение" />
+                        <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="" maxlength="2000" aria-label="Сообщение" value="$draftValueAttr" data-room-id="${roomIdForDraft.escapeHtml()}" />
                         <button type="button" id="sd-chat-send" class="sd-chat-send-btn" title="Отправить">$iconSendSvg</button>
                         <button type="button" id="sd-chat-voice-mic" class="sd-chat-voice-mic-btn" title="Запись голосового сообщения" aria-label="Запись голоса">$iconMicSvg</button>
                     </div>
@@ -1335,7 +1370,12 @@ private fun renderChatTabContent(currentUser: User): String {
                 <div class="sd-chat-header sd-chat-header-group">
                     <button type="button" id="sd-chat-back" class="sd-chat-back-btn" title="Назад" aria-label="Назад">$iconBackSvg</button>
                     $grpHeaderAvatarHtml
-                    <span class="sd-chat-contact-name">${"Группа: ${grp.name} (${grp.memberIds.size} ${participantsWord(grp.memberIds.size)})".escapeHtml()}</span>
+                    <div class="sd-chat-header-info">
+                        <div class="sd-chat-header-title">${"Группа: ${grp.name}".escapeHtml()}</div>
+                        <span class="sd-chat-header-status-row">
+                            <span class="sd-chat-contact-status sd-chat-contact-status-offline">${"${grp.memberIds.size} ${participantsWord(grp.memberIds.size)}".escapeHtml()}</span>
+                        </span>
+                    </div>
                     $adminGroupBtns
                 </div>
                 <div class="sd-chat-messages" id="sd-chat-messages">$msgsHtml</div>
@@ -1432,6 +1472,8 @@ private fun renderChatTabContent(currentUser: User): String {
             voiceRowHtml != null && chatVoiceIsWebAndroidLike() -> chatVoicePlaceholderRowHtml()
             voiceRowHtml != null -> voiceRowHtml
             else -> {
+                val roomIdForDraft = chatRoomId(myId, contact.id)
+                val draftValueAttr = chatDraftTextByRoomId[roomIdForDraft]?.let { escapeHtmlAttrValue(it) } ?: ""
                 val replyComposerHtml = appState.chatReplyToText?.takeIf { it.isNotBlank() }?.let { txt ->
                     """<div class="sd-chat-reply-preview" id="sd-chat-reply-preview" data-reply-to-message-id="${(appState.chatReplyToMessageId ?: "").escapeHtml()}">
                         <span class="sd-chat-reply-preview-text">${txt.escapeHtml()}</span>
@@ -1442,7 +1484,7 @@ private fun renderChatTabContent(currentUser: User): String {
                     $replyComposerHtml
                     <div class="sd-chat-input-row">
                         $chatFileAttachHtml
-                        <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="" maxlength="2000" aria-label="Сообщение" />
+                        <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="" maxlength="2000" aria-label="Сообщение" value="$draftValueAttr" data-room-id="${roomIdForDraft.escapeHtml()}" />
                         <button type="button" id="sd-chat-send" class="sd-chat-send-btn" title="Отправить">$iconSendSvg</button>
                         <button type="button" id="sd-chat-voice-mic" class="sd-chat-voice-mic-btn" title="Запись голосового сообщения" aria-label="Запись голоса">$iconMicSvg</button>
                     </div>
@@ -1460,7 +1502,22 @@ private fun renderChatTabContent(currentUser: User): String {
                 <div class="sd-chat-header">
                     <button type="button" id="sd-chat-back" class="sd-chat-back-btn" title="Назад" aria-label="Назад">$iconBackSvg</button>
                     ${contact.chatAvatarUrl?.takeIf { it.isNotBlank() }?.let { url -> """<div class="sd-chat-header-avatar sd-avatar-wrap" data-initials="$contactInitials" data-bg="${contactAvatarBg}"><img src="${url.escapeHtml()}" alt="" class="sd-avatar-img" decoding="async" data-user-id="${contact.id.escapeHtml()}" /></div>""" } ?: """<div class="sd-chat-header-avatar" style="background:$contactAvatarBg">$contactInitials</div>"""}
-                    <span class="sd-chat-contact-name">${formatShortName(contact.fullName).escapeHtml()}</span>
+                    ${run {
+                        val isOnline = appState.chatContactOnlineIds.contains(contact.id)
+                        val dot = if (isOnline) """<span class="sd-chat-contact-dot sd-chat-contact-dot-online"></span>""" else """<span class="sd-chat-contact-dot sd-chat-contact-dot-offline"></span>"""
+                        val statusCls = if (isOnline) "sd-chat-contact-status sd-chat-contact-status-online" else "sd-chat-contact-status sd-chat-contact-status-offline"
+                        val roomId = chatRoomId(myId, contact.id)
+                        val typingAt = appState.chatTypingByRoomId[roomId]?.get(contact.id) ?: 0L
+                        val now = (js("Date.now()").unsafeCast<Double>()).toLong()
+                        val isTyping = typingAt > 0L && (now - typingAt) in 0..4500
+                        val subtitleHtml = if (isTyping) {
+                            """<span class="sd-chat-header-status-row"><span class="sd-chat-contact-dot-wrap">$dot</span><span class="sd-chat-header-typing">…печатает<span class="sd-chat-typing-dots"><span></span><span></span><span></span></span></span></span>"""
+                        } else {
+                            val statusText = if (isOnline) "в сети" else "не в сети"
+                            """<span class="sd-chat-header-status-row"><span class="sd-chat-contact-dot-wrap">$dot</span><span class="$statusCls">$statusText</span></span>"""
+                        }
+                        """<div class="sd-chat-header-info"><div class="sd-chat-header-title">${formatShortName(contact.fullName).escapeHtml()}</div>$subtitleHtml</div>"""
+                    }}
                 </div>
                 <div class="sd-chat-messages" id="sd-chat-messages">$msgsHtml</div>
                 $inputRowHtml
@@ -1657,7 +1714,12 @@ private fun renderAdminCorrespondenceChatTab(currentUser: User): String {
             <div class="sd-chat-conversation sd-chat-admin-corr-conversation">
                 <div class="sd-chat-header">
                     <button type="button" id="sd-chat-back" class="sd-chat-back-btn" title="Назад" aria-label="Назад">$iconBackSvg</button>
-                    <span class="sd-chat-contact-name sd-chat-admin-corr-title">$sName ↔ $pName</span>
+                    <div class="sd-chat-header-info">
+                        <div class="sd-chat-header-title sd-chat-admin-corr-title">$sName ↔ $pName</div>
+                        <span class="sd-chat-header-status-row">
+                            <span class="sd-chat-contact-status sd-chat-contact-status-offline">Просмотр переписки</span>
+                        </span>
+                    </div>
                 </div>
                 <div class="sd-chat-messages" id="sd-chat-messages">$msgsHtml</div>
                 <div class="sd-chat-input-row sd-chat-admin-corr-readonly"><span class="sd-chat-admin-corr-readonly-text">Просмотр переписки (только чтение)</span></div>
@@ -2984,6 +3046,19 @@ private fun getOrCreateChatMessageAudio(): dynamic {
     return audio
 }
 
+private const val CHAT_OUTGOING_MESSAGE_SOUND_FILENAME = "sentmessage"
+
+/** Один общий Audio для звука исходящего сообщения в чате. */
+private fun getOrCreateChatOutgoingMessageAudio(): dynamic {
+    if (chatOutgoingMessageAudio != null && chatOutgoingMessageAudio != js("undefined")) return chatOutgoingMessageAudio
+    val audio = document.createElement("audio").asDynamic()
+    audio.preload = "auto"
+    audio.volume = 0.7
+    audio.src = getResourceBaseUrl() + "sounds/" + CHAT_OUTGOING_MESSAGE_SOUND_FILENAME + ".mp3"
+    chatOutgoingMessageAudio = audio
+    return audio
+}
+
 /** Один общий Audio для звука «Инструктор добавил свободное окно»; разблокируется по первому клику пользователя. */
 private fun getOrCreateCadetNotificationAudio(): dynamic {
     if (cadetNotificationAudio != null && cadetNotificationAudio != js("undefined")) return cadetNotificationAudio
@@ -3015,6 +3090,12 @@ private fun unlockCadetNotificationAudio() {
             chatAudio.pause()
             chatAudio.currentTime = 0.0
         })?.catch { _ -> Unit }
+        val outgoingAudio = getOrCreateChatOutgoingMessageAudio()
+        outgoingAudio.currentTime = 0.0
+        outgoingAudio.play()?.then({
+            outgoingAudio.pause()
+            outgoingAudio.currentTime = 0.0
+        })?.catch { _ -> Unit }
         if (cadetNotificationAudioContext == null || cadetNotificationAudioContext == js("undefined")) {
             cadetNotificationAudioContext = js("new (window.AudioContext || window.webkitAudioContext)()").unsafeCast<dynamic>()
         }
@@ -3038,6 +3119,17 @@ private fun playChatMessageSound() {
     try {
         val audio = getOrCreateChatMessageAudio()
         audio.src = getCadetNotificationSoundUrl()
+        audio.currentTime = 0.0
+        audio.volume = 0.7
+        audio.play()?.catch { _: dynamic -> Unit }
+    } catch (_: Throwable) { }
+}
+
+/** Звук исходящего сообщения в чате: фиксированный файл sounds/sentmessage.mp3. */
+private fun playChatOutgoingMessageSound() {
+    try {
+        val audio = getOrCreateChatOutgoingMessageAudio()
+        audio.src = getResourceBaseUrl() + "sounds/" + CHAT_OUTGOING_MESSAGE_SOUND_FILENAME + ".mp3"
         audio.currentTime = 0.0
         audio.volume = 0.7
         audio.play()?.catch { _: dynamic -> Unit }
@@ -9110,13 +9202,25 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             }
             clearChatUnread(uid, contactId)
             unsubscribeChat()
-            subscribeMessages(chatRoomId(uid, contactId)) { list ->
+            val roomId = chatRoomId(uid, contactId)
+            firebase.subscribeTyping(roomId) { typingMap ->
+                updateState { chatTypingByRoomId = chatTypingByRoomId + (roomId to typingMap) }
+                chatTypingPruneTimerByRoomId.remove(roomId)?.let { tid -> try { window.clearTimeout(tid) } catch (_: Throwable) { } }
+                val tId = window.setTimeout({
+                    val now = (js("Date.now()").unsafeCast<Double>()).toLong()
+                    val prev = appState.chatTypingByRoomId[roomId] ?: emptyMap()
+                    val next = prev.filterValues { ts -> ts > 0L && (now - ts) in 0..4500 }
+                    updateState { chatTypingByRoomId = chatTypingByRoomId + (roomId to next) }
+                }, 4800).unsafeCast<Int>()
+                chatTypingPruneTimerByRoomId[roomId] = tId
+            }
+            subscribeMessages(roomId) { list ->
                 val prevSize = appState.chatMessages.size
                 val prev = appState.chatMessages
-                maybeCelebrateNewReactions(chatRoomId(uid, contactId), prev, list, uid)
+                maybeCelebrateNewReactions(roomId, prev, list, uid)
                 updateState { chatMessages = list }
                 val toMarkRead = list.filter { it.senderId == contactId }.map { it.id }
-                if (toMarkRead.isNotEmpty()) markMessagesAsRead(chatRoomId(uid, contactId), toMarkRead)
+                if (toMarkRead.isNotEmpty()) markMessagesAsRead(roomId, toMarkRead)
                 if (prevSize > 0 && list.size > prevSize && list.lastOrNull()?.senderId != uid) playChatMessageSound()
                 list.lastOrNull()?.timestamp?.let { ts -> setChatLastSeenMs(uid, contactId, ts) }
                 updateState { if (chatUnreadCounts.containsKey(contactId)) chatUnreadCounts = chatUnreadCounts - contactId }
@@ -9447,6 +9551,51 @@ private fun attachListeners(root: org.w3c.dom.Element) {
             val uid = appState.user?.id ?: return@addEventListener
             val roomId = resolveOpenChatRoomId(uid) ?: return@addEventListener
             performChatMessageReactionToggle(roomId, msgId, emoji, uid)
+        }, true)
+    }
+
+    // Один раз: черновики поля ввода — пишем при каждом вводе, независимо от re-render.
+    if (window.asDynamic().__sdChatDraftDelegation != true) {
+        window.asDynamic().__sdChatDraftDelegation = true
+        document.body?.addEventListener("input", { e: dynamic ->
+            val target = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+            val input = target.closest("input#sd-chat-input") as? HTMLInputElement ?: return@addEventListener
+            val roomId = input.getAttribute("data-room-id")?.takeIf { it.isNotBlank() } ?: return@addEventListener
+            chatDraftTextByRoomId[roomId] = input.value
+
+            // Индикатор «…печатает»: шлём пинг не чаще ~1.5с и гасим через 2.6с тишины/очистки.
+            val uid = appState.user?.id ?: return@addEventListener
+            val trimmed = input.value.trim()
+            if (trimmed.isNotEmpty()) {
+                val now = (js("Date.now()").unsafeCast<Double>()).toLong()
+                val last = chatTypingEmitLastSentMsByRoomId[roomId] ?: 0L
+                if (now - last >= 1500L) {
+                    chatTypingEmitLastSentMsByRoomId[roomId] = now
+                    try { firebase.setTyping(roomId, uid, true) } catch (_: Throwable) { }
+                }
+                chatTypingEmitStopTimerByRoomId.remove(roomId)?.let { tid ->
+                    try { window.clearTimeout(tid) } catch (_: Throwable) { }
+                }
+                val tId = window.setTimeout({
+                    try { firebase.setTyping(roomId, uid, false) } catch (_: Throwable) { }
+                }, 2600).unsafeCast<Int>()
+                chatTypingEmitStopTimerByRoomId[roomId] = tId
+            } else {
+                chatTypingEmitStopTimerByRoomId.remove(roomId)?.let { tid ->
+                    try { window.clearTimeout(tid) } catch (_: Throwable) { }
+                }
+                try { firebase.setTyping(roomId, uid, false) } catch (_: Throwable) { }
+            }
+        }, true)
+        document.body?.addEventListener("focusout", { e: dynamic ->
+            val target = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+            val input = target.closest("input#sd-chat-input") as? HTMLInputElement ?: return@addEventListener
+            val roomId = input.getAttribute("data-room-id")?.takeIf { it.isNotBlank() } ?: return@addEventListener
+            val uid = appState.user?.id ?: return@addEventListener
+            chatTypingEmitStopTimerByRoomId.remove(roomId)?.let { tid ->
+                try { window.clearTimeout(tid) } catch (_: Throwable) { }
+            }
+            try { firebase.setTyping(roomId, uid, false) } catch (_: Throwable) { }
         }, true)
     }
 
@@ -10369,6 +10518,13 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 unsubscribeChat()
             })
             val chatInput = document.getElementById("sd-chat-input") as? HTMLInputElement
+            chatInput?.addEventListener("input", {
+                val me = uid ?: return@addEventListener
+                val roomId = appState.selectedChatGroupId?.let { gid -> groupChatRoomId(gid) }
+                    ?: appState.selectedChatContactId?.let { cid -> chatRoomId(me, cid) }
+                    ?: return@addEventListener
+                chatDraftTextByRoomId[roomId] = chatInput.value
+            })
             document.getElementById("sd-chat-send")?.addEventListener("click", {
                 sendChatMessage(chatInput, uid)
             })
@@ -11208,7 +11364,9 @@ private fun handleChatAdminFileSelected(uid: String?, fileInput: HTMLInputElemen
                         replyText,
                     ).then {
                         chatInput?.value = ""
+                        chatDraftTextByRoomId[roomId] = ""
                         updateState { chatReplyToMessageId = null; chatReplyToText = null }
+                        playChatOutgoingMessageSound()
                     }.catch { _ ->
                         updateState { networkError = "Не удалось отправить сообщение с файлом." }
                     }
@@ -11238,10 +11396,12 @@ private fun sendChatMessage(chatInput: HTMLInputElement?, uid: String?) {
     sendMessage(roomId, uid, text, replyId, replyText)
         .then {
             chatInput?.value = ""
+            chatDraftTextByRoomId[roomId] = ""
             updateState { chatReplyToMessageId = null; chatReplyToText = null }
             val inputEl = document.getElementById("sd-chat-input") as? org.w3c.dom.HTMLElement
             inputEl?.setAttribute("data-reply-to-message-id", "")
             inputEl?.setAttribute("data-reply-to-message-text", "")
+            playChatOutgoingMessageSound()
         }
         .catch { _ ->
             updateState { networkError = "Не удалось отправить сообщение." }

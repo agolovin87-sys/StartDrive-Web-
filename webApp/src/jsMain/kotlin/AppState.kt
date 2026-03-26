@@ -114,6 +114,8 @@ data class AppState(
     var adminChatGroupDraftName: String = "",
     var adminChatGroupDraftMemberIds: List<String> = emptyList(),
     var chatMessages: List<ChatMessage> = emptyList(),
+    /** roomId -> (uid -> lastTypingAtMs). Используем для индикатора «…печатает». */
+    var chatTypingByRoomId: Map<String, Map<String, Long>> = emptyMap(),
     /** Текущее сообщение, на которое отвечает пользователь в чате. */
     var chatReplyToMessageId: String? = null,
     var chatReplyToText: String? = null,

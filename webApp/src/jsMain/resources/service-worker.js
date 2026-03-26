@@ -1,4 +1,4 @@
-const CACHE_NAME = "startdrive-cache-v2";
+const CACHE_NAME = "startdrive-cache-v3";
 const APP_SHELL = [
   "/",
   "/index.html",
@@ -6,8 +6,18 @@ const APP_SHELL = [
   "/style.css",
   "/webApp.js",
   "/firebase-config.js",
+  "/pdd-tickets-bundle.js",
   "/app-icon.png"
 ];
+
+/** Сборка и стили: сначала сеть (с revalidate), иначе после деплоя SW отдавал старый webApp.js из кэша. */
+const NETWORK_FIRST_PATHS = new Set([
+  "/webApp.js",
+  "/style.css",
+  "/firebase-config.js",
+  "/pdd-tickets-bundle.js",
+  "/index.html"
+]);
 
 // FCM в SW: только инициализация. Показ — из webpush в Cloud Functions (без общего notification + webpush).
 try {
@@ -47,11 +57,27 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const req = event.request;
+  const path = new URL(req.url).pathname;
   const isNavigation = req.mode === "navigate";
 
   if (isNavigation) {
     event.respondWith(
-      fetch(req).catch(() => caches.match("/index.html"))
+      fetch(req, { cache: "no-cache" }).catch(() => caches.match("/index.html"))
+    );
+    return;
+  }
+
+  if (NETWORK_FIRST_PATHS.has(path)) {
+    event.respondWith(
+      fetch(req, { cache: "no-cache" })
+        .then((networkRes) => {
+          if (networkRes && networkRes.ok) {
+            const copy = networkRes.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)).catch(() => {});
+          }
+          return networkRes;
+        })
+        .catch(() => caches.match(req))
     );
     return;
   }

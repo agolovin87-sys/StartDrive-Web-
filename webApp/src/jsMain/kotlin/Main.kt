@@ -2,6 +2,10 @@ import com.example.startdrive.shared.di.SharedFactory
 import com.example.startdrive.shared.model.User
 import firebase.*
 import firebase.ChatMessage
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.random.Random
 import kotlinx.browser.document
 import kotlinx.browser.window
 import org.w3c.dom.HTMLButtonElement
@@ -26,6 +30,7 @@ private var instructorEarnedRubRafId: Int = 0
 /** Запланированный render() из main (blur калькулятора — подтянуть статистику без мигания при вводе). */
 private var scheduleAppRender: (() -> Unit)? = null
 private var chatFileViewerEscapeListenerBound: Boolean = false
+private var chatAvatarViewerEscapeListenerBound: Boolean = false
 private var adminStoragePendingClearKind: String? = null
 private var adminStoragePendingContactId: String? = null
 private var adminStoragePendingGroupId: String? = null
@@ -40,6 +45,9 @@ private var chatMessageAudio: dynamic = null
 private var userProfileFirestoreUnsubscribe: (() -> Unit)? = null
 /** Лента admin_events для веб-админа (уведомления без FCM). */
 private var adminEventsUnsubscribe: (() -> Unit)? = null
+
+/** После успешного hard reload — показать галочку на кнопке «Обновить» (sessionStorage). */
+private const val SESSION_RELOAD_OK_KEY = "sd_reload_ok_v1"
 
 /** Черновик аватара группы до «Сохранить»/«Создать» (загрузка в Storage после записи в Firestore). */
 private var groupChatAvatarPendingDataUrl: String? = null
@@ -217,6 +225,15 @@ fun friendlyNetworkError(raw: String?): String {
     }
 }
 
+/** iOS «На экран Домой» берёт имя из document.title / apple-mobile-web-app-title — не даём SPA обнулить. */
+private fun ensureDocumentTitleForWebApp() {
+    document.title = "StartDrive"
+    val nl = document.querySelectorAll("meta[name=\"apple-mobile-web-app-title\"]")
+    for (i in 0 until nl.length) {
+        nl.item(i)?.unsafeCast<org.w3c.dom.Element>()?.setAttribute("content", "StartDrive")
+    }
+}
+
 /** Красную плашку сверху показываем только для реальных сетевых ошибок. */
 private fun shouldShowTopNetworkBanner(raw: String?): Boolean {
     if (raw.isNullOrBlank()) return false
@@ -244,6 +261,7 @@ fun main() {
         var lastTabButtonsMarkup: String? = null
 
         fun render() {
+            ensureDocumentTitleForWebApp()
             val state = appState
             val networkBanner = state.networkError?.takeIf { shouldShowTopNetworkBanner(it) }?.let { msg ->
                 val friendly = friendlyNetworkError(msg)
@@ -726,6 +744,279 @@ private fun chatOtherUserAvatarHtml(u: User): String {
     else """<div class="sd-msg-them-avatar" style="background:$bg"><span class="sd-msg-them-avatar-initials">$initials</span></div>"""
 }
 
+private val CHAT_QUICK_REACTION_EMOJIS = listOf("👍", "❤️", "😂", "😮", "😢", "🙏", "👏", "🔥")
+
+/** Полоса в меню долгого нажатия: 7 смайликов, последний слот — «+» (расширенная палитра). */
+private val CHAT_MENU_REACTION_STRIP = CHAT_QUICK_REACTION_EMOJIS.dropLast(1)
+
+/** Окно «удалить у всех» для текстовых своих сообщений (как в мессенджерах). */
+private const val CHAT_DELETE_FOR_EVERYONE_MS = 5L * 60L * 1000L
+
+private fun canDeleteMessageForEveryone(msg: ChatMessage, uid: String): Boolean {
+    if (msg.senderId != uid) return false
+    if (msg.isVoice) return false
+    val now = (js("Date.now()").unsafeCast<Double>()).toLong()
+    val age = now - msg.timestamp
+    return age in 0..CHAT_DELETE_FOR_EVERYONE_MS
+}
+
+private fun canEditMessage(msg: ChatMessage, uid: String, isAdmin: Boolean): Boolean {
+    // Редактирование только текста.
+    if (msg.isVoice || msg.isFile) return false
+    if (isAdmin) return true
+    if (msg.senderId != uid) return false
+    // После первого редактирования кнопку больше не показываем (чтобы после "Сохранить" она пропадала сразу).
+    if (msg.editedAt != null) return false
+    val now = (js("Date.now()").unsafeCast<Double>()).toLong()
+    val age = now - msg.timestamp
+    return age in 0..CHAT_DELETE_FOR_EVERYONE_MS
+}
+
+private fun canEditMessageOrNull(msg: ChatMessage?, uid: String, isAdmin: Boolean): Boolean =
+    msg != null && canEditMessage(msg, uid, isAdmin)
+
+private fun buildChatDeleteSubmenuItemsHtml(msg: ChatMessage?, uid: String, isAdmin: Boolean): String {
+    val selfBtn =
+        """<button type="button" class="sd-chat-msg-menu-item sd-chat-msg-menu-item-danger" data-action="delete-self">Удалить у меня</button>"""
+    if (msg == null) return selfBtn
+    if (msg.isVoice) {
+        // Голосовые: не-админ удаляет только свои (полностью), админ может удалить любые.
+        return when {
+            isAdmin -> """$selfBtn<button type="button" class="sd-chat-msg-menu-item sd-chat-msg-menu-item-danger" data-action="delete-all">Удалить у всех</button>"""
+            msg.senderId == uid -> """$selfBtn<button type="button" class="sd-chat-msg-menu-item sd-chat-msg-menu-item-danger" data-action="delete-voice">Удалить</button>"""
+            else -> selfBtn
+        }
+    }
+
+    // Текст/файл: не-админ — только в пределах 5 минут и только для своих, админ — без ограничения по времени.
+    val allBtn = if (isAdmin || canDeleteMessageForEveryone(msg, uid)) {
+        """<button type="button" class="sd-chat-msg-menu-item sd-chat-msg-menu-item-danger" data-action="delete-all">Удалить у всех</button>"""
+    } else ""
+    return selfBtn + allBtn
+}
+
+private fun setChatMessageMenuHtml(menu: org.w3c.dom.HTMLElement, x: Double, y: Double, html: String) {
+    // Важно: getBoundingClientRect() корректен только когда элемент в DOM.
+    // showChatMessageMenu добавляет меню в DOM до первого вызова этой функции.
+    menu.style.visibility = "hidden"
+    menu.innerHTML = html.trimIndent()
+    val viewportW = window.innerWidth.toDouble()
+    val viewportH = window.innerHeight.toDouble()
+    val rect = menu.getBoundingClientRect()
+    val left = x.coerceIn(8.0, (viewportW - rect.width - 8.0).coerceAtLeast(8.0))
+    val top = y.coerceIn(8.0, (viewportH - rect.height - 8.0).coerceAtLeast(8.0))
+    menu.style.left = "${left}px"
+    menu.style.top = "${top}px"
+    menu.style.visibility = ""
+}
+
+private val recentReactionCelebrations = mutableMapOf<String, Long>()
+
+private fun maybeCelebrateNewReactions(roomId: String, prev: List<ChatMessage>, next: List<ChatMessage>, viewerUid: String) {
+    if (prefersReducedMotion()) return
+    if (prev.isEmpty() || next.isEmpty()) return
+    val now = (js("Date.now()").unsafeCast<Double>()).toLong()
+    // Периодическая чистка (чтобы не разрасталась мапа).
+    if (recentReactionCelebrations.size > 400) {
+        val cutoff = now - 30_000L
+        val keys = recentReactionCelebrations.keys.toList()
+        keys.forEach { k ->
+            val ts = recentReactionCelebrations[k] ?: 0L
+            if (ts < cutoff) recentReactionCelebrations.remove(k)
+        }
+    }
+    val prevById = prev.associateBy { it.id }
+    next.forEach { m ->
+        val p = prevById[m.id] ?: return@forEach
+        if (m.reactions.isEmpty()) return@forEach
+        m.reactions.forEach { (emoji, newUids) ->
+            val oldUids = p.reactions[emoji] ?: emptySet()
+            if (newUids.size <= oldUids.size) return@forEach
+            val added = newUids - oldUids
+            if (added.isEmpty()) return@forEach
+            added.forEach { who ->
+                // Не дублируем конфетти на устройстве того, кто поставил реакцию (там оно уже запускается по клику).
+                if (who == viewerUid) return@forEach
+                val key = "$roomId|${m.id}|$emoji|$who"
+                val last = recentReactionCelebrations[key] ?: 0L
+                if (now - last < 4000L) return@forEach
+                recentReactionCelebrations[key] = now
+                scheduleReactionCelebrationAtMessagePill(m.id, emoji)
+            }
+        }
+    }
+}
+
+/** Дополнительные эмодзи в палитре «+» (быстрые дублируются для удобства). */
+private val CHAT_EXTENDED_REACTION_EMOJIS: List<String> = (
+    CHAT_QUICK_REACTION_EMOJIS + listOf(
+        "⭐", "💯", "✅", "❌", "🎉", "😍", "🤔", "😭", "🤝", "☀️", "🌙", "💪", "🙌", "😊", "😁", "😎", "🤣", "😤", "👀", "🤷", "🌹", "🍀", "🎯", "🥰", "😅", "🤗", "🫡", "🤍", "💔", "😴", "🤯", "🥳", "👋", "💬"
+    )
+).distinct()
+
+private fun escapeHtmlAttrValue(s: String): String =
+    s.replace("&", "&amp;").replace("\"", "&quot;").replace("'", "&#39;")
+
+/** Строка реакций под пузырьком; [myId] — uid текущего пользователя. */
+private fun chatMessageReactionsHtml(msg: ChatMessage, myId: String, showReactionsRow: Boolean): String {
+    if (!showReactionsRow || msg.reactions.isEmpty()) return ""
+    val pills = msg.reactions.entries.sortedBy { it.key }.joinToString("") { (emoji, uids) ->
+        val n = uids.size
+        val mine = myId in uids
+        val cls = if (mine) "sd-msg-reaction-pill sd-msg-reaction-pill--mine" else "sd-msg-reaction-pill"
+        val escEmoji = escapeHtmlAttrValue(emoji)
+        val cnt = if (n > 1) """<span class="sd-msg-reaction-count">$n</span>""" else ""
+        """<button type="button" class="$cls" data-msg-react-id="${msg.id.escapeHtml()}" data-msg-react-emoji="$escEmoji" title="Реакция" aria-label="Реакция">$emoji$cnt</button>"""
+    }
+    return """<div class="sd-msg-reactions">$pills</div>"""
+}
+
+private fun resolveOpenChatRoomId(uid: String): String? = when {
+    appState.chatAdminCorrespondenceMode &&
+        appState.chatAdminCorrespondenceSubjectId != null &&
+        appState.chatAdminCorrespondencePeerId != null ->
+        chatRoomId(appState.chatAdminCorrespondenceSubjectId!!, appState.chatAdminCorrespondencePeerId!!)
+    appState.selectedChatGroupId != null -> groupChatRoomId(appState.selectedChatGroupId!!)
+    else -> {
+        val contactId = appState.selectedChatContactId ?: return null
+        chatRoomId(uid, contactId)
+    }
+}
+
+private fun prefersReducedMotion(): Boolean =
+    try {
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    } catch (_: Throwable) {
+        false
+    }
+
+/** target клика может быть Text — поднимаемся к Element для closest(). */
+private fun clickEventTargetElement(ev: dynamic): org.w3c.dom.Element? {
+    val t = ev?.target ?: return null
+    return when (t) {
+        is org.w3c.dom.Element -> t
+        else -> (t.asDynamic().parentElement as? org.w3c.dom.Element)
+    }
+}
+
+/** «Конфетти» вокруг точки — крупнее и дольше, чем раньше. */
+private fun playReactionConfettiAt(clientX: Double, clientY: Double) {
+    if (prefersReducedMotion()) return
+    val layer = document.createElement("div").unsafeCast<org.w3c.dom.HTMLElement>()
+    layer.className = "sd-react-confetti-layer"
+    layer.setAttribute("aria-hidden", "true")
+    layer.style.left = "${clientX}px"
+    layer.style.top = "${clientY}px"
+    val colors = listOf("#f472b6", "#60a5fa", "#34d399", "#fbbf24", "#a78bfa", "#fb7185", "#facc15", "#38bdf8")
+    val n = 32
+    repeat(n) { i ->
+        val p = document.createElement("span").unsafeCast<org.w3c.dom.HTMLElement>()
+        p.className = "sd-react-confetti-piece"
+        val angle = Random.nextDouble() * 2 * PI
+        val dist = 36.0 + Random.nextDouble() * 42.0
+        val dx = cos(angle) * dist
+        val dy = sin(angle) * dist
+        val rot = Random.nextDouble() * 540.0 - 270.0
+        p.style.setProperty("--sd-dx", "${dx}px")
+        p.style.setProperty("--sd-dy", "${dy}px")
+        p.style.setProperty("--sd-rot", "${rot}deg")
+        p.style.background = colors[i % colors.size]
+        if (Random.nextBoolean()) p.classList.add("sd-react-confetti-piece--round")
+        layer.appendChild(p)
+    }
+    document.body?.appendChild(layer)
+    window.setTimeout({ try { layer.remove() } catch (_: Throwable) { } }, 1500)
+}
+
+private fun findMessageReactionsRow(messageId: String): org.w3c.dom.HTMLElement? {
+    val sel = ".sd-msg[data-msg-id=\"${messageId.replace("\"", "")}\"] .sd-msg-reactions"
+    return document.querySelector(sel) as? org.w3c.dom.HTMLElement
+}
+
+private fun findReactionPillInDom(messageId: String, emoji: String): org.w3c.dom.HTMLElement? {
+    val row = findMessageReactionsRow(messageId) ?: return null
+    val list = row.querySelectorAll("button.sd-msg-reaction-pill")
+    val len = list.length
+    for (i in 0 until len) {
+        val b = list.item(i) as? org.w3c.dom.HTMLElement ?: continue
+        if (b.getAttribute("data-msg-react-emoji") == emoji) return b
+    }
+    return null
+}
+
+/** Конфетти и пульс у пилюли в сообщении после появления в DOM (после синхронизации с сервером). */
+private fun scheduleReactionCelebrationAtMessagePill(messageId: String, emoji: String) {
+    if (prefersReducedMotion()) return
+    var attempts = 0
+    fun tick() {
+        attempts++
+        val pill = findReactionPillInDom(messageId, emoji)
+        if (pill != null) {
+            val r = pill.getBoundingClientRect()
+            playReactionConfettiAt(r.left + r.width / 2.0, r.top + r.height / 2.0)
+            addReactionBurstAnimation(pill, messageId)
+            return
+        }
+        if (attempts < 30) {
+            window.setTimeout({ tick() }, 45)
+        }
+    }
+    window.setTimeout({ tick() }, 0)
+}
+
+private fun addReactionBurstAnimation(anchorEl: org.w3c.dom.Element?, messageId: String) {
+    val row = anchorEl?.closest(".sd-msg-reactions") as? org.w3c.dom.HTMLElement
+        ?: findMessageReactionsRow(messageId)
+        ?: return
+    row.classList.add("sd-msg-reactions--burst")
+    window.setTimeout({
+        try {
+            row.classList.remove("sd-msg-reactions--burst")
+        } catch (_: Throwable) { }
+    }, 900)
+}
+
+private fun chainReactionRemovesThenAdd(
+    roomId: String,
+    messageId: String,
+    emoji: String,
+    uid: String,
+    otherEmojis: List<String>,
+) {
+    var p: dynamic = js("Promise.resolve()")
+    for (oe in otherEmojis) {
+        val captured = oe
+        p = p.unsafeCast<dynamic>().then { _: dynamic ->
+            setMessageReactionUser(roomId, messageId, captured, uid, false).unsafeCast<dynamic>()
+        }
+    }
+    p = p.unsafeCast<dynamic>().then { _: dynamic ->
+        setMessageReactionUser(roomId, messageId, emoji, uid, true).unsafeCast<dynamic>()
+    }
+    p.unsafeCast<dynamic>().catch { _: dynamic -> Unit }
+}
+
+private fun performChatMessageReactionToggle(
+    roomId: String,
+    messageId: String,
+    emoji: String,
+    uid: String,
+) {
+    val msg = appState.chatMessages.find { it.id == messageId } ?: return
+    val has = msg.reactions[emoji]?.contains(uid) == true
+    if (has) {
+        setMessageReactionUser(roomId, messageId, emoji, uid, false).catch { _: dynamic -> Unit }
+        return
+    }
+    scheduleReactionCelebrationAtMessagePill(messageId, emoji)
+    val otherEmojis = msg.reactions.filter { (_, uids) -> uid in uids }.keys.filter { it != emoji }
+    if (otherEmojis.isEmpty()) {
+        setMessageReactionUser(roomId, messageId, emoji, uid, true).catch { _: dynamic -> Unit }
+    } else {
+        chainReactionRemovesThenAdd(roomId, messageId, emoji, uid, otherEmojis)
+    }
+}
+
 /** Сообщение с файлом — показывать как картинку в чате (превью). */
 private fun chatFileMessageIsImage(msg: ChatMessage): Boolean {
     val mime = msg.fileMime?.trim()?.lowercase() ?: ""
@@ -748,6 +1039,8 @@ private fun chatFileMessageBubbleHtml(
     myAvatarHtml: String,
     isMe: Boolean,
     senderLabel: String,
+    myId: String,
+    reactionsUiAllowed: Boolean = true,
 ): String {
     val url = (msg.fileUrl ?: "").escapeHtml()
     val fn = (msg.fileName ?: "файл").escapeHtml()
@@ -758,15 +1051,15 @@ private fun chatFileMessageBubbleHtml(
             <a href="$url" class="sd-msg-file-image-link sd-chat-file-in-app" rel="noopener noreferrer" title="$fn" data-file-name="$fnAttr">
                 <img src="$url" alt="$fn" class="sd-msg-file-image" loading="lazy" decoding="async" />
             </a>
-            <a href="$url" class="sd-msg-file-link sd-msg-file-name-under sd-chat-file-in-app" rel="noopener noreferrer" data-file-name="$fnAttr">📎 $fn</a>
         </div>"""
     } else {
         """<div class="sd-msg-file-row"><a href="$url" class="sd-msg-file-link sd-chat-file-in-app" rel="noopener noreferrer" data-file-name="$fnAttr" download="$fn">📎 $fn</a></div>"""
     }
-    val caption = msg.text.trim().takeIf { it.isNotBlank() }?.let {
+    val caption = if (isImage) "" else msg.text.trim().takeIf { it.isNotBlank() }?.let {
         """<div class="sd-msg-text sd-msg-file-caption">${it.escapeHtml()}</div>"""
     } ?: ""
-    return """<div class="$cls sd-msg-file${if (isImage) " sd-msg-file-is-image" else ""}$replyTargetClass" data-msg-id="${msg.id.escapeHtml()}" data-msg-text="${msg.text.escapeHtml()}">${if (isMe) "" else otherAvatarHtml}<div class="sd-msg-bubble-wrap">$senderLabel$replyHtml$fileRow$caption<div class="sd-msg-footer">$timeRow$statusHtml</div></div>${if (isMe) myAvatarHtml else ""}</div>"""
+    val reactionsHtml = chatMessageReactionsHtml(msg, myId, reactionsUiAllowed)
+    return """<div class="$cls sd-msg-file${if (isImage) " sd-msg-file-is-image" else ""}$replyTargetClass" data-msg-id="${msg.id.escapeHtml()}" data-msg-text="${msg.text.escapeHtml()}">${if (isMe) "" else otherAvatarHtml}<div class="sd-msg-bubble-wrap">$senderLabel$replyHtml$fileRow$caption<div class="sd-msg-footer">$timeRow$statusHtml</div>$reactionsHtml</div>${if (isMe) myAvatarHtml else ""}</div>"""
 }
 
 /** Оверлей просмотра вложения из чата (крестик — назад в чат). Создаётся один раз на body. */
@@ -860,6 +1153,61 @@ private fun closeChatFileViewer() {
     bodyStyle.overflow = ""
 }
 
+/** Оверлей увеличения аватара контакта (по клику в списке контактов). */
+private fun ensureChatAvatarViewerOverlay() {
+    if (document.getElementById("sd-chat-avatar-viewer") != null) return
+    val wrap = document.createElement("div")
+    wrap.id = "sd-chat-avatar-viewer"
+    wrap.className = "sd-chat-avatar-viewer sd-hidden"
+    wrap.setAttribute("aria-hidden", "true")
+    wrap.setAttribute("role", "dialog")
+    wrap.innerHTML = """
+        <button type="button" id="sd-chat-avatar-viewer-close" class="sd-chat-avatar-viewer-close" title="Закрыть" aria-label="Закрыть">$SD_ICON_CLOSE_SVG</button>
+        <div class="sd-chat-avatar-viewer-inner">
+            <img id="sd-chat-avatar-viewer-img" class="sd-chat-avatar-viewer-img-el sd-hidden" alt="" />
+        </div>
+    """.trimIndent()
+    document.body?.appendChild(wrap)
+    document.getElementById("sd-chat-avatar-viewer-close")?.addEventListener("click", { closeChatAvatarViewer() })
+    wrap.addEventListener("click", { e: dynamic ->
+        if (e?.target === wrap) closeChatAvatarViewer()
+    })
+    if (!chatAvatarViewerEscapeListenerBound) {
+        chatAvatarViewerEscapeListenerBound = true
+        document.addEventListener("keydown", { e: dynamic ->
+            if (e?.key != "Escape") return@addEventListener
+            val v = document.getElementById("sd-chat-avatar-viewer") ?: return@addEventListener
+            if (v.classList.contains("sd-hidden")) return@addEventListener
+            closeChatAvatarViewer()
+            (e as? org.w3c.dom.events.Event)?.preventDefault()
+        }, true)
+    }
+}
+
+private fun openChatAvatarViewer(imageUrl: String) {
+    ensureChatAvatarViewerOverlay()
+    val overlay = document.getElementById("sd-chat-avatar-viewer") ?: return
+    val img = document.getElementById("sd-chat-avatar-viewer-img") as? org.w3c.dom.HTMLImageElement ?: return
+    if (imageUrl.isBlank()) return
+    img.classList.remove("sd-hidden")
+    img.src = imageUrl
+    overlay.classList.remove("sd-hidden")
+    overlay.setAttribute("aria-hidden", "false")
+    val bodyStyle = (document.body as? org.w3c.dom.HTMLElement)?.asDynamic()?.style
+    bodyStyle.overflow = "hidden"
+}
+
+private fun closeChatAvatarViewer() {
+    val overlay = document.getElementById("sd-chat-avatar-viewer") ?: return
+    val img = document.getElementById("sd-chat-avatar-viewer-img") as? org.w3c.dom.HTMLImageElement
+    img?.classList?.add("sd-hidden")
+    try { img?.removeAttribute("src") } catch (_: Throwable) { }
+    overlay.classList.add("sd-hidden")
+    overlay.setAttribute("aria-hidden", "true")
+    val bodyStyle = (document.body as? org.w3c.dom.HTMLElement)?.asDynamic()?.style
+    bodyStyle.overflow = ""
+}
+
 private fun renderChatTabContent(currentUser: User): String {
     if (currentUser.role == "admin" && appState.chatAdminCorrespondenceMode) {
         return renderAdminCorrespondenceChatTab(currentUser)
@@ -896,7 +1244,9 @@ private fun renderChatTabContent(currentUser: User): String {
             val otherAvatarHtml = if (themUser != null) chatOtherUserAvatarHtml(themUser) else """<div class="sd-msg-them-avatar"><span class="sd-msg-them-avatar-initials">?</span></div>"""
             val senderLabel = if (!isMe) """<div class="sd-msg-group-sender">${formatShortName(themUser?.fullName ?: "Участник").escapeHtml()}</div>""" else ""
             val cls = if (isMe) "sd-msg sd-msg-me" else "sd-msg sd-msg-them"
-            val timeStr = formatMessageDateTime(msg.timestamp).escapeHtml()
+            val timeMs = msg.editedAt ?: msg.timestamp
+            val timeStr = formatMessageDateTime(timeMs).escapeHtml()
+            val editedTag = if (msg.editedAt != null) " (ред.)" else ""
             val replyTargetClass = if (appState.chatReplyToMessageId == msg.id) " sd-msg-reply-target" else ""
             val statusHtml = if (isMe) {
                 val isRead = msg.status == "read"
@@ -904,9 +1254,11 @@ private fun renderChatTabContent(currentUser: User): String {
                 val checkClass = if (isRead) "sd-msg-checks sd-msg-checks-read" else "sd-msg-checks sd-msg-checks-sent"
                 """<span class="$checkClass" title="${if (isRead) "Прочитано" else "Доставлено"}">$checks</span>"""
             } else ""
-            val timeRow = """<span class="sd-msg-time">$timeStr</span>"""
+            val timeRow = """<span class="sd-msg-time">$timeStr$editedTag</span>"""
+            val reactionsHtml = chatMessageReactionsHtml(msg, myId, true)
             val replyHtml = msg.replyToText?.takeIf { it.isNotBlank() }?.let { rText ->
-                """<div class="sd-msg-reply-snippet">${rText.escapeHtml()}</div>"""
+                val targetId = msg.replyToMessageId ?: ""
+                """<div class="sd-msg-reply-snippet" data-reply-to-message-id="${targetId.escapeHtml()}">Ответ: ${rText.escapeHtml()}</div>"""
             } ?: ""
             if (msg.isVoice && !msg.voiceUrl.isNullOrBlank() && (msg.voiceDurationSec ?: 0) > 0) {
                 val dur = msg.voiceDurationSec!!
@@ -930,13 +1282,14 @@ private fun renderChatTabContent(currentUser: User): String {
                     </div>
                     <audio id="sd-voice-audio-${msg.id.escapeHtml()}" class="sd-voice-audio" preload="metadata"></audio>
                     <div class="sd-msg-footer">$timeRow$statusHtml</div>
+                    $reactionsHtml
                     </div>
                     ${if (isMe) myAvatarHtml else ""}
                 </div>"""
             } else if (msg.isFile && !msg.fileUrl.isNullOrBlank()) {
-                chatFileMessageBubbleHtml(msg, cls, replyTargetClass, replyHtml, timeRow, statusHtml, otherAvatarHtml, myAvatarHtml, isMe, senderLabel)
+                chatFileMessageBubbleHtml(msg, cls, replyTargetClass, replyHtml, timeRow, statusHtml, otherAvatarHtml, myAvatarHtml, isMe, senderLabel, myId)
             } else {
-                """<div class="$cls$replyTargetClass" data-msg-id="${msg.id.escapeHtml()}" data-msg-text="${msg.text.escapeHtml()}">${if (isMe) "" else otherAvatarHtml}<div class="sd-msg-bubble-wrap">$senderLabel<span class="sd-msg-text">${msg.text.escapeHtml()}</span><div class="sd-msg-footer">$timeRow$statusHtml</div></div>${if (isMe) myAvatarHtml else ""}</div>"""
+                """<div class="$cls$replyTargetClass" data-msg-id="${msg.id.escapeHtml()}" data-msg-text="${msg.text.escapeHtml()}">${if (isMe) "" else otherAvatarHtml}<div class="sd-msg-bubble-wrap">$senderLabel$replyHtml<span class="sd-msg-text">${msg.text.escapeHtml()}</span><div class="sd-msg-footer">$timeRow$statusHtml</div>$reactionsHtml</div>${if (isMe) myAvatarHtml else ""}</div>"""
             }
         }
         val recording = appState.chatVoiceRecording
@@ -949,17 +1302,19 @@ private fun renderChatTabContent(currentUser: User): String {
             voiceRowHtml != null -> voiceRowHtml
             else -> {
                 val replyComposerHtml = appState.chatReplyToText?.takeIf { it.isNotBlank() }?.let { txt ->
-                    """<div class="sd-chat-reply-preview" id="sd-chat-reply-preview">
+                    """<div class="sd-chat-reply-preview" id="sd-chat-reply-preview" data-reply-to-message-id="${(appState.chatReplyToMessageId ?: "").escapeHtml()}">
                         <span class="sd-chat-reply-preview-text">${txt.escapeHtml()}</span>
                         <button type="button" id="sd-chat-reply-cancel" class="sd-chat-reply-cancel-btn" title="Отменить ответ">$SD_ICON_CLOSE_SVG</button>
                     </div>"""
                 } ?: ""
-                """<div class="sd-chat-input-row">
+                """<div class="sd-chat-input-stack">
                     $replyComposerHtml
-                    $chatFileAttachHtml
-                    <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="" maxlength="2000" aria-label="Сообщение" />
-                    <button type="button" id="sd-chat-send" class="sd-chat-send-btn" title="Отправить">$iconSendSvg</button>
-                    <button type="button" id="sd-chat-voice-mic" class="sd-chat-voice-mic-btn" title="Запись голосового сообщения" aria-label="Запись голоса">$iconMicSvg</button>
+                    <div class="sd-chat-input-row">
+                        $chatFileAttachHtml
+                        <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="" maxlength="2000" aria-label="Сообщение" />
+                        <button type="button" id="sd-chat-send" class="sd-chat-send-btn" title="Отправить">$iconSendSvg</button>
+                        <button type="button" id="sd-chat-voice-mic" class="sd-chat-voice-mic-btn" title="Запись голосового сообщения" aria-label="Запись голоса">$iconMicSvg</button>
+                    </div>
                 </div>"""
             }
         }
@@ -1021,7 +1376,9 @@ private fun renderChatTabContent(currentUser: User): String {
         val msgsHtml = visibleMessages.joinToString("") { msg ->
             val isMe = msg.senderId == myId
             val cls = if (isMe) "sd-msg sd-msg-me" else "sd-msg sd-msg-them"
-            val timeStr = formatMessageDateTime(msg.timestamp).escapeHtml()
+            val timeMs = msg.editedAt ?: msg.timestamp
+            val timeStr = formatMessageDateTime(timeMs).escapeHtml()
+            val editedTag = if (msg.editedAt != null) " (ред.)" else ""
             val replyTargetClass = if (appState.chatReplyToMessageId == msg.id) " sd-msg-reply-target" else ""
             val statusHtml = if (isMe) {
                 val isRead = msg.status == "read"
@@ -1029,9 +1386,11 @@ private fun renderChatTabContent(currentUser: User): String {
                 val checkClass = if (isRead) "sd-msg-checks sd-msg-checks-read" else "sd-msg-checks sd-msg-checks-sent"
                 """<span class="$checkClass" title="${if (isRead) "Прочитано" else "Доставлено"}">$checks</span>"""
             } else ""
-            val timeRow = """<span class="sd-msg-time">$timeStr</span>"""
+            val timeRow = """<span class="sd-msg-time">$timeStr$editedTag</span>"""
+            val reactionsHtml = chatMessageReactionsHtml(msg, myId, true)
             val replyHtml = msg.replyToText?.takeIf { it.isNotBlank() }?.let { rText ->
-                """<div class="sd-msg-reply-snippet">${rText.escapeHtml()}</div>"""
+                val targetId = msg.replyToMessageId ?: ""
+                """<div class="sd-msg-reply-snippet" data-reply-to-message-id="${targetId.escapeHtml()}">Ответ: ${rText.escapeHtml()}</div>"""
             } ?: ""
             if (msg.isVoice && !msg.voiceUrl.isNullOrBlank() && (msg.voiceDurationSec ?: 0) > 0) {
                 val dur = msg.voiceDurationSec!!
@@ -1054,13 +1413,14 @@ private fun renderChatTabContent(currentUser: User): String {
                     </div>
                     <audio id="sd-voice-audio-${msg.id.escapeHtml()}" class="sd-voice-audio" preload="metadata"></audio>
                     <div class="sd-msg-footer">$timeRow$statusHtml</div>
+                    $reactionsHtml
                     </div>
                     ${if (isMe) myAvatarHtml else ""}
                 </div>"""
             } else if (msg.isFile && !msg.fileUrl.isNullOrBlank()) {
-                chatFileMessageBubbleHtml(msg, cls, replyTargetClass, replyHtml, timeRow, statusHtml, otherAvatarHtml, myAvatarHtml, isMe, "")
+                chatFileMessageBubbleHtml(msg, cls, replyTargetClass, replyHtml, timeRow, statusHtml, otherAvatarHtml, myAvatarHtml, isMe, "", myId)
             } else {
-                """<div class="$cls$replyTargetClass" data-msg-id="${msg.id.escapeHtml()}" data-msg-text="${msg.text.escapeHtml()}">${if (isMe) "" else otherAvatarHtml}<div class="sd-msg-bubble-wrap"><span class="sd-msg-text">${msg.text.escapeHtml()}</span><div class="sd-msg-footer">$timeRow$statusHtml</div></div>${if (isMe) myAvatarHtml else ""}</div>"""
+            """<div class="$cls$replyTargetClass" data-msg-id="${msg.id.escapeHtml()}" data-msg-text="${msg.text.escapeHtml()}">${if (isMe) "" else otherAvatarHtml}<div class="sd-msg-bubble-wrap">$replyHtml<span class="sd-msg-text">${msg.text.escapeHtml()}</span><div class="sd-msg-footer">$timeRow$statusHtml</div>$reactionsHtml</div>${if (isMe) myAvatarHtml else ""}</div>"""
             }
         }
         val recording = appState.chatVoiceRecording
@@ -1073,17 +1433,19 @@ private fun renderChatTabContent(currentUser: User): String {
             voiceRowHtml != null -> voiceRowHtml
             else -> {
                 val replyComposerHtml = appState.chatReplyToText?.takeIf { it.isNotBlank() }?.let { txt ->
-                    """<div class="sd-chat-reply-preview" id="sd-chat-reply-preview">
+                    """<div class="sd-chat-reply-preview" id="sd-chat-reply-preview" data-reply-to-message-id="${(appState.chatReplyToMessageId ?: "").escapeHtml()}">
                         <span class="sd-chat-reply-preview-text">${txt.escapeHtml()}</span>
                         <button type="button" id="sd-chat-reply-cancel" class="sd-chat-reply-cancel-btn" title="Отменить ответ">$SD_ICON_CLOSE_SVG</button>
                     </div>"""
                 } ?: ""
-                """<div class="sd-chat-input-row">
+                """<div class="sd-chat-input-stack">
                     $replyComposerHtml
-                    $chatFileAttachHtml
-                    <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="" maxlength="2000" aria-label="Сообщение" />
-                    <button type="button" id="sd-chat-send" class="sd-chat-send-btn" title="Отправить">$iconSendSvg</button>
-                    <button type="button" id="sd-chat-voice-mic" class="sd-chat-voice-mic-btn" title="Запись голосового сообщения" aria-label="Запись голоса">$iconMicSvg</button>
+                    <div class="sd-chat-input-row">
+                        $chatFileAttachHtml
+                        <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="" maxlength="2000" aria-label="Сообщение" />
+                        <button type="button" id="sd-chat-send" class="sd-chat-send-btn" title="Отправить">$iconSendSvg</button>
+                        <button type="button" id="sd-chat-voice-mic" class="sd-chat-voice-mic-btn" title="Запись голосового сообщения" aria-label="Запись голоса">$iconMicSvg</button>
+                    </div>
                 </div>"""
             }
         }
@@ -1160,9 +1522,9 @@ private fun renderChatTabContent(currentUser: User): String {
     val iconSettingsSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>"""
     val corrBtnActive = if (appState.chatAdminCorrespondenceMode) " sd-chat-correspondence-btn--active" else ""
     val adminCorrBtn = if (currentUser.role == "admin") """<button type="button" id="sd-chat-admin-correspondence" class="sd-chat-create-group-btn sd-chat-create-group-btn--icon sd-chat-settings-btn sd-chat-correspondence-btn$corrBtnActive" title="Переписка" aria-label="Переписка">$iconCorrespondenceSvg</button>""" else ""
-    val createGroupBtn = if (currentUser.role == "admin") """<button type="button" id="sd-chat-create-group" class="sd-chat-create-group-btn" title="Создать групповой чат" aria-label="Создать группу">$iconCreateGroupSvg Создать группу</button>""" else ""
+    val createGroupBtn = if (currentUser.role == "admin") """<button type="button" id="sd-chat-create-group" class="sd-chat-create-group-btn sd-chat-create-group-btn--icon sd-chat-settings-btn" title="Создать групповой чат" aria-label="Создать группу">$iconCreateGroupSvg</button>""" else ""
     val settingsBtnHtml = """<button type="button" id="sd-chat-settings-btn" class="sd-chat-create-group-btn sd-chat-create-group-btn--icon sd-chat-settings-btn" title="Настройки" aria-label="Настройки">$iconSettingsSvg</button>"""
-    val refreshBtnStyled = """<button type="button" id="sd-chat-refresh" class="sd-chat-create-group-btn" title="Обновить список контактов" aria-label="Обновить контакты">$iconRefreshSvg Обновить контакты</button>"""
+    val refreshBtnStyled = """<button type="button" id="sd-chat-refresh" class="sd-chat-create-group-btn sd-chat-create-group-btn--icon sd-chat-settings-btn" title="Обновить список контактов" aria-label="Обновить контакты">$iconRefreshSvg</button>"""
     return """<div class="sd-chat-tab"><div class="sd-chat-list-header"><h2 class="sd-chat-title">Чат</h2><div class="sd-chat-header-actions">$adminCorrBtn$createGroupBtn$settingsBtnHtml$refreshBtnStyled</div></div>$loadingLine$contactsBlock</div>"""
 }
 
@@ -1204,6 +1566,7 @@ private fun renderAdminCorrespondenceMessagesHtml(
     peerId: String,
     contacts: List<User>,
     messages: List<ChatMessage>,
+    viewerId: String,
 ): String {
     val subjectUser = userForAdminCorr(contacts, subjectId)
     val iconCheck = """<svg class="sd-msg-check" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>"""
@@ -1220,7 +1583,9 @@ private fun renderAdminCorrespondenceMessagesHtml(
         val senderUser = userForAdminCorr(contacts, msg.senderId)
         val otherAvatarHtml = chatOtherUserAvatarHtml(senderUser)
         val cls = if (isMe) "sd-msg sd-msg-me" else "sd-msg sd-msg-them"
-        val timeStr = formatMessageDateTime(msg.timestamp).escapeHtml()
+        val timeMs = msg.editedAt ?: msg.timestamp
+        val timeStr = formatMessageDateTime(timeMs).escapeHtml()
+        val editedTag = if (msg.editedAt != null) " (ред.)" else ""
         val replyTargetClass = ""
         val statusHtml = if (isMe) {
             val isRead = msg.status == "read"
@@ -1228,9 +1593,11 @@ private fun renderAdminCorrespondenceMessagesHtml(
             val checkClass = if (isRead) "sd-msg-checks sd-msg-checks-read" else "sd-msg-checks sd-msg-checks-sent"
             """<span class="$checkClass" title="${if (isRead) "Прочитано" else "Доставлено"}">$checks</span>"""
         } else ""
-        val timeRow = """<span class="sd-msg-time">$timeStr</span>"""
+        val timeRow = """<span class="sd-msg-time">$timeStr$editedTag</span>"""
+        val reactionsHtml = chatMessageReactionsHtml(msg, viewerId, false)
         val replyHtml = msg.replyToText?.takeIf { it.isNotBlank() }?.let { rText ->
-            """<div class="sd-msg-reply-snippet">${rText.escapeHtml()}</div>"""
+            val targetId = msg.replyToMessageId ?: ""
+            """<div class="sd-msg-reply-snippet" data-reply-to-message-id="${targetId.escapeHtml()}">Ответ: ${rText.escapeHtml()}</div>"""
         } ?: ""
         if (msg.isVoice && !msg.voiceUrl.isNullOrBlank() && (msg.voiceDurationSec ?: 0) > 0) {
             val dur = msg.voiceDurationSec!!
@@ -1253,13 +1620,14 @@ private fun renderAdminCorrespondenceMessagesHtml(
                 </div>
                 <audio id="sd-voice-audio-${msg.id.escapeHtml()}" class="sd-voice-audio" preload="metadata"></audio>
                 <div class="sd-msg-footer">$timeRow$statusHtml</div>
+                $reactionsHtml
                 </div>
                 ${if (isMe) myAvatarSubject else ""}
             </div>"""
         } else if (msg.isFile && !msg.fileUrl.isNullOrBlank()) {
-            chatFileMessageBubbleHtml(msg, cls, replyTargetClass, replyHtml, timeRow, statusHtml, otherAvatarHtml, myAvatarSubject, isMe, "")
+            chatFileMessageBubbleHtml(msg, cls, replyTargetClass, replyHtml, timeRow, statusHtml, otherAvatarHtml, myAvatarSubject, isMe, "", viewerId, false)
         } else {
-            """<div class="$cls$replyTargetClass" data-msg-id="${msg.id.escapeHtml()}" data-msg-text="${msg.text.escapeHtml()}">${if (isMe) "" else otherAvatarHtml}<div class="sd-msg-bubble-wrap"><span class="sd-msg-text">${msg.text.escapeHtml()}</span><div class="sd-msg-footer">$timeRow$statusHtml</div></div>${if (isMe) myAvatarSubject else ""}</div>"""
+            """<div class="$cls$replyTargetClass" data-msg-id="${msg.id.escapeHtml()}" data-msg-text="${msg.text.escapeHtml()}">${if (isMe) "" else otherAvatarHtml}<div class="sd-msg-bubble-wrap">$replyHtml<span class="sd-msg-text">${msg.text.escapeHtml()}</span><div class="sd-msg-footer">$timeRow$statusHtml</div>$reactionsHtml</div>${if (isMe) myAvatarSubject else ""}</div>"""
         }
     }
 }
@@ -1274,16 +1642,16 @@ private fun renderAdminCorrespondenceChatTab(currentUser: User): String {
     val loadingLine = if (loading) """<p class="sd-chat-loading-text">Загрузка контактов…</p>""" else ""
     val corrActive = if (appState.chatAdminCorrespondenceMode) " sd-chat-correspondence-btn--active" else ""
     val adminCorrBtn = """<button type="button" id="sd-chat-admin-correspondence" class="sd-chat-create-group-btn sd-chat-create-group-btn--icon sd-chat-settings-btn sd-chat-correspondence-btn$corrActive" title="Переписка" aria-label="Переписка">$iconCorrespondenceSvg</button>"""
-    val createGroupBtn = """<button type="button" id="sd-chat-create-group" class="sd-chat-create-group-btn" title="Создать групповой чат" aria-label="Создать группу">$iconCreateGroupSvg Создать группу</button>"""
+    val createGroupBtn = """<button type="button" id="sd-chat-create-group" class="sd-chat-create-group-btn sd-chat-create-group-btn--icon sd-chat-settings-btn" title="Создать групповой чат" aria-label="Создать группу">$iconCreateGroupSvg</button>"""
     val iconSettingsSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>"""
     val settingsBtnHtml = """<button type="button" id="sd-chat-settings-btn" class="sd-chat-create-group-btn sd-chat-create-group-btn--icon sd-chat-settings-btn" title="Настройки" aria-label="Настройки">$iconSettingsSvg</button>"""
     val iconRefreshSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>"""
-    val refreshBtnStyled = """<button type="button" id="sd-chat-refresh" class="sd-chat-create-group-btn" title="Обновить список контактов" aria-label="Обновить контакты">$iconRefreshSvg Обновить контакты</button>"""
+    val refreshBtnStyled = """<button type="button" id="sd-chat-refresh" class="sd-chat-create-group-btn sd-chat-create-group-btn--icon sd-chat-settings-btn" title="Обновить список контактов" aria-label="Обновить контакты">$iconRefreshSvg</button>"""
     val listHeader = """<div class="sd-chat-list-header"><h2 class="sd-chat-title">Чат</h2><div class="sd-chat-header-actions">$adminCorrBtn$createGroupBtn$settingsBtnHtml$refreshBtnStyled</div></div>"""
     if (subjectId != null && peerId != null) {
         val sName = userForAdminCorr(contacts, subjectId).let { formatShortName(it.fullName) }.escapeHtml()
         val pName = userForAdminCorr(contacts, peerId).let { formatShortName(it.fullName) }.escapeHtml()
-        val msgsHtml = renderAdminCorrespondenceMessagesHtml(subjectId, peerId, contacts, messages)
+        val msgsHtml = renderAdminCorrespondenceMessagesHtml(subjectId, peerId, contacts, messages, currentUser.id)
         return """
             <div class="sd-chat-tab">
             <div class="sd-chat-conversation sd-chat-admin-corr-conversation">
@@ -7309,6 +7677,57 @@ private fun getNotificationButtonWrapHtml(): String {
     return """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>$badgeHtml"""
 }
 
+/** Кнопка «Обновить страницу» в шапке панели — тот же визуальный стиль, что «Уведомления». */
+private fun headerAppReloadButtonHtml(): String {
+    val iconRefresh = """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>"""
+    val iconCheck = """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="20" height="20" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>"""
+    return """<button type="button" id="sd-btn-app-reload" class="sd-btn sd-btn-notifications" title="Обновить приложение — сбросить кэш и загрузить свежие файлы с сервера" aria-label="Обновить приложение, сбросить кэш"><span class="sd-btn-notif-wrap sd-app-reload-wrap"><span class="sd-app-reload-layer sd-app-reload-layer--refresh">$iconRefresh</span><span class="sd-app-reload-layer sd-app-reload-layer--check">$iconCheck</span></span></button>"""
+}
+
+/**
+ * Hard reload: Cache Storage + снятие регистрации Service Worker (см. service-worker.js),
+ * затем переход с _sdcb=… — как «полная перезагрузка» с сервера.
+ */
+private fun hardReloadBypassingCaches() {
+    js(
+        "(function(){" +
+            "function go(){try{var u=new URL(window.location.href);u.searchParams.set('_sdcb',String(Date.now()));window.location.replace(u.href);}catch(e){window.location.reload();}}" +
+            "var o=window.location.origin;" +
+            "var pCache=typeof caches!=='undefined'?caches.keys().then(function(keys){return Promise.all(keys.map(function(k){return caches.delete(k)}));}).catch(function(){}):Promise.resolve();" +
+            "var sw=navigator.serviceWorker;" +
+            "var pSw=sw&&sw.getRegistrations?sw.getRegistrations().then(function(regs){return Promise.all(regs.map(function(r){return r.unregister();}));}).catch(function(){}):Promise.resolve();" +
+            "var pJs=fetch(o+'/webApp.js',{cache:'reload',credentials:'same-origin'}).catch(function(){});" +
+            "Promise.all([pCache,pSw,pJs]).then(function(){try{sessionStorage.setItem('" + SESSION_RELOAD_OK_KEY + "','1');}catch(e){}go();},go).catch(go);" +
+            "})()"
+    )
+}
+
+/** После перезагрузки по кнопке «Обновить»: короткая анимация галочки в шапке. */
+private fun maybeShowAppReloadSuccessCheck() {
+    val st = try {
+        window.asDynamic().sessionStorage
+    } catch (_: Throwable) {
+        null
+    } ?: return
+    val v = try {
+        st.getItem(SESSION_RELOAD_OK_KEY) as? String
+    } catch (_: Throwable) {
+        null
+    } ?: return
+    if (v != "1") return
+    val btn = document.getElementById("sd-btn-app-reload") as? org.w3c.dom.HTMLElement
+    try {
+        st.removeItem(SESSION_RELOAD_OK_KEY)
+    } catch (_: Throwable) { }
+    if (btn == null) return
+    btn.classList.add("sd-btn-app-reload--success")
+    window.setTimeout({
+        try {
+            btn.classList.remove("sd-btn-app-reload--success")
+        } catch (_: Throwable) { }
+    }, 2200)
+}
+
 /** Классы кнопки уведомлений в шапке (подсветка при непрочитанных). */
 private fun notificationButtonHtmlClass(): String {
     val unreadCount = (appState.notifications.size - appState.notificationsReadCount).coerceAtLeast(0)
@@ -7348,6 +7767,7 @@ private fun renderPanel(user: User, roleTitle: String, tabs: List<String>): Stri
     val (tabButtons, tabContent) = getPanelTabButtonsAndContent(user, tabs)
     val notifWrapHtml = getNotificationButtonWrapHtml()
     val notifBtnClass = notificationButtonHtmlClass()
+    val appReloadBtn = headerAppReloadButtonHtml()
     val adminClearHistoryModal = if (user.role == "admin") adminClearHistoryModalHtml() else ""
     val signOutModal = signOutConfirmModalHtml()
     return """
@@ -7357,6 +7777,7 @@ private fun renderPanel(user: User, roleTitle: String, tabs: List<String>): Stri
                 <p>${formatShortName(user.fullName)} · ${user.email}</p>
             </div>
             <div class="sd-header-actions">
+                $appReloadBtn
                 <button type="button" id="sd-btn-notifications" class="$notifBtnClass" title="Уведомления" aria-label="Уведомления">
                     <span class="sd-btn-notif-wrap">$notifWrapHtml</span>
                 </button>
@@ -7485,6 +7906,7 @@ private fun forceFullPanelRender(root: org.w3c.dom.Element, useExamContent: Bool
     val tabContent = if (useExamContent) renderTicketsTabContent() else tabContentFromTabs
     val notifWrapHtml = getNotificationButtonWrapHtml()
     val notifBtnClass = notificationButtonHtmlClass()
+    val appReloadBtn = headerAppReloadButtonHtml()
     val adminClearHistoryModal = if (appState.screen == AppScreen.Admin) adminClearHistoryModalHtml() else ""
     val signOutModal = signOutConfirmModalHtml()
     val panelHtml = """
@@ -7494,6 +7916,7 @@ private fun forceFullPanelRender(root: org.w3c.dom.Element, useExamContent: Bool
                 <p>${formatShortName(user.fullName)} · ${user.email}</p>
             </div>
             <div class="sd-header-actions">
+                $appReloadBtn
                 <button type="button" id="sd-btn-notifications" class="$notifBtnClass" title="Уведомления" aria-label="Уведомления">
                     <span class="sd-btn-notif-wrap">$notifWrapHtml</span>
                 </button>
@@ -8598,6 +9021,8 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             }
             unsubscribeChat()
             subscribeMessages(chatRoomId(subj, pid)) { list ->
+                val prev = appState.chatMessages
+                maybeCelebrateNewReactions(chatRoomId(subj, pid), prev, list, subj)
                 updateState { chatMessages = list }
                 window.setTimeout({ scrollChatToBottom() }, 50)
             }
@@ -8649,6 +9074,8 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             val roomId = groupChatRoomId(gid)
             subscribeMessages(roomId) { list ->
                 val prevSize = appState.chatMessages.size
+                val prev = appState.chatMessages
+                maybeCelebrateNewReactions(roomId, prev, list, uid)
                 updateState { chatMessages = list }
                 val toMarkRead = list.filter { it.senderId != uid }.map { it.id }
                 if (toMarkRead.isNotEmpty()) markMessagesAsRead(roomId, toMarkRead)
@@ -8685,6 +9112,8 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             unsubscribeChat()
             subscribeMessages(chatRoomId(uid, contactId)) { list ->
                 val prevSize = appState.chatMessages.size
+                val prev = appState.chatMessages
+                maybeCelebrateNewReactions(chatRoomId(uid, contactId), prev, list, uid)
                 updateState { chatMessages = list }
                 val toMarkRead = list.filter { it.senderId == contactId }.map { it.id }
                 if (toMarkRead.isNotEmpty()) markMessagesAsRead(chatRoomId(uid, contactId), toMarkRead)
@@ -8722,6 +9151,8 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             unsubscribeChat()
             subscribeMessages(chatRoomId(uid, contactId)) { list ->
                 val prevSize = appState.chatMessages.size
+                val prev = appState.chatMessages
+                maybeCelebrateNewReactions(chatRoomId(uid, contactId), prev, list, uid)
                 updateState { chatMessages = list }
                 val toMarkRead = list.filter { it.senderId == contactId }.map { it.id }
                 if (toMarkRead.isNotEmpty()) markMessagesAsRead(chatRoomId(uid, contactId), toMarkRead)
@@ -8759,6 +9190,8 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             unsubscribeChat()
             subscribeMessages(chatRoomId(uid, contactId)) { list ->
                 val prevSize = appState.chatMessages.size
+                val prev = appState.chatMessages
+                maybeCelebrateNewReactions(chatRoomId(uid, contactId), prev, list, uid)
                 updateState { chatMessages = list }
                 val toMarkRead = list.filter { it.senderId == contactId }.map { it.id }
                 if (toMarkRead.isNotEmpty()) markMessagesAsRead(chatRoomId(uid, contactId), toMarkRead)
@@ -8942,19 +9375,13 @@ private fun attachListeners(root: org.w3c.dom.Element) {
 
         document.body?.addEventListener("pointerdown", { e: dynamic ->
             val target = e?.target as? org.w3c.dom.Element ?: return@addEventListener
-            val bubble = target.closest(".sd-msg-me .sd-msg-bubble-wrap") as? org.w3c.dom.Element ?: return@addEventListener
-            val msgRoot = bubble.closest(".sd-msg-me") as? org.w3c.dom.Element ?: return@addEventListener
+            val bubble = target.closest(".sd-msg .sd-msg-bubble-wrap") as? org.w3c.dom.Element ?: return@addEventListener
+            val msgRoot = bubble.closest(".sd-msg") as? org.w3c.dom.Element ?: return@addEventListener
             val msgId = msgRoot.getAttribute("data-msg-id") ?: return@addEventListener
             val fromList = appState.chatMessages.find { it.id == msgId }?.text
             val msgText = fromList ?: (msgRoot.getAttribute("data-msg-text") ?: "")
             val uid = appState.user?.id ?: return@addEventListener
-            val roomId = when {
-                appState.selectedChatGroupId != null -> groupChatRoomId(appState.selectedChatGroupId!!)
-                else -> {
-                    val contactId = appState.selectedChatContactId ?: return@addEventListener
-                    chatRoomId(uid, contactId)
-                }
-            }
+            val roomId = resolveOpenChatRoomId(uid) ?: return@addEventListener
             if (chatMsgLongPressTimerId != 0) {
                 window.clearTimeout(chatMsgLongPressTimerId)
                 chatMsgLongPressTimerId = 0
@@ -8964,8 +9391,11 @@ private fun attachListeners(root: org.w3c.dom.Element) {
             val point = getPoint(e)
             val clientX = (point?.x as? Number)?.toDouble() ?: 0.0
             val clientY = (point?.y as? Number)?.toDouble() ?: 0.0
+            val adminCorrReadOnly = appState.chatAdminCorrespondenceMode &&
+                appState.chatAdminCorrespondenceSubjectId != null &&
+                appState.chatAdminCorrespondencePeerId != null
             chatMsgLongPressTimerId = window.setTimeout({
-                showChatMessageMenu(msgRoot, clientX + 8.0, clientY + 8.0, uid, roomId, msgId, msgText)
+                showChatMessageMenu(msgRoot, clientX + 8.0, clientY + 8.0, uid, roomId, msgId, msgText, showReactionPicker = !adminCorrReadOnly)
             }, 450).unsafeCast<Int>()
         }, true)
 
@@ -8985,7 +9415,74 @@ private fun attachListeners(root: org.w3c.dom.Element) {
 
         document.body?.addEventListener("click", { e: dynamic ->
             val target = e?.target as? org.w3c.dom.Element ?: return@addEventListener
-            if (target.closest("#sd-chat-msg-menu") == null) hideChatMessageMenu()
+            if (target.closest("#sd-chat-msg-menu") != null) return@addEventListener
+            if (target.closest("#sd-chat-reaction-extra-picker") != null) return@addEventListener
+            hideChatMessageMenu()
+        }, true)
+
+        document.body?.addEventListener("contextmenu", { e: dynamic ->
+            val t = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+            if (t.closest(".sd-msg") != null) {
+                (e as? org.w3c.dom.events.Event)?.preventDefault()
+            }
+        }, true)
+    }
+
+    if (window.asDynamic().__sdChatReactionPillDelegation != true) {
+        window.asDynamic().__sdChatReactionPillDelegation = true
+        document.body?.addEventListener("click", { e: dynamic ->
+            val target = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+            if (target.closest("#sd-chat-msg-menu") != null) return@addEventListener
+            val btn = target.closest("button.sd-msg-reaction-pill") as? org.w3c.dom.Element ?: return@addEventListener
+            if (appState.chatAdminCorrespondenceMode &&
+                appState.chatAdminCorrespondenceSubjectId != null &&
+                appState.chatAdminCorrespondencePeerId != null
+            ) return@addEventListener
+            val chatMsgs = document.getElementById("sd-chat-messages") ?: return@addEventListener
+            if (!chatMsgs.contains(btn)) return@addEventListener
+            (e as? org.w3c.dom.events.Event)?.preventDefault()
+            (e as? org.w3c.dom.events.Event)?.stopPropagation()
+            val msgId = btn.getAttribute("data-msg-react-id") ?: return@addEventListener
+            val emoji = btn.getAttribute("data-msg-react-emoji") ?: return@addEventListener
+            val uid = appState.user?.id ?: return@addEventListener
+            val roomId = resolveOpenChatRoomId(uid) ?: return@addEventListener
+            performChatMessageReactionToggle(roomId, msgId, emoji, uid)
+        }, true)
+    }
+
+    // Переход по сноске ответа: прокрутка к исходному сообщению + краткое мигание.
+    if (window.asDynamic().__sdChatReplySnippetDelegation != true) {
+        window.asDynamic().__sdChatReplySnippetDelegation = true
+        document.body?.addEventListener("click", { e: dynamic ->
+            val target = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+            if (target.closest("#sd-chat-msg-menu") != null) return@addEventListener
+
+            val snippet = target.closest(".sd-msg-reply-snippet") as? org.w3c.dom.Element ?: return@addEventListener
+            val targetReplyMsgId = snippet.getAttribute("data-reply-to-message-id") ?: ""
+            if (targetReplyMsgId.isBlank()) return@addEventListener
+
+            val chatMsgs = document.getElementById("sd-chat-messages") ?: return@addEventListener
+            val safeId = targetReplyMsgId.replace("\"", "")
+            val targetMsgEl = chatMsgs.querySelector(".sd-msg[data-msg-id=\"${safeId}\"]") as? org.w3c.dom.HTMLElement ?: return@addEventListener
+
+            val flashClass = "sd-chat-reply-jump-flash"
+            // Убираем предыдущую подсветку.
+            val prev = document.querySelectorAll(".${flashClass}")
+            for (i in 0 until prev.length) {
+                (prev.item(i) as? org.w3c.dom.HTMLElement)?.classList?.remove(flashClass)
+            }
+            targetMsgEl.classList.add(flashClass)
+            try {
+                targetMsgEl.asDynamic().scrollIntoView(js("({ behavior: 'smooth', block: 'center' })"))
+            } catch (_: Throwable) {
+                try { targetMsgEl.scrollIntoView() } catch (_2: Throwable) { }
+            }
+            window.setTimeout({
+                try { targetMsgEl.classList.remove(flashClass) } catch (_: Throwable) { }
+            }, 1300)
+
+            (e as? org.w3c.dom.events.Event)?.preventDefault()
+            (e as? org.w3c.dom.events.Event)?.stopPropagation()
         }, true)
     }
 
@@ -9008,11 +9505,33 @@ private fun attachListeners(root: org.w3c.dom.Element) {
         }, true)
     }
 
+    // Увеличение аватара контакта из списка контактов.
+    if (window.asDynamic().__sdChatAvatarViewerClickDelegation != true) {
+        window.asDynamic().__sdChatAvatarViewerClickDelegation = true
+        document.body?.addEventListener("click", { e: dynamic ->
+            val target = e?.target as? org.w3c.dom.Element ?: return@addEventListener
+            if (target.closest("#sd-chat-msg-menu") != null) return@addEventListener
+            if (target.closest("#sd-chat-avatar-viewer") != null) return@addEventListener
+
+            val avatarWrap = target.closest(".sd-chat-contact-avatar") as? org.w3c.dom.Element ?: return@addEventListener
+            val img = avatarWrap.querySelector("img.sd-avatar-img") as? org.w3c.dom.HTMLImageElement ?: return@addEventListener
+            val url = img.getAttribute("src") ?: return@addEventListener
+            if (url.isBlank()) return@addEventListener
+
+            e.preventDefault()
+            e.stopPropagation()
+            openChatAvatarViewer(url)
+        }, true)
+    }
+
     document.getElementById("sd-dismiss-network-error")?.addEventListener("click", {
         updateState { networkError = null }
     })
     document.getElementById("sd-chat-reply-cancel")?.addEventListener("click", {
         updateState { chatReplyToMessageId = null; chatReplyToText = null }
+        val inputEl = document.getElementById("sd-chat-input") as? org.w3c.dom.HTMLElement
+        inputEl?.setAttribute("data-reply-to-message-id", "")
+        inputEl?.setAttribute("data-reply-to-message-text", "")
     })
     document.getElementById("sd-network-retry")?.addEventListener("click", {
         updateState { networkError = null }
@@ -9515,6 +10034,10 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                         modal.setAttribute("aria-hidden", "false")
                     }
                 })
+                document.getElementById("sd-btn-app-reload")?.addEventListener("click", {
+                    hardReloadBypassingCaches()
+                })
+                window.setTimeout({ maybeShowAppReloadSuccessCheck() }, 0)
                 if (appState.screen == AppScreen.Instructor || appState.screen == AppScreen.Cadet || appState.screen == AppScreen.Admin) {
                     document.getElementById("sd-btn-notifications")?.addEventListener("click", {
                         val uid = appState.user?.id
@@ -10379,36 +10902,126 @@ private fun attachListeners(root: org.w3c.dom.Element) {
     }
 }
 
-private fun hideChatMessageMenu() {
-    document.getElementById("sd-chat-msg-menu")?.remove()
+private fun hideChatReactionExtraPicker() {
+    document.getElementById("sd-chat-reaction-extra-picker")?.remove()
 }
 
-private fun showChatMessageMenu(anchorEl: org.w3c.dom.Element, x: Double, y: Double, uid: String, roomId: String, messageId: String, messageText: String) {
+private fun showChatReactionExtraPicker(anchorEl: org.w3c.dom.Element, roomId: String, messageId: String, uid: String) {
+    hideChatReactionExtraPicker()
+    document.getElementById("sd-chat-msg-menu")?.remove()
+    val grid = CHAT_EXTENDED_REACTION_EMOJIS.joinToString("") { em ->
+        """<button type="button" class="sd-chat-extra-reaction-pick" data-emoji="${escapeHtmlAttrValue(em)}" title="$em" aria-label="Реакция $em">$em</button>"""
+    }
+    val wrap = document.createElement("div").unsafeCast<org.w3c.dom.HTMLElement>()
+    wrap.id = "sd-chat-reaction-extra-picker"
+    wrap.className = "sd-chat-reaction-extra-picker"
+    wrap.setAttribute("role", "dialog")
+    wrap.setAttribute("aria-label", "Выбор реакции")
+    wrap.innerHTML = """<div class="sd-chat-reaction-extra-picker-inner">$grid</div>"""
+    document.body?.appendChild(wrap)
+    fun positionPicker() {
+        val r = anchorEl.getBoundingClientRect()
+        val pr = wrap.getBoundingClientRect()
+        val vw = window.innerWidth.toDouble()
+        val vh = window.innerHeight.toDouble()
+        var left = r.left + r.width / 2.0 - pr.width / 2.0
+        var top = r.top - pr.height - 10.0
+        if (top < 8.0) top = r.bottom + 8.0
+        left = left.coerceIn(8.0, (vw - pr.width - 8.0).coerceAtLeast(8.0))
+        top = top.coerceIn(8.0, (vh - pr.height - 8.0).coerceAtLeast(8.0))
+        wrap.style.left = "${left}px"
+        wrap.style.top = "${top}px"
+    }
+    window.setTimeout({ positionPicker() }, 0)
+    wrap.addEventListener("click", { ev: dynamic ->
+        val t = ev?.target as? org.w3c.dom.Element ?: return@addEventListener
+        val pick = t.closest(".sd-chat-extra-reaction-pick") as? org.w3c.dom.Element ?: return@addEventListener
+        val em = pick.getAttribute("data-emoji") ?: return@addEventListener
+        performChatMessageReactionToggle(roomId, messageId, em, uid)
+        hideChatReactionExtraPicker()
+        (ev as? org.w3c.dom.events.Event)?.preventDefault()
+        (ev as? org.w3c.dom.events.Event)?.stopPropagation()
+    }, true)
+}
+
+private fun hideChatMessageMenu() {
+    document.getElementById("sd-chat-msg-menu")?.remove()
+    hideChatReactionExtraPicker()
+}
+
+private fun showChatMessageMenu(
+    anchorEl: org.w3c.dom.Element,
+    x: Double,
+    y: Double,
+    uid: String,
+    roomId: String,
+    messageId: String,
+    messageText: String,
+    showReactionPicker: Boolean = true,
+) {
     hideChatMessageMenu()
+    val isAdmin = appState.user?.role == "admin"
+    val reactionPicks = if (showReactionPicker) {
+        val emojiBtns = CHAT_MENU_REACTION_STRIP.joinToString("") { em ->
+            """<button type="button" class="sd-chat-msg-reaction-pick" data-action="react" data-emoji="${escapeHtmlAttrValue(em)}" title="$em" aria-label="Реакция $em">$em</button>"""
+        }
+        val moreBtn = """<button type="button" class="sd-chat-msg-reaction-pick sd-chat-msg-reaction-pick--more" data-action="react-more" title="Другие реакции" aria-label="Другие реакции">+</button>"""
+        emojiBtns + moreBtn
+    } else ""
+    val reactionBlock = if (showReactionPicker && reactionPicks.isNotEmpty()) {
+        """<div class="sd-chat-msg-menu-reactions" role="group" aria-label="Реакции">$reactionPicks</div>"""
+    } else ""
     val menu = document.createElement("div").unsafeCast<org.w3c.dom.HTMLElement>()
     menu.id = "sd-chat-msg-menu"
     menu.className = "sd-chat-msg-menu"
-    menu.innerHTML = """
+    val msgForEdit = appState.chatMessages.find { it.id == messageId }
+    val msgForMenu = appState.chatMessages.find { it.id == messageId }
+    val isMenuImageFile = msgForMenu?.isFile == true && chatFileMessageIsImage(msgForMenu)
+    val copyOrSaveBtn = if (isMenuImageFile) {
+        """<button type="button" class="sd-chat-msg-menu-item" data-action="save-image">Сохранить</button>"""
+    } else {
+        """<button type="button" class="sd-chat-msg-menu-item" data-action="copy">Копировать</button>"""
+    }
+    val editBtn = if (msgForEdit != null && canEditMessage(msgForEdit, uid, isAdmin)) {
+        """<button type="button" class="sd-chat-msg-menu-item" data-action="edit">Редактировать</button>"""
+    } else ""
+    val mainMenuHtml = """
+        $reactionBlock
         <button type="button" class="sd-chat-msg-menu-item" data-action="reply">Ответить</button>
-        <button type="button" class="sd-chat-msg-menu-item" data-action="copy">Копировать</button>
+        $copyOrSaveBtn
+        $editBtn
         <button type="button" class="sd-chat-msg-menu-item sd-chat-msg-menu-item-danger" data-action="delete">Удалить</button>
-    """.trimIndent()
+    """
     document.body?.appendChild(menu)
-
-    val viewportW = window.innerWidth.toDouble()
-    val viewportH = window.innerHeight.toDouble()
-    val rect = menu.getBoundingClientRect()
-    val left = x.coerceIn(8.0, (viewportW - rect.width - 8.0).coerceAtLeast(8.0))
-    val top = y.coerceIn(8.0, (viewportH - rect.height - 8.0).coerceAtLeast(8.0))
-    menu.style.left = "${left}px"
-    menu.style.top = "${top}px"
+    setChatMessageMenuHtml(menu, x, y, mainMenuHtml)
 
     menu.addEventListener("click", { ev: dynamic ->
-        val target = ev?.target as? org.w3c.dom.Element ?: return@addEventListener
+        val target = clickEventTargetElement(ev) ?: return@addEventListener
+        val moreBtn = target.closest("[data-action=\"react-more\"]") as? org.w3c.dom.Element
+        if (moreBtn != null) {
+            showChatReactionExtraPicker(moreBtn, roomId, messageId, uid)
+            (ev as? org.w3c.dom.events.Event)?.preventDefault()
+            (ev as? org.w3c.dom.events.Event)?.stopPropagation()
+            return@addEventListener
+        }
+        val reactBtn = target.closest(".sd-chat-msg-reaction-pick[data-action=\"react\"]") as? org.w3c.dom.Element
+        if (reactBtn != null) {
+            val emoji = reactBtn.getAttribute("data-emoji") ?: return@addEventListener
+            performChatMessageReactionToggle(roomId, messageId, emoji, uid)
+            hideChatMessageMenu()
+            (ev as? org.w3c.dom.events.Event)?.preventDefault()
+            (ev as? org.w3c.dom.events.Event)?.stopPropagation()
+            return@addEventListener
+        }
         val btn = target.closest(".sd-chat-msg-menu-item") as? org.w3c.dom.Element ?: return@addEventListener
         when (btn.getAttribute("data-action")) {
             "reply" -> {
                 updateState { chatReplyToMessageId = messageId; chatReplyToText = messageText }
+                // Чтобы replyToMessageId точно попал в отправку даже при быстрой отправке,
+                // сразу кладём данные в DOM атрибуты поля ввода.
+                val inputEl = document.getElementById("sd-chat-input") as? org.w3c.dom.HTMLElement
+                inputEl?.setAttribute("data-reply-to-message-id", messageId)
+                inputEl?.setAttribute("data-reply-to-message-text", messageText)
                 val bubble = anchorEl.querySelector(".sd-msg-bubble-wrap")
                 bubble?.unsafeCast<org.w3c.dom.HTMLElement>()?.scrollIntoView()
             }
@@ -10427,12 +11040,114 @@ private fun showChatMessageMenu(anchorEl: org.w3c.dom.Element, x: Double, y: Dou
                     ta.remove()
                 }
             }
+            "save-image" -> {
+                val m = appState.chatMessages.find { it.id == messageId } ?: return@addEventListener
+                if (!m.isFile) return@addEventListener
+                val url = m.fileUrl?.takeIf { it.isNotBlank() } ?: return@addEventListener
+                val fname = (m.fileName?.takeIf { it.isNotBlank() } ?: "image").escapeHtml()
+                try {
+                    val a = document.createElement("a") as? org.w3c.dom.HTMLAnchorElement ?: return@addEventListener
+                    a.href = url
+                    a.setAttribute("download", fname)
+                    a.setAttribute("rel", "noopener noreferrer")
+                    document.body?.appendChild(a)
+                    a.click()
+                    a.remove()
+                } catch (_: Throwable) {
+                    // Fallback: открываем в новой вкладке.
+                    try { window.open(url, "_blank") } catch (_2: Throwable) { }
+                }
+            }
             "delete" -> {
-                val msg = appState.chatMessages.find { it.id == messageId }
-                if (msg != null && msg.isVoice && msg.senderId == uid) {
-                    deleteVoiceMessageFully(roomId, messageId, msg.voiceUrl).catch { _: dynamic -> Unit }
+                val msgForDelete = appState.chatMessages.find { it.id == messageId }
+                val submenuItems = buildChatDeleteSubmenuItemsHtml(msgForDelete, uid, isAdmin)
+                val deleteMenuHtml = """
+                    <button type="button" class="sd-chat-msg-menu-item" data-action="delete-back">Назад</button>
+                    $submenuItems
+                """
+                setChatMessageMenuHtml(menu, x, y, deleteMenuHtml)
+                (ev as? org.w3c.dom.events.Event)?.preventDefault()
+                (ev as? org.w3c.dom.events.Event)?.stopPropagation()
+                return@addEventListener
+            }
+            "delete-back" -> {
+                setChatMessageMenuHtml(menu, x, y, mainMenuHtml)
+                (ev as? org.w3c.dom.events.Event)?.preventDefault()
+                (ev as? org.w3c.dom.events.Event)?.stopPropagation()
+                return@addEventListener
+            }
+            "edit" -> {
+                val m = appState.chatMessages.find { it.id == messageId }
+                if (m != null && canEditMessage(m, uid, isAdmin)) {
+                    val overlayId = "sd-chat-edit-message-modal"
+                    document.getElementById(overlayId)?.remove()
+
+                    val overlay = document.createElement("div").unsafeCast<org.w3c.dom.HTMLElement>()
+                    overlay.id = overlayId
+                    overlay.className = "sd-modal-overlay"
+                    overlay.setAttribute("aria-hidden", "false")
+                    overlay.innerHTML = """
+                        <div class="sd-modal" role="dialog" aria-modal="true" aria-label="Редактировать сообщение">
+                            <h3 class="sd-modal-title">Редактировать сообщение</h3>
+                            <label class="sd-auth-label" for="sd-chat-edit-input">Текст</label>
+                            <textarea id="sd-chat-edit-input" class="sd-auth-input" maxlength="2000" aria-label="Сообщение редактора">${m.text.escapeHtml()}</textarea>
+                            <p class="sd-modal-actions">
+                                <button type="button" id="sd-chat-edit-cancel" class="sd-btn sd-btn-secondary">Отмена</button>
+                                <button type="button" id="sd-chat-edit-save" class="sd-btn sd-btn-primary">Сохранить</button>
+                            </p>
+                        </div>
+                    """.trimIndent()
+                    document.body?.appendChild(overlay)
+
+                    val input = document.getElementById("sd-chat-edit-input") as? org.w3c.dom.HTMLTextAreaElement
+                    input?.focus()
+                    input?.setSelectionRange((input.value?.length ?: 0), (input.value?.length ?: 0))
+
+                    overlay.addEventListener("click", { ev2: dynamic ->
+                        if (ev2?.target === overlay) {
+                            overlay.remove()
+                        }
+                    }, true)
+
+                    document.getElementById("sd-chat-edit-cancel")?.addEventListener("click", { _: dynamic ->
+                        overlay.remove()
+                        hideChatMessageMenu()
+                    })
+
+                    document.getElementById("sd-chat-edit-save")?.addEventListener("click", { _: dynamic ->
+                        val newText = (document.getElementById("sd-chat-edit-input") as? org.w3c.dom.HTMLTextAreaElement)?.value?.trim()
+                        if (newText.isNullOrBlank()) return@addEventListener
+                        editMessage(roomId, messageId, newText).then { _: dynamic ->
+                            overlay.remove()
+                            hideChatMessageMenu()
+                        }.catch { _: dynamic ->
+                            updateState { networkError = "Не удалось отредактировать сообщение." }
+                        }
+                    })
+                }
+            }
+            "delete-self" -> {
+                deleteMessageForUser(roomId, messageId, uid).catch { _: dynamic -> Unit }
+            }
+            "delete-all" -> {
+                val m = appState.chatMessages.find { it.id == messageId }
+                val allowed = when {
+                    m == null -> false
+                    isAdmin -> true
+                    else -> canDeleteMessageForEveryone(m, uid)
+                }
+                if (!allowed) return@addEventListener
+                val mm = m ?: return@addEventListener
+                if (mm.isVoice) {
+                    deleteVoiceMessageFully(roomId, messageId, mm.voiceUrl).catch { _: dynamic -> Unit }
                 } else {
-                    deleteMessageForUser(roomId, messageId, uid).catch { _: dynamic -> Unit }
+                    deleteMessageForEveryone(roomId, messageId).catch { _: dynamic -> Unit }
+                }
+            }
+            "delete-voice" -> {
+                val m = appState.chatMessages.find { it.id == messageId }
+                if (m != null && m.isVoice && (isAdmin || m.senderId == uid)) {
+                    deleteVoiceMessageFully(roomId, messageId, m.voiceUrl).catch { _: dynamic -> Unit }
                 }
             }
         }
@@ -10478,6 +11193,10 @@ private fun handleChatAdminFileSelected(uid: String?, fileInput: HTMLInputElemen
                 } else if (url == null) {
                     updateState { networkError = "Пустой ответ сервера" }
                 } else {
+                    val replyEl = document.getElementById("sd-chat-reply-preview") as? org.w3c.dom.HTMLElement
+                    val domReplyId = replyEl?.getAttribute("data-reply-to-message-id")?.takeIf { it.isNotBlank() }
+                    val replyId = domReplyId ?: appState.chatReplyToMessageId
+                    val replyText = appState.chatReplyToText
                     sendFileMessage(
                         roomId,
                         uid,
@@ -10485,8 +11204,8 @@ private fun handleChatAdminFileSelected(uid: String?, fileInput: HTMLInputElemen
                         url,
                         fileName,
                         mime,
-                        appState.chatReplyToMessageId,
-                        appState.chatReplyToText,
+                        replyId,
+                        replyText,
                     ).then {
                         chatInput?.value = ""
                         updateState { chatReplyToMessageId = null; chatReplyToText = null }
@@ -10514,12 +11233,15 @@ private fun sendChatMessage(chatInput: HTMLInputElement?, uid: String?) {
             chatRoomId(uid, contactId)
         }
     }
-    val replyId = appState.chatReplyToMessageId
-    val replyText = appState.chatReplyToText
+    val replyId = resolveChatReplyIdForSend()
+    val replyText = resolveChatReplyTextForSend()
     sendMessage(roomId, uid, text, replyId, replyText)
         .then {
             chatInput?.value = ""
             updateState { chatReplyToMessageId = null; chatReplyToText = null }
+            val inputEl = document.getElementById("sd-chat-input") as? org.w3c.dom.HTMLElement
+            inputEl?.setAttribute("data-reply-to-message-id", "")
+            inputEl?.setAttribute("data-reply-to-message-text", "")
         }
         .catch { _ ->
             updateState { networkError = "Не удалось отправить сообщение." }
@@ -10655,6 +11377,22 @@ private fun seekToVoicePosition(msgId: String, voiceUrl: String, durationSec: In
         appState.chatPlayingVoiceCurrentMs = currentMs
         patchVoicePlayerDOM()
     }
+}
+
+private fun resolveChatReplyIdForSend(): String? {
+    val inputEl = document.getElementById("sd-chat-input") as? org.w3c.dom.HTMLElement
+    val domReplyId = inputEl?.getAttribute("data-reply-to-message-id")?.takeIf { it.isNotBlank() }
+    if (domReplyId != null) return domReplyId
+    val replyEl = document.getElementById("sd-chat-reply-preview") as? org.w3c.dom.HTMLElement
+    val domReplyIdPreview = replyEl?.getAttribute("data-reply-to-message-id")?.takeIf { it.isNotBlank() }
+    return domReplyIdPreview ?: appState.chatReplyToMessageId
+}
+
+private fun resolveChatReplyTextForSend(): String? {
+    val inputEl = document.getElementById("sd-chat-input") as? org.w3c.dom.HTMLElement
+    val domReplyText = inputEl?.getAttribute("data-reply-to-message-text")?.takeIf { it.isNotBlank() }
+    if (domReplyText != null) return domReplyText
+    return appState.chatReplyToText
 }
 
 private fun attachVoiceProgressDrag(wrap: org.w3c.dom.Element, msgId: String, voiceUrl: String, durationSec: Int) {

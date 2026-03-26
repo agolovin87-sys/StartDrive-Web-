@@ -7,6 +7,8 @@ data class ChatMessage(
     val senderId: String = "",
     val text: String = "",
     val timestamp: Long = 0L,
+    /** Время редактирования (Server timestamp). Если null — сообщение не редактировали. */
+    val editedAt: Long? = null,
     val status: String = "sent",
     val voiceUrl: String? = null,
     val voiceDurationSec: Int? = null,
@@ -17,6 +19,8 @@ data class ChatMessage(
     val replyToMessageId: String? = null,
     val replyToText: String? = null,
     val deletedForUserIds: Set<String> = emptySet(),
+    /** Ключ — эмодзи, значение — uid пользователей, поставивших эту реакцию. */
+    val reactions: Map<String, Set<String>> = emptyMap(),
 ) {
     val isVoice: Boolean get() = !voiceUrl.isNullOrBlank() || (voiceDurationSec != null && voiceDurationSec!! > 0)
     val isFile: Boolean get() = !fileUrl.isNullOrBlank()
@@ -36,6 +40,11 @@ private fun parseMessage(key: String, m: dynamic): ChatMessage {
         is Number -> ts.toLong()
         else -> (ts?.unsafeCast<Double>())?.toLong() ?: 0L
     }
+    val editedTs = m?.editedAt
+    val editedAt = when (editedTs) {
+        is Number -> editedTs.toLong()
+        else -> (editedTs?.unsafeCast<Double>())?.toLong()
+    }
     val dur = m?.voiceDurationSec
     val durationSec = when (dur) {
         is Number -> dur.toInt()
@@ -50,11 +59,28 @@ private fun parseMessage(key: String, m: dynamic): ChatMessage {
             if (v == true) deletedForIds.add(uid)
         }
     }
+    val reactionsMap = mutableMapOf<String, MutableSet<String>>()
+    val reactObj = m?.reactions
+    if (reactObj != null && reactObj != undefined) {
+        val emojiKeys = js("Object.keys(reactObj)").unsafeCast<Array<String>>()
+        emojiKeys.forEach { em ->
+            val usersObj = reactObj[em]
+            if (usersObj != null && usersObj != undefined) {
+                val ukeys = js("Object.keys(usersObj)").unsafeCast<Array<String>>()
+                val set = mutableSetOf<String>()
+                ukeys.forEach { u ->
+                    if (usersObj[u] == true) set.add(u)
+                }
+                if (set.isNotEmpty()) reactionsMap[em] = set
+            }
+        }
+    }
     return ChatMessage(
         id = key,
         senderId = (m?.senderId as? String) ?: "",
         text = (m?.text as? String) ?: "",
         timestamp = timestamp,
+        editedAt = editedAt,
         status = (m?.status as? String) ?: "sent",
         voiceUrl = m?.voiceUrl as? String,
         voiceDurationSec = durationSec,
@@ -64,6 +90,7 @@ private fun parseMessage(key: String, m: dynamic): ChatMessage {
         replyToMessageId = m?.replyToMessageId as? String,
         replyToText = m?.replyToText as? String,
         deletedForUserIds = deletedForIds,
+        reactions = reactionsMap.mapValues { it.value.toSet() },
     )
 }
 
@@ -199,10 +226,45 @@ fun sendVoiceMessage(roomId: String, senderId: String, audioBlob: dynamic, durat
 }
 
 /** Удалить сообщение только у текущего пользователя (скрыть в его клиенте). */
+/** Поставить или снять реакцию [emoji] пользователем [userId] на сообщение. */
+fun setMessageReactionUser(
+    roomId: String,
+    messageId: String,
+    emoji: String,
+    userId: String,
+    add: Boolean,
+): kotlin.js.Promise<Unit> {
+    val db = getDatabase() ?: return kotlin.js.Promise.reject(js("Error('Database not initialized')"))
+    val ref = db.ref("${FirebasePaths.CHATS}/$roomId/${FirebasePaths.MESSAGES}/$messageId/reactions/$emoji/$userId")
+    return if (add) {
+        ref.set(true).then { js("undefined") }
+    } else {
+        ref.remove().then { js("undefined") }
+    }
+}
+
 fun deleteMessageForUser(roomId: String, messageId: String, userId: String): kotlin.js.Promise<Unit> {
     val db = getDatabase() ?: return kotlin.js.Promise.reject(js("Error('Database not initialized')"))
     val ref = db.ref("${FirebasePaths.CHATS}/$roomId/${FirebasePaths.MESSAGES}/$messageId/deletedFor/$userId")
     return ref.set(true).then { js("undefined") }
+}
+
+/** Удалить сообщение для всех участников чата (полное удаление узла в RTDB). */
+fun deleteMessageForEveryone(roomId: String, messageId: String): kotlin.js.Promise<Unit> {
+    val db = getDatabase() ?: return kotlin.js.Promise.reject(js("Error('Database not initialized')"))
+    val ref = db.ref("${FirebasePaths.CHATS}/$roomId/${FirebasePaths.MESSAGES}/$messageId")
+    return ref.remove().then { js("undefined") }
+}
+
+/** Редактировать текст сообщения (только для текста). */
+fun editMessage(roomId: String, messageId: String, newText: String): kotlin.js.Promise<Unit> {
+    val db = getDatabase() ?: return kotlin.js.Promise.reject(js("Error('Database not initialized')"))
+    val ref = db.ref("${FirebasePaths.CHATS}/$roomId/${FirebasePaths.MESSAGES}/$messageId")
+    val serverTimestamp = getDatabaseServerTimestamp()
+    val updateObj = js("{}").unsafeCast<dynamic>()
+    updateObj.text = newText
+    updateObj.editedAt = serverTimestamp
+    return ref.update(updateObj).then { js("undefined") }
 }
 
 /**

@@ -1,6 +1,6 @@
 {
   "name": "StartDrive",
-  "short_name": "\u200B",
+  "short_name": "StartDrive",
   "description": "Автошкола: админ, инструктор, курсант",
   "id": "/",
   "start_url": "/",

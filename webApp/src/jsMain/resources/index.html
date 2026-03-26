@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-visual">
     <title>StartDrive</title>
+    <!-- Сразу после title: iOS Safari подставляет имя ярлыка из document.title и apple-mobile-web-app-title -->
+    <meta name="apple-mobile-web-app-title" content="StartDrive">
     <meta name="description" content="StartDrive — автошкола: админ, инструктор, курсант">
     <!-- CSP: скрипты и стили со своего origin, запросы к Firebase и себе, шрифты Google -->
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' https://*.firebasedatabase.app; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; media-src 'self' blob: data: https://firebasestorage.googleapis.com https://*.firebasestorage.app; connect-src 'self' https://*.firebaseapp.com https://*.googleapis.com https://*.firebasedatabase.app https://*.europe-west1.firebasedatabase.app wss://*.firebasedatabase.app wss://*.europe-west1.firebasedatabase.app https://*.firebasestorage.app https://firestore.googleapis.com wss://*.firebaseio.com https://*.firebaseio.com https://*.cloudfunctions.net https://*.run.app; frame-src 'self' https://*.firebaseapp.com https://*.google.com https://*.googleapis.com https://firebasestorage.googleapis.com https://*.firebasestorage.app https://*.firebasedatabase.app https://*.europe-west1.firebasedatabase.app;">
@@ -21,13 +23,22 @@
     <meta name="twitter:title" content="StartDrive">
     <meta name="twitter:description" content="StartDrive — автошкола: админ, инструктор, курсант">
     <meta name="twitter:image" content="https://startdrive-573fa.web.app/app-icon.png">
+    <meta name="application-name" content="StartDrive">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-title" content="StartDrive">
     <link rel="icon" type="image/png" sizes="512x512" href="app-icon.png">
     <link rel="shortcut icon" href="app-icon.png" type="image/png">
     <link rel="apple-touch-icon" href="app-icon.png">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="stylesheet" href="style.css?v=16">
+    <script>
+        (function () {
+            try {
+                document.title = "StartDrive";
+                var m = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+                if (m) m.setAttribute("content", "StartDrive");
+            } catch (e) {}
+        })();
+    </script>
     <style>
         .sd-install-btn {
             position: fixed;

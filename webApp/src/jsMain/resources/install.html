@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>StartDrive</title>
+    <meta name="apple-mobile-web-app-title" content="StartDrive">
+    <meta name="description" content="Добавьте StartDrive на главный экран — ярлык с иконкой, как приложение.">
+    <meta name="theme-color" content="#0b1c38">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <link rel="icon" type="image/png" sizes="512x512" href="app-icon.png">
+    <link rel="apple-touch-icon" href="app-icon.png">
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="canonical" href="https://startdrive-573fa.web.app/install">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Установить StartDrive">
+    <meta property="og:description" content="Откройте ссылку на телефоне и добавьте на рабочий стол — с иконкой автошколы.">
+    <meta property="og:url" content="https://startdrive-573fa.web.app/install">
+    <meta property="og:image" content="https://startdrive-573fa.web.app/app-icon.png">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Установить StartDrive">
+    <meta name="twitter:description" content="Добавьте веб-приложение на главный экран с иконкой.">
+    <meta name="twitter:image" content="https://startdrive-573fa.web.app/app-icon.png">
+    <meta name="application-name" content="StartDrive">
+    <script>
+        (function () {
+            try {
+                document.title = "StartDrive";
+                var m = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+                if (m) m.setAttribute("content", "StartDrive");
+            } catch (e) {}
+        })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100dvh;
+            font-family: Inter, system-ui, sans-serif;
+            color: #e8eef7;
+            background: linear-gradient(160deg, #0d2347 0%, #0b1c38 55%, #05101f 100%);
+            -webkit-font-smoothing: antialiased;
+            padding: max(20px, env(safe-area-inset-top)) 20px max(28px, env(safe-area-inset-bottom));
+        }
+        .sd-install-wrap {
+            max-width: 420px;
+            margin: 0 auto;
+        }
+        .sd-install-card {
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 16px;
+            padding: 28px 22px 24px;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+        }
+        .sd-install-brand {
+            text-align: center;
+            margin-bottom: 22px;
+        }
+        .sd-install-brand img {
+            width: 96px;
+            height: 96px;
+            border-radius: 22px;
+            display: block;
+            margin: 0 auto 14px;
+            box-shadow: 0 8px 28px rgba(0,0,0,0.4);
+        }
+        .sd-install-brand h1 {
+            margin: 0 0 6px;
+            font-size: 1.35rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+        .sd-install-brand p {
+            margin: 0;
+            font-size: 0.9rem;
+            color: rgba(232,238,247,0.75);
+            line-height: 1.45;
+        }
+        .sd-install-warn {
+            display: none;
+            font-size: 0.85rem;
+            color: #fde08a;
+            background: rgba(253, 224, 138, 0.1);
+            border: 1px solid rgba(253, 224, 138, 0.28);
+            border-radius: 10px;
+            padding: 10px 12px;
+            margin-bottom: 18px;
+            line-height: 1.45;
+        }
+        .sd-install-warn.sd-install-warn--show { display: block; }
+        .sd-install-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            width: 100%;
+            margin-bottom: 12px;
+            padding: 14px 18px;
+            border: none;
+            border-radius: 12px;
+            font: 600 15px/1.2 Inter, sans-serif;
+            color: #fff;
+            background: linear-gradient(135deg, #1e5bc4 0%, #1565c0 100%);
+            cursor: pointer;
+            text-decoration: none;
+            box-shadow: 0 4px 18px rgba(21, 101, 192, 0.45);
+            transition: filter 0.15s, transform 0.12s;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .sd-install-btn:hover { filter: brightness(1.06); }
+        .sd-install-btn:active { transform: scale(0.98); }
+        .sd-install-btn svg { flex-shrink: 0; }
+        .sd-install-secondary {
+            display: block;
+            text-align: center;
+            font-size: 0.88rem;
+            color: rgba(232,238,247,0.65);
+            margin-top: 8px;
+            line-height: 1.5;
+        }
+        .sd-install-steps {
+            margin: 20px 0 0;
+            padding: 16px 0 0;
+            border-top: 1px solid rgba(255,255,255,0.1);
+        }
+        .sd-install-steps h2 {
+            margin: 0 0 12px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: rgba(232,238,247,0.55);
+        }
+        .sd-install-steps ol {
+            margin: 0;
+            padding-left: 20px;
+            font-size: 0.9rem;
+            line-height: 1.55;
+            color: rgba(232,238,247,0.88);
+        }
+        .sd-install-steps li + li { margin-top: 8px; }
+        .sd-install-hidden { display: none !important; }
+        .sd-install-foot {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 0.8rem;
+            color: rgba(232,238,247,0.45);
+        }
+        .sd-install-foot a { color: #93c5fd; }
+    </style>
+</head>
+<body>
+<div class="sd-install-wrap">
+    <div class="sd-install-card">
+        <div class="sd-install-brand">
+            <img src="app-icon.png" width="96" height="96" alt="" decoding="async">
+            <h1>StartDrive</h1>
+            <p>Добавьте веб-приложение на главный экран — откроется с иконкой и без адресной строки.</p>
+        </div>
+
+        <p id="sd-inapp-hint" class="sd-install-warn" role="status"></p>
+
+        <a id="sd-open-app" class="sd-install-btn" href="https://startdrive-573fa.web.app/">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            Открыть StartDrive
+        </a>
+
+        <div id="sd-block-android" class="sd-install-steps">
+            <h2>Android (Chrome)</h2>
+            <ol>
+                <li>Нажмите кнопку выше или откройте сайт в <strong>Google Chrome</strong>.</li>
+                <li>Всплывающее окно: нажмите <strong>Установить</strong>. Или меню <strong>⋮</strong> → <strong>Установить приложение</strong> / <strong>Добавить на экран «Домой»</strong>.</li>
+                <li>На рабочем столе появится ярлык с иконкой StartDrive.</li>
+            </ol>
+        </div>
+
+        <div id="sd-block-ios" class="sd-install-steps sd-install-hidden">
+            <h2>iPhone / iPad (Safari)</h2>
+            <ol>
+                <li>Откройте эту страницу или StartDrive в браузере <strong>Safari</strong> (не встроенный браузер мессенджера).</li>
+                <li>Нажмите кнопку <strong>Поделиться</strong> <span aria-hidden="true">□↑</span> внизу экрана.</li>
+                <li>Прокрутите список и выберите <strong>На экран «Домой»</strong> → <strong>Добавить</strong>.</li>
+            </ol>
+        </div>
+
+        <p class="sd-install-secondary">После установки запускайте приложение с рабочего стола — данные подгружаются с сервера, как на сайте.</p>
+    </div>
+    <p class="sd-install-foot">Ссылка установщика (копировать):<br><a href="https://startdrive-573fa.web.app/install">https://startdrive-573fa.web.app/install</a></p>
+</div>
+<script>
+(function () {
+    var ua = navigator.userAgent || "";
+    var isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    var isAndroid = /Android/i.test(ua);
+    var inApp = /Instagram|FBAN|FBAV|Line\/|Snapchat|Twitter/i.test(ua);
+
+    var blockAndroid = document.getElementById("sd-block-android");
+    var blockIos = document.getElementById("sd-block-ios");
+    var hint = document.getElementById("sd-inapp-hint");
+
+    if (isIOS) {
+        if (blockAndroid) blockAndroid.classList.add("sd-install-hidden");
+        if (blockIos) blockIos.classList.remove("sd-install-hidden");
+    }
+
+    if (inApp && hint) {
+        hint.classList.add("sd-install-warn--show");
+        hint.textContent = isIOS
+            ? "Откройте ссылку в Safari: нажмите «⋯» или «Поделиться» в приложении и выберите «Открыть в Safari»."
+            : "Откройте ссылку в Chrome, затем следуйте шагам ниже.";
+    }
+
+    if (!isIOS && !isAndroid && hint && !inApp) {
+        hint.classList.add("sd-install-warn--show");
+        hint.textContent = "Откройте эту страницу на телефоне (Android или iPhone), чтобы добавить приложение на главный экран.";
+    }
+})();
+</script>
+</body>
+</html>

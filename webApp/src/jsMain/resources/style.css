@@ -5493,6 +5493,35 @@ a.sd-cadet-icon-btn:active {
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s;
 }
+.sd-btn-reload {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 10px;
+    background: rgba(255,255,255,0.08);
+    color: #fff;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, transform 0.15s;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    flex-shrink: 0;
+}
+.sd-btn-reload svg {
+    display: block;
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+}
+.sd-btn-reload:hover {
+    background: rgba(255,255,255,0.14);
+    border-color: rgba(255,255,255,0.35);
+}
+.sd-btn-reload:active {
+    transform: scale(0.96);
+}
 .sd-btn-notif-wrap {
     position: relative;
     display: inline-flex;
@@ -6811,9 +6840,10 @@ a.sd-cadet-icon-btn:active {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    font-size: 0.78rem;
+    font-size: 0.72rem;
     color: rgba(255,255,255,0.45);
     min-width: 0;
+    line-height: 1.05;
 }
 .sd-chat-contact-dot-wrap {
     position: relative;
@@ -6833,7 +6863,7 @@ a.sd-cadet-icon-btn:active {
 .sd-chat-header-typing {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
     color: rgba(255,255,255,0.6);
     white-space: nowrap;
 }
@@ -6885,6 +6915,25 @@ a.sd-cadet-icon-btn:active {
     padding: 7px 11px 5px;
     border-radius: 14px;
     color: #111;
+    will-change: transform, opacity, filter;
+}
+.sd-msg-delete-cloud {
+    animation: sd-msg-cloud-delete 360ms ease-out forwards;
+    pointer-events: none;
+}
+.sd-msg-delete-cloud .sd-msg-bubble-wrap,
+.sd-msg-delete-cloud .sd-msg-them-avatar,
+.sd-msg-delete-cloud .sd-msg-my-avatar {
+    animation: sd-msg-cloud-delete-inner 360ms ease-out forwards;
+}
+@keyframes sd-msg-cloud-delete {
+    0% { opacity: 1; transform: translateY(0) scale(1); }
+    45% { opacity: 0.9; transform: translateY(-1px) scale(1.01); }
+    100% { opacity: 0; transform: translateY(-6px) scale(0.94); }
+}
+@keyframes sd-msg-cloud-delete-inner {
+    0% { filter: blur(0); }
+    100% { filter: blur(8px); }
 }
 .sd-msg-me {
     display: flex;
@@ -7099,7 +7148,7 @@ a.sd-cadet-icon-btn:active {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 10px 12px;
+    padding: 6px 10px;
     width: 100%;
     min-width: 0;
     box-sizing: border-box;
@@ -7107,7 +7156,8 @@ a.sd-cadet-icon-btn:active {
     background: rgba(13,31,62,0.88);
     backdrop-filter: blur(8px);
     border-top: 1px solid rgba(255,255,255,0.08);
-    border-radius: 14px 14px 0 0;
+    border-radius: 16px;
+    overflow: hidden;
 }
 .sd-chat-reply-preview {
     width: 100%;

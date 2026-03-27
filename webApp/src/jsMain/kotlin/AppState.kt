@@ -119,6 +119,8 @@ data class AppState(
     /** Текущее сообщение, на которое отвечает пользователь в чате. */
     var chatReplyToMessageId: String? = null,
     var chatReplyToText: String? = null,
+    /** Черновики текста в поле ввода по roomId (чтобы не сбрасывались при ререндере/входящих). */
+    var chatDraftTextByRoomId: MutableMap<String, String> = mutableMapOf(),
     var chatUnreadCounts: Map<String, Int> = emptyMap(),
     /** Показывать аватары других пользователей в чате (настройка из Firebase: app_config/chat_show_other_avatars). */
     var chatShowOtherAvatars: Boolean = true,

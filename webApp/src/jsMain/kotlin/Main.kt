@@ -41,6 +41,7 @@ private var cadetNotificationAudio: dynamic = null
 private var cadetNotificationAudioUnlocked: Boolean = false
 private var cadetNotificationAudioContext: dynamic = null
 private var chatMessageAudio: dynamic = null
+private var chatTypingIdleTimerId: Int = 0
 /** Отписка от onSnapshot документа users/{uid} (баланс в профиле в реальном времени). */
 private var userProfileFirestoreUnsubscribe: (() -> Unit)? = null
 /** Лента admin_events для веб-админа (уведомления без FCM). */
@@ -90,6 +91,11 @@ private fun resetInstructorSessionSoundBaseline() {
 
 private fun instructorCadetsSignature(cadets: List<User>): String {
     return cadets.map { "${it.id}:${it.balance}" }.sorted().joinToString(",")
+}
+
+private fun isChatInputFocused(): Boolean {
+    val active = document.activeElement as? org.w3c.dom.HTMLElement ?: return false
+    return active.id == "sd-chat-input"
 }
 
 private fun clearGroupChatAvatarPending() {
@@ -335,14 +341,22 @@ fun main() {
                     }
                 }
                 lastInstructorRecordingCadetSigForStable = null
+                val isChatConversationOpen =
+                    state.selectedTabIndex == chatTabIndexForRole(state.user?.role) &&
+                    (state.selectedChatContactId != null || state.selectedChatGroupId != null || (state.chatAdminCorrespondenceMode && state.chatAdminCorrespondenceSubjectId != null && state.chatAdminCorrespondencePeerId != null)) &&
+                    !state.chatSettingsOpen
+                val preserveKeyboardWhileTyping = isChatConversationOpen && isChatInputFocused()
                 val skipFullCardRedraw =
-                    state.screen == AppScreen.Instructor &&
-                    state.selectedTabIndex == 0 &&
-                    state.instructorHomeSubView == "profile" &&
-                    !state.notificationsViewOpen &&
-                    !(state.pddExamMode && state.pddQuestions.isNotEmpty()) &&
-                    isInstructorEarnedCalcInputFocused()
+                    (
+                        state.screen == AppScreen.Instructor &&
+                        state.selectedTabIndex == 0 &&
+                        state.instructorHomeSubView == "profile" &&
+                        !state.notificationsViewOpen &&
+                        !(state.pddExamMode && state.pddQuestions.isNotEmpty()) &&
+                        isInstructorEarnedCalcInputFocused()
+                    ) || preserveKeyboardWhileTyping
                 if (!skipFullCardRedraw) {
+                    preserveChatDraftFromDom(state.user?.id)
                     detachInstructorProfileEarnedCalcMount()
                     sdCard.innerHTML = cardContent
                     // Эффект "джина" между вкладками отключен: мгновенная смена контента.
@@ -390,6 +404,7 @@ fun main() {
                 AppScreen.Instructor -> renderPanel(state.user!!, "Инструктор", listOf("Главная", "Запись", "Чат", "Билеты", "История"))
                 AppScreen.Cadet -> renderPanel(state.user!!, "Курсант", listOf("Главная", "Запись", "Чат", "Билеты", "История"))
             }
+            preserveChatDraftFromDom(state.user?.id)
             root.innerHTML = networkBanner + loadingOverlay + html
             syncChatVoiceHostOverlay()
             window.requestAnimationFrame { syncChatVoiceHostOverlay() }
@@ -976,6 +991,13 @@ private fun addReactionBurstAnimation(anchorEl: org.w3c.dom.Element?, messageId:
     }, 900)
 }
 
+private fun animateMessageDeleteAsCloud(messageId: String) {
+    val safeId = messageId.replace("\"", "")
+    val el = document.querySelector(".sd-msg[data-msg-id=\"$safeId\"]") as? org.w3c.dom.HTMLElement ?: return
+    if (el.classList.contains("sd-msg-delete-cloud")) return
+    el.classList.add("sd-msg-delete-cloud")
+}
+
 private fun chainReactionRemovesThenAdd(
     roomId: String,
     messageId: String,
@@ -1221,6 +1243,9 @@ private fun renderChatTabContent(currentUser: User): String {
     if (groupId != null) {
         val grp = appState.chatGroups.find { it.id == groupId } ?: return """<p class="sd-error">Группа не найдена.</p>"""
         if (myId !in grp.memberIds) return """<p class="sd-error">У вас нет доступа к этой группе.</p>"""
+        val roomId = groupChatRoomId(grp.id)
+        val draftText = appState.chatDraftTextByRoomId[roomId] ?: ""
+        val draftTextEscaped = escapeHtmlAttrValue(draftText)
         val iconCheck = """<svg class="sd-msg-check" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>"""
         val iconSendSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>"""
         val iconBackSvg = SD_ICON_BACK_CHEVRON_SVG
@@ -1311,7 +1336,7 @@ private fun renderChatTabContent(currentUser: User): String {
                     $replyComposerHtml
                     <div class="sd-chat-input-row">
                         $chatFileAttachHtml
-                        <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="" maxlength="2000" aria-label="Сообщение" />
+                        <textarea id="sd-chat-input" class="sd-chat-input" placeholder="" maxlength="2000" aria-label="Сообщение" rows="1">$draftTextEscaped</textarea>
                         <button type="button" id="sd-chat-send" class="sd-chat-send-btn" title="Отправить">$iconSendSvg</button>
                         <button type="button" id="sd-chat-voice-mic" class="sd-chat-voice-mic-btn" title="Запись голосового сообщения" aria-label="Запись голоса">$iconMicSvg</button>
                     </div>
@@ -1348,6 +1373,18 @@ private fun renderChatTabContent(currentUser: User): String {
         /* Список контактов может прийти позже выбранного id — иначе рендер обрывался без поля ввода/микрофона. */
         val contact = contacts.find { it.id == contactId }
             ?: User(id = contactId, fullName = "Контакт", role = "", isActive = true)
+        val roomId = chatRoomId(myId, contact.id)
+        val draftText = appState.chatDraftTextByRoomId[roomId] ?: ""
+        val draftTextEscaped = escapeHtmlAttrValue(draftText)
+        val isOnline = appState.chatContactOnlineIds.contains(contact.id)
+        val typingTs = appState.chatTypingByRoomId[roomId]?.get(contact.id) ?: 0L
+        val typingFresh = typingTs > 0L && (js("Date.now()").unsafeCast<Double>().toLong() - typingTs) < 7000L
+        val headerStatusClass = if (typingFresh || isOnline) "sd-chat-contact-status-online" else "sd-chat-contact-status-offline"
+        val headerStatusHtml = if (typingFresh) {
+            """<span class="sd-chat-header-typing"><span>печатает</span><span class="sd-chat-typing-dots"><span></span><span></span><span></span></span></span>"""
+        } else {
+            if (isOnline) "в сети" else "не в сети"
+        }
         val iconCheck = """<svg class="sd-msg-check" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>"""
         val iconSendSvg = """<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>"""
         val iconBackSvg = SD_ICON_BACK_CHEVRON_SVG
@@ -1442,7 +1479,7 @@ private fun renderChatTabContent(currentUser: User): String {
                     $replyComposerHtml
                     <div class="sd-chat-input-row">
                         $chatFileAttachHtml
-                        <input type="text" id="sd-chat-input" class="sd-chat-input" placeholder="" maxlength="2000" aria-label="Сообщение" />
+                        <textarea id="sd-chat-input" class="sd-chat-input" placeholder="" maxlength="2000" aria-label="Сообщение" rows="1">$draftTextEscaped</textarea>
                         <button type="button" id="sd-chat-send" class="sd-chat-send-btn" title="Отправить">$iconSendSvg</button>
                         <button type="button" id="sd-chat-voice-mic" class="sd-chat-voice-mic-btn" title="Запись голосового сообщения" aria-label="Запись голоса">$iconMicSvg</button>
                     </div>
@@ -1460,7 +1497,7 @@ private fun renderChatTabContent(currentUser: User): String {
                 <div class="sd-chat-header">
                     <button type="button" id="sd-chat-back" class="sd-chat-back-btn" title="Назад" aria-label="Назад">$iconBackSvg</button>
                     ${contact.chatAvatarUrl?.takeIf { it.isNotBlank() }?.let { url -> """<div class="sd-chat-header-avatar sd-avatar-wrap" data-initials="$contactInitials" data-bg="${contactAvatarBg}"><img src="${url.escapeHtml()}" alt="" class="sd-avatar-img" decoding="async" data-user-id="${contact.id.escapeHtml()}" /></div>""" } ?: """<div class="sd-chat-header-avatar" style="background:$contactAvatarBg">$contactInitials</div>"""}
-                    <span class="sd-chat-contact-name">${formatShortName(contact.fullName).escapeHtml()}</span>
+                    <span class="sd-chat-header-info"><span class="sd-chat-header-title">${formatShortName(contact.fullName).escapeHtml()}</span><span class="sd-chat-header-status-row"><span class="sd-chat-contact-status $headerStatusClass">$headerStatusHtml</span></span></span>
                 </div>
                 <div class="sd-chat-messages" id="sd-chat-messages">$msgsHtml</div>
                 $inputRowHtml
@@ -1526,6 +1563,30 @@ private fun renderChatTabContent(currentUser: User): String {
     val settingsBtnHtml = """<button type="button" id="sd-chat-settings-btn" class="sd-chat-create-group-btn sd-chat-create-group-btn--icon sd-chat-settings-btn" title="Настройки" aria-label="Настройки">$iconSettingsSvg</button>"""
     val refreshBtnStyled = """<button type="button" id="sd-chat-refresh" class="sd-chat-create-group-btn sd-chat-create-group-btn--icon sd-chat-settings-btn" title="Обновить список контактов" aria-label="Обновить контакты">$iconRefreshSvg</button>"""
     return """<div class="sd-chat-tab"><div class="sd-chat-list-header"><h2 class="sd-chat-title">Чат</h2><div class="sd-chat-header-actions">$adminCorrBtn$createGroupBtn$settingsBtnHtml$refreshBtnStyled</div></div>$loadingLine$contactsBlock</div>"""
+}
+
+private fun currentChatRoomId(uid: String?): String? {
+    if (uid == null) return null
+    return when {
+        appState.selectedChatGroupId != null -> groupChatRoomId(appState.selectedChatGroupId!!)
+        else -> {
+            val contactId = appState.selectedChatContactId ?: return null
+            chatRoomId(uid, contactId)
+        }
+    }
+}
+
+private fun preserveChatDraftFromDom(uid: String?) {
+    val roomId = currentChatRoomId(uid) ?: return
+    val input = document.getElementById("sd-chat-input") as? HTMLTextAreaElement ?: return
+    // Важное: сохраняем черновик перед перерисовкой DOM, иначе входящие сбрасывают введённый текст.
+    appState.chatDraftTextByRoomId[roomId] = input.value
+}
+
+private fun updateTypingMapForRoom(roomId: String, typing: Map<String, Long>) {
+    val updated = appState.chatTypingByRoomId.toMutableMap()
+    if (typing.isEmpty()) updated.remove(roomId) else updated[roomId] = typing
+    appState.chatTypingByRoomId = updated
 }
 
 private fun renderAdminCorrespondencePickRow(c: User, dataAttrName: String): String {
@@ -2973,6 +3034,9 @@ private fun getNotificationSoundFilename(): String =
 private fun getCadetNotificationSoundUrl(): String =
     getResourceBaseUrl() + "sounds/" + getNotificationSoundFilename() + ".mp3"
 
+private fun getOutgoingChatSoundUrl(): String =
+    getResourceBaseUrl() + "sounds/sentmessage.mp3"
+
 /** Один общий Audio для звука входящего сообщения в чате; разблокируется по первому клику. Использует выбранный в настройках звук уведомлений. */
 private fun getOrCreateChatMessageAudio(): dynamic {
     if (chatMessageAudio != null && chatMessageAudio != js("undefined")) return chatMessageAudio
@@ -3038,6 +3102,17 @@ private fun playChatMessageSound() {
     try {
         val audio = getOrCreateChatMessageAudio()
         audio.src = getCadetNotificationSoundUrl()
+        audio.currentTime = 0.0
+        audio.volume = 0.7
+        audio.play()?.catch { _: dynamic -> Unit }
+    } catch (_: Throwable) { }
+}
+
+/** Звук исходящего сообщения в чате (локальный клик отправки). */
+private fun playOutgoingChatMessageSound() {
+    try {
+        val audio = getOrCreateChatMessageAudio()
+        audio.src = getOutgoingChatSoundUrl()
         audio.currentTime = 0.0
         audio.volume = 0.7
         audio.play()?.catch { _: dynamic -> Unit }
@@ -9085,6 +9160,9 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
                 updateState { if (chatUnreadCounts.containsKey(gKey)) chatUnreadCounts = chatUnreadCounts - gKey }
                 window.setTimeout({ scrollChatToBottom() }, 50)
             }
+            subscribeTyping(roomId) { typing ->
+                updateState { updateTypingMapForRoom(roomId, typing.filterKeys { it != uid }) }
+            }
             e.preventDefault(); e.stopPropagation()
             return@addEventListener
         }
@@ -9110,17 +9188,21 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             }
             clearChatUnread(uid, contactId)
             unsubscribeChat()
-            subscribeMessages(chatRoomId(uid, contactId)) { list ->
+            val roomId = chatRoomId(uid, contactId)
+            subscribeMessages(roomId) { list ->
                 val prevSize = appState.chatMessages.size
                 val prev = appState.chatMessages
-                maybeCelebrateNewReactions(chatRoomId(uid, contactId), prev, list, uid)
+                maybeCelebrateNewReactions(roomId, prev, list, uid)
                 updateState { chatMessages = list }
                 val toMarkRead = list.filter { it.senderId == contactId }.map { it.id }
-                if (toMarkRead.isNotEmpty()) markMessagesAsRead(chatRoomId(uid, contactId), toMarkRead)
+                if (toMarkRead.isNotEmpty()) markMessagesAsRead(roomId, toMarkRead)
                 if (prevSize > 0 && list.size > prevSize && list.lastOrNull()?.senderId != uid) playChatMessageSound()
                 list.lastOrNull()?.timestamp?.let { ts -> setChatLastSeenMs(uid, contactId, ts) }
                 updateState { if (chatUnreadCounts.containsKey(contactId)) chatUnreadCounts = chatUnreadCounts - contactId }
                 window.setTimeout({ scrollChatToBottom() }, 50)
+            }
+            subscribeTyping(roomId) { typing ->
+                updateState { updateTypingMapForRoom(roomId, typing.filterKeys { it != uid }) }
             }
             e.preventDefault(); e.stopPropagation()
             return@addEventListener
@@ -9149,17 +9231,21 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             }
             clearChatUnread(uid, contactId)
             unsubscribeChat()
-            subscribeMessages(chatRoomId(uid, contactId)) { list ->
+            val roomId = chatRoomId(uid, contactId)
+            subscribeMessages(roomId) { list ->
                 val prevSize = appState.chatMessages.size
                 val prev = appState.chatMessages
-                maybeCelebrateNewReactions(chatRoomId(uid, contactId), prev, list, uid)
+                maybeCelebrateNewReactions(roomId, prev, list, uid)
                 updateState { chatMessages = list }
                 val toMarkRead = list.filter { it.senderId == contactId }.map { it.id }
-                if (toMarkRead.isNotEmpty()) markMessagesAsRead(chatRoomId(uid, contactId), toMarkRead)
+                if (toMarkRead.isNotEmpty()) markMessagesAsRead(roomId, toMarkRead)
                 if (prevSize > 0 && list.size > prevSize && list.lastOrNull()?.senderId != uid) playChatMessageSound()
                 list.lastOrNull()?.timestamp?.let { ts -> setChatLastSeenMs(uid, contactId, ts) }
                 updateState { if (chatUnreadCounts.containsKey(contactId)) chatUnreadCounts = chatUnreadCounts - contactId }
                 window.setTimeout({ scrollChatToBottom() }, 50)
+            }
+            subscribeTyping(roomId) { typing ->
+                updateState { updateTypingMapForRoom(roomId, typing.filterKeys { it != uid }) }
             }
             e.preventDefault(); e.stopPropagation()
             return@addEventListener
@@ -9188,17 +9274,21 @@ private fun setupPanelClickDelegation(root: org.w3c.dom.Element) {
             }
             clearChatUnread(uid, contactId)
             unsubscribeChat()
-            subscribeMessages(chatRoomId(uid, contactId)) { list ->
+            val roomId = chatRoomId(uid, contactId)
+            subscribeMessages(roomId) { list ->
                 val prevSize = appState.chatMessages.size
                 val prev = appState.chatMessages
-                maybeCelebrateNewReactions(chatRoomId(uid, contactId), prev, list, uid)
+                maybeCelebrateNewReactions(roomId, prev, list, uid)
                 updateState { chatMessages = list }
                 val toMarkRead = list.filter { it.senderId == contactId }.map { it.id }
-                if (toMarkRead.isNotEmpty()) markMessagesAsRead(chatRoomId(uid, contactId), toMarkRead)
+                if (toMarkRead.isNotEmpty()) markMessagesAsRead(roomId, toMarkRead)
                 if (prevSize > 0 && list.size > prevSize && list.lastOrNull()?.senderId != uid) playChatMessageSound()
                 list.lastOrNull()?.timestamp?.let { ts -> setChatLastSeenMs(uid, contactId, ts) }
                 updateState { if (chatUnreadCounts.containsKey(contactId)) chatUnreadCounts = chatUnreadCounts - contactId }
                 window.setTimeout({ scrollChatToBottom() }, 50)
+            }
+            subscribeTyping(roomId) { typing ->
+                updateState { updateTypingMapForRoom(roomId, typing.filterKeys { it != uid }) }
             }
             e.preventDefault(); e.stopPropagation()
         }
@@ -10028,6 +10118,14 @@ private fun attachListeners(root: org.w3c.dom.Element) {
             }, 0)
             val u = appState.user
             u?.let { usr ->
+                document.getElementById("sd-btn-reload")?.addEventListener("click", {
+                    preserveChatDraftFromDom(usr.id)
+                    try {
+                        window.location.reload()
+                    } catch (_: Throwable) {
+                        refreshPanelCardContent(root)
+                    }
+                })
                 document.getElementById("sd-btn-signout")?.addEventListener("click", {
                     document.getElementById("sd-signout-confirm-modal")?.let { modal ->
                         modal.classList.remove("sd-hidden")
@@ -10368,20 +10466,50 @@ private fun attachListeners(root: org.w3c.dom.Element) {
                 }
                 unsubscribeChat()
             })
-            val chatInput = document.getElementById("sd-chat-input") as? HTMLInputElement
-            document.getElementById("sd-chat-send")?.addEventListener("click", {
+            val chatInput = document.getElementById("sd-chat-input") as? HTMLTextAreaElement
+            if (chatInput != null && uid != null) {
+                val roomId = currentChatRoomId(uid)
+                if (roomId != null) {
+                    val stopTyping = {
+                        setTyping(roomId, uid, false).catch { _: dynamic -> Unit }
+                    }
+                    chatInput.oninput = {
+                        val txt = chatInput.value
+                        appState.chatDraftTextByRoomId[roomId] = txt
+                        if (txt.isBlank()) {
+                            if (chatTypingIdleTimerId != 0) {
+                                window.clearTimeout(chatTypingIdleTimerId)
+                                chatTypingIdleTimerId = 0
+                            }
+                            stopTyping()
+                        } else {
+                            setTyping(roomId, uid, true).catch { _: dynamic -> Unit }
+                            if (chatTypingIdleTimerId != 0) window.clearTimeout(chatTypingIdleTimerId)
+                            chatTypingIdleTimerId = window.setTimeout({
+                                stopTyping()
+                                chatTypingIdleTimerId = 0
+                            }, 1800).unsafeCast<Int>()
+                        }
+                    }
+                    chatInput.onblur = {
+                        if (chatTypingIdleTimerId != 0) {
+                            window.clearTimeout(chatTypingIdleTimerId)
+                            chatTypingIdleTimerId = 0
+                        }
+                        stopTyping()
+                    }
+                }
+            }
+            (document.getElementById("sd-chat-send") as? org.w3c.dom.HTMLElement)?.onclick = {
                 sendChatMessage(chatInput, uid)
-            })
-            document.getElementById("sd-chat-file-btn")?.addEventListener("click", {
+            }
+            (document.getElementById("sd-chat-file-btn") as? org.w3c.dom.HTMLElement)?.onclick = {
                 (document.getElementById("sd-chat-file-input") as? HTMLInputElement)?.click()
-            })
-            document.getElementById("sd-chat-file-input")?.addEventListener("change", {
+            }
+            (document.getElementById("sd-chat-file-input") as? HTMLInputElement)?.onchange = {
                 val fi = document.getElementById("sd-chat-file-input") as? HTMLInputElement
                 handleChatAdminFileSelected(uid, fi)
-            })
-            chatInput?.addEventListener("keypress", { e: dynamic ->
-                if (e?.key == "Enter") sendChatMessage(chatInput, uid)
-            })
+            }
             if (document.getElementById("sd-chat-voice-recording") != null || document.getElementById("sd-chat-voice-recording-review") != null) {
                 if (chatVoiceRecordTickInterval != 0) window.clearInterval(chatVoiceRecordTickInterval)
                 chatVoiceRecordTickInterval = window.setInterval({
@@ -11127,6 +11255,7 @@ private fun showChatMessageMenu(
                 }
             }
             "delete-self" -> {
+                animateMessageDeleteAsCloud(messageId)
                 deleteMessageForUser(roomId, messageId, uid).catch { _: dynamic -> Unit }
             }
             "delete-all" -> {
@@ -11138,6 +11267,7 @@ private fun showChatMessageMenu(
                 }
                 if (!allowed) return@addEventListener
                 val mm = m ?: return@addEventListener
+                animateMessageDeleteAsCloud(messageId)
                 if (mm.isVoice) {
                     deleteVoiceMessageFully(roomId, messageId, mm.voiceUrl).catch { _: dynamic -> Unit }
                 } else {
@@ -11147,6 +11277,7 @@ private fun showChatMessageMenu(
             "delete-voice" -> {
                 val m = appState.chatMessages.find { it.id == messageId }
                 if (m != null && m.isVoice && (isAdmin || m.senderId == uid)) {
+                    animateMessageDeleteAsCloud(messageId)
                     deleteVoiceMessageFully(roomId, messageId, m.voiceUrl).catch { _: dynamic -> Unit }
                 }
             }
@@ -11166,14 +11297,8 @@ private fun handleChatAdminFileSelected(uid: String?, fileInput: HTMLInputElemen
         fileInput.value = ""
         return
     }
-    val roomId = when {
-        appState.selectedChatGroupId != null -> groupChatRoomId(appState.selectedChatGroupId!!)
-        else -> {
-            val contactId = appState.selectedChatContactId ?: return
-            chatRoomId(uid, contactId)
-        }
-    }
-    val chatInput = document.getElementById("sd-chat-input") as? HTMLInputElement
+    val roomId = currentChatRoomId(uid) ?: return
+    val chatInput = document.getElementById("sd-chat-input") as? HTMLTextAreaElement
     val caption = (chatInput?.value ?: "").trim()
     val fileName = (file.asDynamic().name as? String) ?: "file"
     val mime = (file.asDynamic().type as? String)?.takeIf { it.isNotBlank() } ?: "application/octet-stream"
@@ -11208,6 +11333,7 @@ private fun handleChatAdminFileSelected(uid: String?, fileInput: HTMLInputElemen
                         replyText,
                     ).then {
                         chatInput?.value = ""
+                        appState.chatDraftTextByRoomId[roomId] = ""
                         updateState { chatReplyToMessageId = null; chatReplyToText = null }
                     }.catch { _ ->
                         updateState { networkError = "Не удалось отправить сообщение с файлом." }
@@ -11223,7 +11349,9 @@ private fun handleChatAdminFileSelected(uid: String?, fileInput: HTMLInputElemen
     reader.readAsDataURL(file.asDynamic())
 }
 
-private fun sendChatMessage(chatInput: HTMLInputElement?, uid: String?) {
+private fun sendChatMessage(chatInput: HTMLTextAreaElement?, uid: String?) {
+    // Привязываем аудио к пользовательскому действию (клик/Enter), чтобы браузер не блокировал звук после async send.
+    unlockCadetNotificationAudio()
     val text = (chatInput?.value ?: "").trim()
     if (text.isBlank() || uid == null) return
     val roomId = when {
@@ -11238,10 +11366,14 @@ private fun sendChatMessage(chatInput: HTMLInputElement?, uid: String?) {
     sendMessage(roomId, uid, text, replyId, replyText)
         .then {
             chatInput?.value = ""
+            (document.getElementById("sd-chat-input") as? HTMLTextAreaElement)?.value = ""
+            appState.chatDraftTextByRoomId[roomId] = ""
+            setTyping(roomId, uid, false).catch { _: dynamic -> Unit }
             updateState { chatReplyToMessageId = null; chatReplyToText = null }
             val inputEl = document.getElementById("sd-chat-input") as? org.w3c.dom.HTMLElement
             inputEl?.setAttribute("data-reply-to-message-id", "")
             inputEl?.setAttribute("data-reply-to-message-text", "")
+            playOutgoingChatMessageSound()
         }
         .catch { _ ->
             updateState { networkError = "Не удалось отправить сообщение." }
